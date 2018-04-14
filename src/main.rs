@@ -5,12 +5,14 @@ use structopt::StructOpt;
 
 extern crate clap;
 extern crate glob;
+extern crate regex;
 extern crate rusoto_core;
 extern crate rusoto_s3;
 
 use std::process::*;
 use std::process::Command;
 use glob::Pattern;
+use regex::Regex;
 
 use rusoto_core::DefaultCredentialsProvider;
 use rusoto_core::default_tls_client;
@@ -20,7 +22,7 @@ use rusoto_s3::*;
 use rusoto_core::request::*;
 use rusoto_core::default_region;
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "s3find", about = "walk a s3 path hierarchy")]
 pub struct FindOpt {
     #[structopt(name = "path")]
@@ -40,7 +42,7 @@ pub struct FindOpt {
     iname: Option<Pattern>,
     #[structopt(name = "rpatern", long = "regex",
                 help = "match by regex pattern, case insensitive")]
-    regex: Option<String>,
+    regex: Option<Regex>,
     #[structopt(name = "time", long = "mtime",
                 help = "the difference between the file last modification time")]
     mtime: Option<String>,
@@ -68,12 +70,20 @@ impl FindOpt {
         self.name.as_ref().unwrap().matches(str)
     }
 
+    fn is_match(&self, str: &str) -> bool {
+        self.regex.as_ref().unwrap().is_match(str)
+    }
+
     fn filters(&self, object: &Object) -> bool {
         if self.name.is_some() {
-            self.matches(object.key.as_ref().unwrap())
-        } else {
-            true
+            return self.matches(object.key.as_ref().unwrap())
         }
+
+        if self.regex.is_some() {
+            return self.is_match(object.key.as_ref().unwrap())
+        }
+
+        return true
     }
 
     fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
