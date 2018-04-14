@@ -1,0 +1,13 @@
+[package]
+name = "s3find"
+version = "0.1.0"
+authors = ["Andrii Radyk <andrii.m.radyk@gmail.com>"]
+
+[dependencies]
+rusoto_core = "0.31.0"
+rusoto_s3 = "0.31.0"
+structopt = "0.2.5"
+clap = "2.30.0"
+glob = "0.2.11"
+regex = "0.2.6"
+#lazy_static = "1.0.0"
