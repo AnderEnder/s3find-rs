@@ -6,6 +6,7 @@ authors = ["Andrii Radyk <andrii.m.radyk@gmail.com>"]
 [dependencies]
 rusoto_core = "0.31.0"
 rusoto_s3 = "0.31.0"
+rusoto_credential = "0.11.0"
 structopt = "0.2.5"
 clap = "2.30.0"
 glob = "0.2.11"

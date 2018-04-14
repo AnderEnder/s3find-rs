@@ -17,19 +17,21 @@ use regex::Regex;
 
 use rusoto_core::DefaultCredentialsProvider;
 use rusoto_core::default_tls_client;
-
 use rusoto_core::ProvideAwsCredentials;
-use rusoto_s3::*;
 use rusoto_core::request::*;
 use rusoto_core::default_region;
+
+use rusoto_s3::*;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "s3find", about = "walk a s3 path hierarchy")]
 pub struct FindOpt {
     #[structopt(name = "path")]
     path: String,
-    #[structopt(name = "aws_key", long = "aws-key", help = "AWS key to access to S3, unrequired")]
-    aws_key: Option<String>,
+    #[structopt(name = "aws_access_key", long = "aws_access_key",
+                help = "AWS key to access to S3, unrequired",
+                raw(requires_all = r#"&["aws_secret_key", "aws_region"]"#))]
+    aws_access_key: Option<String>,
     #[structopt(name = "aws_secret_key", long = "aws-secret-key",
                 help = "AWS secret key to access to S3, unrequired")]
     aws_secret_key: Option<String>,
