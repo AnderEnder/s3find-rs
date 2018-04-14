@@ -12,6 +12,7 @@ extern crate rusoto_s3;
 use std::process::*;
 use std::process::Command;
 use glob::Pattern;
+use glob::MatchOptions;
 use regex::Regex;
 
 use rusoto_core::DefaultCredentialsProvider;
@@ -66,24 +67,39 @@ pub enum Cmd {
 }
 
 impl FindOpt {
-    fn matches(&self, str: &str) -> bool {
+    fn glob_match(&self, str: &str) -> bool {
         self.name.as_ref().unwrap().matches(str)
     }
 
-    fn is_match(&self, str: &str) -> bool {
+    fn ci_glob_match(&self, str: &str) -> bool {
+        self.iname.as_ref().unwrap().matches_with(
+            str,
+            &MatchOptions {
+                case_sensitive: false,
+                require_literal_separator: false,
+                require_literal_leading_dot: false,
+            },
+        )
+    }
+
+    fn regex_match(&self, str: &str) -> bool {
         self.regex.as_ref().unwrap().is_match(str)
     }
 
     fn filters(&self, object: &Object) -> bool {
         if self.name.is_some() {
-            return self.matches(object.key.as_ref().unwrap())
+            return self.glob_match(object.key.as_ref().unwrap());
+        }
+
+        if self.iname.is_some() {
+            return self.ci_glob_match(object.key.as_ref().unwrap());
         }
 
         if self.regex.is_some() {
-            return self.is_match(object.key.as_ref().unwrap())
+            return self.regex_match(object.key.as_ref().unwrap());
         }
 
-        return true
+        return true;
     }
 
     fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
