@@ -3,6 +3,9 @@ extern crate structopt;
 
 use structopt::StructOpt;
 
+#[macro_use]
+extern crate quick_error;
+
 extern crate clap;
 extern crate glob;
 extern crate regex;
@@ -11,6 +14,8 @@ extern crate rusoto_s3;
 
 use std::process::*;
 use std::process::Command;
+use std::str::FromStr;
+
 use glob::Pattern;
 use glob::MatchOptions;
 use regex::Regex;
@@ -23,11 +28,55 @@ use rusoto_core::default_region;
 
 use rusoto_s3::*;
 
+quick_error! {
+    #[derive(Debug)]
+    enum S3pathError {
+        Parse {
+            description("Refrob the Gizmo")
+            display(r#"The widget  could not be found"#)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct S3path {
+    bucket: String,
+    prefix: Option<String>,
+}
+
+impl S3path {
+    fn new(path: &str) -> Result<S3path, S3pathError> {
+        let s3_vec: Vec<&str> = path.split("/").collect();
+        let bucket = s3_vec.get(2).unwrap_or(&"");
+        let prefix = s3_vec.get(3).map(|x| x.to_owned());
+
+        let is_validated =
+            (s3_vec.get(0) == Some(&"s3:")) && (s3_vec.get(1) == Some(&"")) && (bucket != &"");
+
+        if is_validated {
+            Ok(S3path {
+                bucket: bucket.to_string(),
+                prefix: prefix.map(|x| (*x).to_string()),
+            })
+        } else {
+            Err(S3pathError::Parse)
+        }
+    }
+}
+
+impl FromStr for S3path {
+    type Err = S3pathError;
+
+    fn from_str(s: &str) -> Result<S3path, S3pathError> {
+        S3path::new(s)
+    }
+}
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "s3find", about = "walk a s3 path hierarchy")]
 pub struct FindOpt {
     #[structopt(name = "path")]
-    path: String,
+    path: S3path,
     #[structopt(name = "aws_access_key", long = "aws_access_key",
                 help = "AWS key to access to S3, unrequired",
                 raw(requires_all = r#"&["aws_secret_key", "aws_region"]"#))]
@@ -172,17 +221,6 @@ fn exec(command: &str, key: &str) -> (ExitStatus, String) {
     return (output.status, output_str);
 }
 
-fn split_validate_s3(path: &str) -> (bool, &str, Option<&str>) {
-    let s3_vec: Vec<&str> = path.split("/").collect();
-    let s3bucket = s3_vec.get(2).unwrap_or(&"");
-    let prefix = s3_vec.get(3).map(|x| x.to_owned());
-
-    let is_validated =
-        (s3_vec.get(0) == Some(&"s3:")) && (s3_vec.get(1) == Some(&"")) && (s3bucket != &"");
-
-    return (is_validated, s3bucket, prefix);
-}
-
 fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
 where
     P: ProvideAwsCredentials,
@@ -213,14 +251,7 @@ where
 
 fn main() {
     let status = FindOpt::from_args();
-    let s3path = status.path.as_ref();
-
-    let (is_validated, s3bucket, prefix) = split_validate_s3(s3path);
-
-    if !is_validated {
-        eprintln!("S3PATH is not correct");
-        exit(1);
-    }
+    let s3path = status.path.clone();
 
     let provider = DefaultCredentialsProvider::new().unwrap();
     let dispatcher = default_tls_client().unwrap();
@@ -228,13 +259,13 @@ fn main() {
     let client = S3Client::new(dispatcher, provider, region);
 
     let mut request = ListObjectsV2Request {
-        bucket: s3bucket.to_string(),
+        bucket: s3path.bucket.clone(),
         continuation_token: None,
         delimiter: None,
         encoding_type: None,
         fetch_owner: None,
         max_keys: Some(10000),
-        prefix: prefix.map(|x| (*x).to_string()),
+        prefix: s3path.prefix,
         request_payer: None,
         start_after: None,
     };
@@ -244,7 +275,7 @@ fn main() {
             Ok(output) => match output.contents {
                 Some(klist) => {
                     let flist: Vec<_> = klist.iter().filter(|x| status.filters(x)).collect();
-                    status.command(&client, &s3bucket, flist);
+                    status.command(&client, &s3path.bucket, flist);
 
                     match output.next_continuation_token {
                         Some(token) => request.continuation_token = Some(token),
@@ -267,71 +298,70 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use rusoto_s3::*;
-    use split_validate_s3;
     use exec;
     use advanced_print;
+    use S3path;
 
     #[test]
     fn split_validate_s3_corect() {
         let url = "s3://testbucket/";
-        let (is_validated, bucket, path) = split_validate_s3(url);
-        assert!(is_validated, "This s3 url should be validated posivitely");
-        assert_eq!(bucket, "testbucket", "This should be 'testbucket'");
-        assert_eq!(path, Some(""), "This should be empty path");
+        let path = S3path::new(url).unwrap();
+        assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
+        assert_eq!(
+            path.prefix,
+            Some("".to_string()),
+            "This should be empty path"
+        );
     }
 
     #[test]
     fn split_validate_s3_correct_full() {
         let url = "s3://testbucket/path";
-        let (is_validated, bucket, path) = split_validate_s3(url);
-        assert!(is_validated, "This s3 url should be validated posivitely");
-        assert_eq!(bucket, "testbucket", "This should be 'testbucket'");
-        assert_eq!(path, Some("path"), "This should be 'path'");
+        let path = S3path::new(url).unwrap();
+        assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
+        assert_eq!(
+            path.prefix,
+            Some("path".to_string()),
+            "This should be 'path'"
+        );
     }
 
     #[test]
     fn split_validate_s3_correct_short() {
         let url = "s3://testbucket";
-        let (is_validated, bucket, path) = split_validate_s3(url);
-        assert!(is_validated, "This s3 url should be validated posivitely");
-        assert_eq!(bucket, "testbucket", "This should be 'testbucket'");
-        assert_eq!(path, None, "This should be None");
+        let path = S3path::new(url).unwrap();
+        assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
+        assert_eq!(path.prefix, None, "This should be None");
     }
 
     #[test]
     fn split_validate_s3_only_bucket() {
         let url = "testbucket";
-        let (is_validated, bucket, path) = split_validate_s3(url);
+        let path = S3path::new(url);
         assert!(
-            !is_validated,
+            path.is_err(),
             "This s3 url should not be validated posivitely"
         );
-        assert_eq!(bucket, "");
-        assert_eq!(path, None);
     }
 
     #[test]
     fn split_validate_s3_without_bucket() {
         let url = "s3://";
-        let (is_validated, bucket, path) = split_validate_s3(url);
+        let path = S3path::new(url);
         assert!(
-            !is_validated,
+            path.is_err(),
             "This s3 url should not be validated posivitely"
         );
-        assert_eq!(bucket, "");
-        assert_eq!(path, None);
     }
 
     #[test]
     fn split_validate_s3_without_2_slash() {
         let url = "s3:/testbucket";
-        let (is_validated, bucket, path) = split_validate_s3(url);
+        let path = S3path::new(url);
         assert!(
-            !is_validated,
+            path.is_err(),
             "This s3 url should not be validated posivitely"
         );
-        assert_eq!(bucket, "");
-        assert_eq!(path, None);
     }
 
     #[test]
