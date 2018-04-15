@@ -32,8 +32,8 @@ quick_error! {
     #[derive(Debug)]
     enum S3pathError {
         Parse {
-            description("Refrob the Gizmo")
-            display(r#"The widget  could not be found"#)
+            description("Parse Error")
+            display(r#"Invalid s3 path"#)
         }
     }
 }
