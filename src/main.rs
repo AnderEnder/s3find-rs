@@ -4,7 +4,7 @@ extern crate structopt;
 use structopt::StructOpt;
 
 #[macro_use]
-extern crate quick_error;
+extern crate failure;
 
 extern crate clap;
 extern crate glob;
@@ -15,6 +15,7 @@ extern crate rusoto_s3;
 use std::process::*;
 use std::process::Command;
 use std::str::FromStr;
+use std::num::ParseIntError;
 
 use glob::Pattern;
 use glob::MatchOptions;
@@ -28,18 +29,12 @@ use rusoto_core::default_region;
 
 use rusoto_s3::*;
 
-quick_error! {
-    #[derive(Debug)]
-    enum FindError {
-        S3Parse {
-            description("S3 parse Error")
-            display(r#"Invalid s3 path"#)
-        }
-        SizeParse {
-            description("Size parse Error")
-            display(r#"Invalid size value"#)
-        }
-    }
+#[derive(Fail, Debug)]
+enum FindError {
+    #[fail(display = "Invalid s3 path")]
+    S3Parse,
+    #[fail(display = "Invalid size value")]
+    SizeParse(#[cause] ParseIntError),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,14 +92,12 @@ impl FindSize {
             _ => (FindRelation::Equal, size_str),
         };
 
-        let size_result = size_str_processed.parse();
-        match size_result {
-            Ok(size) => Ok(FindSize {
-                relation: relation,
-                size: size,
-            }),
-            Err(_) => Err(FindError::SizeParse),
-        }
+        let size = size_str_processed.parse().map_err(FindError::SizeParse)?;
+
+        Ok(FindSize {
+            relation: relation,
+            size: size,
+        })
     }
 }
 
