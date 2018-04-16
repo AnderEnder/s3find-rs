@@ -15,7 +15,8 @@ extern crate rusoto_s3;
 use std::process::*;
 use std::process::Command;
 use std::str::FromStr;
-use std::num::ParseIntError;
+
+use failure::Error;
 
 use glob::Pattern;
 use glob::MatchOptions;
@@ -33,9 +34,11 @@ use rusoto_s3::*;
 enum FindError {
     #[fail(display = "Invalid s3 path")]
     S3Parse,
-    #[fail(display = "Invalid size value")]
-    SizeParse(#[cause] ParseIntError),
+    #[fail(display = "Empty size value")]
+    SizeEmpty,
 }
+
+type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, PartialEq)]
 struct S3path {
@@ -44,7 +47,7 @@ struct S3path {
 }
 
 impl S3path {
-    fn new(path: &str) -> Result<S3path, FindError> {
+    fn new(path: &str) -> Result<S3path> {
         let s3_vec: Vec<&str> = path.split("/").collect();
         let bucket = s3_vec.get(2).unwrap_or(&"");
         let prefix = s3_vec.get(3).map(|x| x.to_owned());
@@ -58,15 +61,15 @@ impl S3path {
                 prefix: prefix.map(|x| (*x).to_string()),
             })
         } else {
-            Err(FindError::S3Parse)
+            Err(FindError::S3Parse.into())
         }
     }
 }
 
 impl FromStr for S3path {
-    type Err = FindError;
+    type Err = Error;
 
-    fn from_str(s: &str) -> Result<S3path, FindError> {
+    fn from_str(s: &str) -> Result<S3path> {
         S3path::new(s)
     }
 }
@@ -85,14 +88,15 @@ struct FindSize {
 }
 
 impl FindSize {
-    fn new(size_str: &str) -> Result<FindSize, FindError> {
-        let (relation, size_str_processed) = match size_str.chars().next().unwrap() {
-            '+' => (FindRelation::Upper, &((*size_str)[1..])),
-            '-' => (FindRelation::Lower, &((*size_str)[1..])),
-            _ => (FindRelation::Equal, size_str),
+    fn new(size_str: &str) -> Result<FindSize> {
+        let (relation, size_str_processed) = match size_str.chars().next() {
+            Some('+') => (FindRelation::Upper, &((*size_str)[1..])),
+            Some('-') => (FindRelation::Lower, &((*size_str)[1..])),
+            Some(_) => (FindRelation::Equal, size_str),
+            None => return Err(FindError::SizeEmpty.into()),
         };
 
-        let size = size_str_processed.parse().map_err(FindError::SizeParse)?;
+        let size = size_str_processed.parse()?;
 
         Ok(FindSize {
             relation: relation,
@@ -102,9 +106,9 @@ impl FindSize {
 }
 
 impl FromStr for FindSize {
-    type Err = FindError;
+    type Err = Error;
 
-    fn from_str(s: &str) -> Result<FindSize, FindError> {
+    fn from_str(s: &str) -> Result<FindSize> {
         FindSize::new(s)
     }
 }
@@ -157,12 +161,12 @@ pub enum Cmd {
 }
 
 impl FindOpt {
-    fn glob_match(&self, str: &str) -> bool {
-        self.name.as_ref().unwrap().matches(str)
+    fn glob_match(&self, name: &Pattern, str: &str) -> bool {
+        name.matches(str)
     }
 
-    fn ci_glob_match(&self, str: &str) -> bool {
-        self.iname.as_ref().unwrap().matches_with(
+    fn ci_glob_match(&self, iname: &Pattern, str: &str) -> bool {
+        iname.matches_with(
             str,
             &MatchOptions {
                 case_sensitive: false,
@@ -172,21 +176,23 @@ impl FindOpt {
         )
     }
 
-    fn regex_match(&self, str: &str) -> bool {
-        self.regex.as_ref().unwrap().is_match(str)
+    fn regex_match(&self, regex: &Regex, str: &str) -> bool {
+        regex.is_match(str)
     }
 
     fn filters(&self, object: &Object) -> bool {
-        if self.name.is_some() {
-            return self.glob_match(object.key.as_ref().unwrap());
+        let object_key = object.key.as_ref().unwrap();
+
+        if let Some(ref name) = self.name {
+            return self.glob_match(name, object_key);
         }
 
-        if self.iname.is_some() {
-            return self.ci_glob_match(object.key.as_ref().unwrap());
+        if let Some(ref iname) = self.iname {
+            return self.ci_glob_match(iname, object_key);
         }
 
-        if self.regex.is_some() {
-            return self.regex_match(object.key.as_ref().unwrap());
+        if let Some(ref regex) = self.regex {
+            return self.regex_match(regex, object_key);
         }
 
         return true;
@@ -288,12 +294,12 @@ where
     }
 }
 
-fn main() {
+fn real_main() -> Result<()> {
     let status = FindOpt::from_args();
     let s3path = status.path.clone();
 
-    let provider = DefaultCredentialsProvider::new().unwrap();
-    let dispatcher = default_tls_client().unwrap();
+    let provider = DefaultCredentialsProvider::new()?;
+    let dispatcher = default_tls_client()?;
     let region = default_region();
     let client = S3Client::new(dispatcher, provider, region);
 
@@ -310,27 +316,30 @@ fn main() {
     };
 
     loop {
-        match client.list_objects_v2(&request) {
-            Ok(output) => match output.contents {
-                Some(klist) => {
-                    let flist: Vec<_> = klist.iter().filter(|x| status.filters(x)).collect();
-                    status.command(&client, &s3path.bucket, flist);
+        let output = client.list_objects_v2(&request)?;
+        match output.contents {
+            Some(klist) => {
+                let flist: Vec<_> = klist.iter().filter(|x| status.filters(x)).collect();
+                status.command(&client, &s3path.bucket, flist);
 
-                    match output.next_continuation_token {
-                        Some(token) => request.continuation_token = Some(token),
-                        None => break,
-                    }
+                match output.next_continuation_token {
+                    Some(token) => request.continuation_token = Some(token),
+                    None => break,
                 }
-                None => {
-                    println!("No keys!");
-                    break;
-                }
-            },
-            Err(error) => {
-                println!("Error - {}", error);
+            }
+            None => {
+                println!("No keys!");
                 break;
             }
         }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(error) = real_main() {
+        eprintln!("Error - {:#?}", error);
+        ::std::process::exit(1);
     }
 }
 
@@ -463,11 +472,7 @@ mod tests {
         let size = FindSize::new(size_str).unwrap();
 
         assert_eq!(size.size, 1111, "");
-        assert_eq!(
-            size.relation,
-            FindRelation::Equal,
-            "should be equal"
-        );
+        assert_eq!(size.relation, FindRelation::Equal, "should be equal");
     }
 
     #[test]
@@ -476,11 +481,7 @@ mod tests {
         let size = FindSize::new(size_str).unwrap();
 
         assert_eq!(size.size, 1111, "");
-        assert_eq!(
-            size.relation,
-            FindRelation::Upper,
-            "should be upper"
-        );
+        assert_eq!(size.relation, FindRelation::Upper, "should be upper");
     }
 
     #[test]
@@ -489,10 +490,6 @@ mod tests {
         let size = FindSize::new(size_str).unwrap();
 
         assert_eq!(size.size, 1111, "");
-        assert_eq!(
-            size.relation,
-            FindRelation::Lower,
-            "should be lower"
-        );
+        assert_eq!(size.relation, FindRelation::Lower, "should be lower");
     }
 }
