@@ -30,10 +30,14 @@ use rusoto_s3::*;
 
 quick_error! {
     #[derive(Debug)]
-    enum S3pathError {
-        Parse {
-            description("Parse Error")
+    enum FindError {
+        S3Parse {
+            description("S3 parse Error")
             display(r#"Invalid s3 path"#)
+        }
+        SizeParse {
+            description("Size parse Error")
+            display(r#"Invalid size value"#)
         }
     }
 }
@@ -45,7 +49,7 @@ struct S3path {
 }
 
 impl S3path {
-    fn new(path: &str) -> Result<S3path, S3pathError> {
+    fn new(path: &str) -> Result<S3path, FindError> {
         let s3_vec: Vec<&str> = path.split("/").collect();
         let bucket = s3_vec.get(2).unwrap_or(&"");
         let prefix = s3_vec.get(3).map(|x| x.to_owned());
@@ -59,16 +63,56 @@ impl S3path {
                 prefix: prefix.map(|x| (*x).to_string()),
             })
         } else {
-            Err(S3pathError::Parse)
+            Err(FindError::S3Parse)
         }
     }
 }
 
 impl FromStr for S3path {
-    type Err = S3pathError;
+    type Err = FindError;
 
-    fn from_str(s: &str) -> Result<S3path, S3pathError> {
+    fn from_str(s: &str) -> Result<S3path, FindError> {
         S3path::new(s)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum FindRelation {
+    Equal,
+    Upper,
+    Lower,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FindSize {
+    relation: FindRelation,
+    size: u64,
+}
+
+impl FindSize {
+    fn new(size_str: &str) -> Result<FindSize, FindError> {
+        let (relation, size_str_processed) = match size_str.chars().next().unwrap() {
+            '+' => (FindRelation::Upper, &((*size_str)[1..])),
+            '-' => (FindRelation::Lower, &((*size_str)[1..])),
+            _ => (FindRelation::Equal, size_str),
+        };
+
+        let size_result = size_str_processed.parse();
+        match size_result {
+            Ok(size) => Ok(FindSize {
+                relation: relation,
+                size: size,
+            }),
+            Err(_) => Err(FindError::SizeParse),
+        }
+    }
+}
+
+impl FromStr for FindSize {
+    type Err = FindError;
+
+    fn from_str(s: &str) -> Result<FindSize, FindError> {
+        FindSize::new(s)
     }
 }
 
@@ -98,6 +142,8 @@ pub struct FindOpt {
     #[structopt(name = "time", long = "mtime",
                 help = "the difference between the file last modification time")]
     mtime: Option<String>,
+    #[structopt(name = "bytes_size", long = "size", help = "file size")]
+    size: Option<FindSize>,
     #[structopt(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -301,9 +347,11 @@ mod tests {
     use exec;
     use advanced_print;
     use S3path;
+    use FindSize;
+    use FindRelation;
 
     #[test]
-    fn split_validate_s3_corect() {
+    fn s3path_corect() {
         let url = "s3://testbucket/";
         let path = S3path::new(url).unwrap();
         assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
@@ -315,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn split_validate_s3_correct_full() {
+    fn s3path_correct_full() {
         let url = "s3://testbucket/path";
         let path = S3path::new(url).unwrap();
         assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
@@ -327,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn split_validate_s3_correct_short() {
+    fn s3path_correct_short() {
         let url = "s3://testbucket";
         let path = S3path::new(url).unwrap();
         assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
@@ -335,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn split_validate_s3_only_bucket() {
+    fn s3path_only_bucket() {
         let url = "testbucket";
         let path = S3path::new(url);
         assert!(
@@ -345,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn split_validate_s3_without_bucket() {
+    fn s3path_without_bucket() {
         let url = "s3://";
         let path = S3path::new(url);
         assert!(
@@ -355,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn split_validate_s3_without_2_slash() {
+    fn s3path_without_2_slash() {
         let url = "s3:/testbucket";
         let path = S3path::new(url);
         assert!(
@@ -414,5 +462,44 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         };
         advanced_print("bucket", &object);
+    }
+
+    #[test]
+    fn size_corect() {
+        let size_str = "1111";
+        let size = FindSize::new(size_str).unwrap();
+
+        assert_eq!(size.size, 1111, "");
+        assert_eq!(
+            size.relation,
+            FindRelation::Equal,
+            "should be equal"
+        );
+    }
+
+    #[test]
+    fn size_corect_positive() {
+        let size_str = "+1111";
+        let size = FindSize::new(size_str).unwrap();
+
+        assert_eq!(size.size, 1111, "");
+        assert_eq!(
+            size.relation,
+            FindRelation::Upper,
+            "should be upper"
+        );
+    }
+
+    #[test]
+    fn size_corect_negative() {
+        let size_str = "-1111";
+        let size = FindSize::new(size_str).unwrap();
+
+        assert_eq!(size.size, 1111, "");
+        assert_eq!(
+            size.relation,
+            FindRelation::Lower,
+            "should be lower"
+        );
     }
 }
