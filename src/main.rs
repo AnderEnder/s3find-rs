@@ -36,6 +36,8 @@ enum FindError {
     S3Parse,
     #[fail(display = "Empty size value")]
     SizeEmpty,
+    #[fail(display = "Empty time value")]
+    TimeEmpty,
 }
 
 type Result<T> = ::std::result::Result<T, Error>;
@@ -93,7 +95,7 @@ impl FindSize {
             Some('+') => (FindRelation::Upper, &((*size_str)[1..])),
             Some('-') => (FindRelation::Lower, &((*size_str)[1..])),
             Some(_) => (FindRelation::Equal, size_str),
-            None => return Err(FindError::SizeEmpty.into()),
+            None => return Err(FindError::TimeEmpty.into()),
         };
 
         let size = size_str_processed.parse()?;
@@ -110,6 +112,25 @@ impl FromStr for FindSize {
 
     fn from_str(s: &str) -> Result<FindSize> {
         FindSize::new(s)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum FindTime {
+    Upper(u64),
+    Lower(u64),
+}
+
+impl FromStr for FindTime {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<FindTime> {
+        match s.chars().next() {
+            Some('+') => Ok(FindTime::Upper(((*s)[1..]).parse()?)),
+            Some('-') => Ok(FindTime::Lower(((*s)[1..]).parse()?)),
+            Some(_) => Ok(FindTime::Upper(s.parse()?)),
+            None => Err(FindError::SizeEmpty.into()),
+        }
     }
 }
 
@@ -138,7 +159,7 @@ pub struct FindOpt {
     regex: Option<Regex>,
     #[structopt(name = "time", long = "mtime",
                 help = "the difference between the file last modification time")]
-    mtime: Option<String>,
+    mtime: Option<FindTime>,
     #[structopt(name = "bytes_size", long = "size", help = "file size")]
     size: Option<FindSize>,
     #[structopt(subcommand)]
@@ -351,6 +372,7 @@ mod tests {
     use S3path;
     use FindSize;
     use FindRelation;
+    use FindTime;
 
     #[test]
     fn s3path_corect() {
@@ -491,5 +513,45 @@ mod tests {
 
         assert_eq!(size.size, 1111, "");
         assert_eq!(size.relation, FindRelation::Lower, "should be lower");
+    }
+
+    #[test]
+    fn size_incorect_negative() {
+        let size_str = "-";
+        let size = FindSize::new(size_str);
+
+        assert!(size.is_err(), "Should be error");
+    }
+
+    #[test]
+    fn time_corect() {
+        let time_str = "1111";
+        let time: FindTime = time_str.parse().unwrap();
+
+        assert_eq!(time, FindTime::Upper(1111), "Should be upper");
+    }
+
+    #[test]
+    fn time_corect_positive() {
+        let time_str = "+1111";
+        let time: FindTime = time_str.parse().unwrap();
+
+        assert_eq!(time, FindTime::Upper(1111), "Should be upper");
+    }
+
+    #[test]
+    fn time_corect_negative() {
+        let time_str = "-1111";
+        let time: FindTime = time_str.parse().unwrap();
+
+        assert_eq!(time, FindTime::Lower(1111), "Should be lower");
+    }
+
+    #[test]
+    fn time_incorect_negative() {
+        let time_str = "-";
+        let time = time_str.parse::<FindTime>();
+
+        assert!(time.is_err(), "Should be error");
     }
 }
