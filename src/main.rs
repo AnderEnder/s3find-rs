@@ -86,7 +86,7 @@ enum FindRelation {
 #[derive(Debug, Clone, PartialEq)]
 struct FindSize {
     relation: FindRelation,
-    size: u64,
+    size: i64,
 }
 
 impl FindSize {
@@ -201,6 +201,14 @@ impl FindOpt {
         regex.is_match(str)
     }
 
+    fn size_compare(&self, size: &FindSize, object_size: &i64) -> bool {
+        match size.relation {
+           FindRelation::Upper => object_size > &size.size,
+           FindRelation::Lower => object_size < &size.size,
+           FindRelation::Equal => object_size == &size.size,
+        }
+    }
+
     fn filters(&self, object: &Object) -> bool {
         let object_key = object.key.as_ref().unwrap();
 
@@ -214,6 +222,11 @@ impl FindOpt {
 
         if let Some(ref regex) = self.regex {
             return self.regex_match(regex, object_key);
+        }
+
+        if let Some(ref size) = self.size {
+            let object_size = object.size.as_ref().unwrap();
+            return self.size_compare(size, object_size);
         }
 
         return true;
