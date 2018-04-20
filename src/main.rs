@@ -194,7 +194,7 @@ impl Filter for FindSize {
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "s3find", about = "walk a s3 path hierarchy")]
 pub struct FindOpt {
-    #[structopt(name = "path")]
+    #[structopt(name = "path", raw(index = r#"1"#))]
     path: S3path,
     #[structopt(name = "aws_access_key", long = "aws_access_key",
                 help = "AWS key to access to S3, unrequired",
@@ -207,18 +207,18 @@ pub struct FindOpt {
                 help = "AWS region to access to S3, unrequired")]
     aws_region: Option<String>,
     #[structopt(name = "npatern", long = "name", help = "match by glob shell pattern")]
-    name: Option<InameGlob>,
+    name: Vec<NameGlob>,
     #[structopt(name = "ipatern", long = "iname",
                 help = "match by glob shell pattern, case insensitive")]
-    iname: Option<Pattern>,
+    iname: Vec<InameGlob>,
     #[structopt(name = "rpatern", long = "regex",
                 help = "match by regex pattern, case insensitive")]
-    regex: Option<Regex>,
+    regex: Vec<Regex>,
     #[structopt(name = "time", long = "mtime",
                 help = "the difference between the file last modification time")]
-    mtime: Option<FindTime>,
+    mtime: Vec<FindTime>,
     #[structopt(name = "bytes_size", long = "size", help = "file size")]
-    size: Option<FindSize>,
+    size: Vec<FindSize>,
     #[structopt(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -239,37 +239,6 @@ pub enum Cmd {
 }
 
 impl FindOpt {
-    fn filters(&self, object: &Object) -> bool {
-        //        let filter_list: Vec<Box<Option<Filter>>> = vec![Box::new(*self.name)];
-        //        let filter_list: Vec<Box<Option<Filter>>> = Vec::new();
-
-        if let Some(ref name) = self.name {
-            if !name.filter(object) {
-                return false;
-            }
-        }
-
-        if let Some(ref iname) = self.iname {
-            if !iname.filter(object) {
-                return false;
-            }
-        }
-
-        if let Some(ref regex) = self.regex {
-            if !regex.filter(object) {
-                return false;
-            }
-        }
-
-        if let Some(ref size) = self.size {
-            if !size.filter(object) {
-                return false;
-            }
-        }
-
-        true
-    }
-
     fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
     where
         P: ProvideAwsCredentials,
@@ -296,6 +265,42 @@ impl FindOpt {
                 let _nlist: Vec<_> = list.iter().map(|x| fprint(bucket, x)).collect();
             }
         }
+    }
+}
+
+struct FilterList(Vec<Box<Filter>>);
+
+impl FilterList {
+    fn new(opts: &FindOpt) -> FilterList {
+        let mut list: Vec<Box<Filter>> = Vec::new();
+
+        for name in opts.name.iter() {
+            list.push(Box::new(name.clone()));
+        }
+
+        for iname in opts.iname.iter() {
+            list.push(Box::new(iname.clone()));
+        }
+
+        for regex in opts.regex.iter() {
+            list.push(Box::new(regex.clone()));
+        }
+
+        for size in opts.size.iter() {
+            list.push(Box::new(size.clone()));
+        }
+
+        FilterList(list)
+    }
+
+    fn filters(&self, object: &Object) -> bool {
+        for item in self.0.iter() {
+            if !item.filter(object) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -370,6 +375,7 @@ fn real_main() -> Result<()> {
     let status = FindOpt::from_args();
     let s3path = status.path.clone();
 
+    let filter = FilterList::new(&status);
     let provider = DefaultCredentialsProvider::new()?;
     let dispatcher = default_tls_client()?;
     let region = default_region();
@@ -391,7 +397,7 @@ fn real_main() -> Result<()> {
         let output = client.list_objects_v2(&request)?;
         match output.contents {
             Some(klist) => {
-                let flist: Vec<_> = klist.iter().filter(|x| status.filters(x)).collect();
+                let flist: Vec<_> = klist.iter().filter(|x| filter.filters(x)).collect();
                 status.command(&client, &s3path.bucket, flist);
 
                 match output.next_continuation_token {
