@@ -134,6 +134,63 @@ impl FromStr for FindTime {
     }
 }
 
+type NameGlob = Pattern;
+
+#[derive(Debug, Clone, PartialEq)]
+struct InameGlob(Pattern);
+
+impl FromStr for InameGlob {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<InameGlob> {
+        let pattern = Pattern::from_str(s)?;
+        Ok(InameGlob(pattern))
+    }
+}
+
+trait Filter {
+    fn filter(&self, object: &Object) -> bool;
+}
+
+impl Filter for NameGlob {
+    fn filter(&self, object: &Object) -> bool {
+        let object_key = object.key.as_ref().unwrap();
+        self.matches(object_key)
+    }
+}
+
+impl Filter for InameGlob {
+    fn filter(&self, object: &Object) -> bool {
+        let object_key = object.key.as_ref().unwrap();
+        self.0.matches_with(
+            object_key,
+            &MatchOptions {
+                case_sensitive: false,
+                require_literal_separator: false,
+                require_literal_leading_dot: false,
+            },
+        )
+    }
+}
+
+impl Filter for Regex {
+    fn filter(&self, object: &Object) -> bool {
+        let object_key = object.key.as_ref().unwrap();
+        self.is_match(object_key)
+    }
+}
+
+impl Filter for FindSize {
+    fn filter(&self, object: &Object) -> bool {
+        let object_size = object.size.as_ref().unwrap();
+        match self.relation {
+            FindRelation::Upper => object_size > &self.size,
+            FindRelation::Lower => object_size < &self.size,
+            FindRelation::Equal => object_size == &self.size,
+        }
+    }
+}
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "s3find", about = "walk a s3 path hierarchy")]
 pub struct FindOpt {
@@ -150,7 +207,7 @@ pub struct FindOpt {
                 help = "AWS region to access to S3, unrequired")]
     aws_region: Option<String>,
     #[structopt(name = "npatern", long = "name", help = "match by glob shell pattern")]
-    name: Option<Pattern>,
+    name: Option<InameGlob>,
     #[structopt(name = "ipatern", long = "iname",
                 help = "match by glob shell pattern, case insensitive")]
     iname: Option<Pattern>,
@@ -182,54 +239,35 @@ pub enum Cmd {
 }
 
 impl FindOpt {
-    fn glob_match(&self, name: &Pattern, str: &str) -> bool {
-        name.matches(str)
-    }
-
-    fn ci_glob_match(&self, iname: &Pattern, str: &str) -> bool {
-        iname.matches_with(
-            str,
-            &MatchOptions {
-                case_sensitive: false,
-                require_literal_separator: false,
-                require_literal_leading_dot: false,
-            },
-        )
-    }
-
-    fn regex_match(&self, regex: &Regex, str: &str) -> bool {
-        regex.is_match(str)
-    }
-
-    fn size_compare(&self, size: &FindSize, object_size: &i64) -> bool {
-        match size.relation {
-           FindRelation::Upper => object_size > &size.size,
-           FindRelation::Lower => object_size < &size.size,
-           FindRelation::Equal => object_size == &size.size,
-        }
-    }
-
     fn filters(&self, object: &Object) -> bool {
-        let object_key = object.key.as_ref().unwrap();
+        //        let filter_list: Vec<Box<Option<Filter>>> = vec![Box::new(*self.name)];
+        //        let filter_list: Vec<Box<Option<Filter>>> = Vec::new();
 
         if let Some(ref name) = self.name {
-            return self.glob_match(name, object_key);
+            if !name.filter(object) {
+                return false;
+            }
         }
 
         if let Some(ref iname) = self.iname {
-            return self.ci_glob_match(iname, object_key);
+            if !iname.filter(object) {
+                return false;
+            }
         }
 
         if let Some(ref regex) = self.regex {
-            return self.regex_match(regex, object_key);
+            if !regex.filter(object) {
+                return false;
+            }
         }
 
         if let Some(ref size) = self.size {
-            let object_size = object.size.as_ref().unwrap();
-            return self.size_compare(size, object_size);
+            if !size.filter(object) {
+                return false;
+            }
         }
 
-        return true;
+        true
     }
 
     fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
