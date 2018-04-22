@@ -77,41 +77,22 @@ impl FromStr for S3path {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum FindRelation {
-    Equal,
-    Upper,
-    Lower,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct FindSize {
-    relation: FindRelation,
-    size: i64,
-}
-
-impl FindSize {
-    fn new(size_str: &str) -> Result<FindSize> {
-        let (relation, size_str_processed) = match size_str.chars().next() {
-            Some('+') => (FindRelation::Upper, &((*size_str)[1..])),
-            Some('-') => (FindRelation::Lower, &((*size_str)[1..])),
-            Some(_) => (FindRelation::Equal, size_str),
-            None => return Err(FindError::TimeEmpty.into()),
-        };
-
-        let size = size_str_processed.parse()?;
-
-        Ok(FindSize {
-            relation: relation,
-            size: size,
-        })
-    }
+enum FindSize {
+    Equal(i64),
+    Bigger(i64),
+    Lower(i64),
 }
 
 impl FromStr for FindSize {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<FindSize> {
-        FindSize::new(s)
+        match s.chars().next() {
+            Some('+') => Ok(FindSize::Bigger(((*s)[1..]).parse()?)),
+            Some('-') => Ok(FindSize::Lower(((*s)[1..]).parse()?)),
+            Some(_) => Ok(FindSize::Equal(s.parse()?)),
+            None => return Err(FindError::TimeEmpty.into()),
+        }
     }
 }
 
@@ -183,10 +164,10 @@ impl Filter for Regex {
 impl Filter for FindSize {
     fn filter(&self, object: &Object) -> bool {
         let object_size = object.size.as_ref().unwrap();
-        match self.relation {
-            FindRelation::Upper => object_size >= &self.size,
-            FindRelation::Lower => object_size <= &self.size,
-            FindRelation::Equal => object_size == &self.size,
+        match *self {
+            FindSize::Bigger(size) => *object_size >= size,
+            FindSize::Lower(size) => *object_size <= size,
+            FindSize::Equal(size) => *object_size == size,
         }
     }
 }
@@ -432,7 +413,6 @@ mod tests {
     use advanced_print;
     use S3path;
     use FindSize;
-    use FindRelation;
     use FindTime;
 
     #[test]
@@ -552,34 +532,31 @@ mod tests {
     #[test]
     fn size_corect() {
         let size_str = "1111";
-        let size = FindSize::new(size_str).unwrap();
+        let size: FindSize = size_str.parse().unwrap();
 
-        assert_eq!(size.size, 1111, "");
-        assert_eq!(size.relation, FindRelation::Equal, "should be equal");
+        assert_eq!(size, FindSize::Equal(1111), "should be equal");
     }
 
     #[test]
     fn size_corect_positive() {
         let size_str = "+1111";
-        let size = FindSize::new(size_str).unwrap();
+        let size: FindSize = size_str.parse().unwrap();
 
-        assert_eq!(size.size, 1111, "");
-        assert_eq!(size.relation, FindRelation::Upper, "should be upper");
+        assert_eq!(size, FindSize::Bigger(1111), "should be upper");
     }
 
     #[test]
     fn size_corect_negative() {
         let size_str = "-1111";
-        let size = FindSize::new(size_str).unwrap();
+        let size: FindSize = size_str.parse().unwrap();
 
-        assert_eq!(size.size, 1111, "");
-        assert_eq!(size.relation, FindRelation::Lower, "should be lower");
+        assert_eq!(size, FindSize::Lower(1111), "should be lower");
     }
 
     #[test]
     fn size_incorect_negative() {
         let size_str = "-";
-        let size = FindSize::new(size_str);
+        let size = size_str.parse::<FindSize>();
 
         assert!(size.is_err(), "Should be error");
     }
@@ -603,7 +580,7 @@ mod tests {
     #[test]
     fn time_corect_negative() {
         let time_str = "-1111";
-        let time: FindTime = time_str.parse().unwrap();
+        let time = time_str.parse::<FindTime>().unwrap();
 
         assert_eq!(time, FindTime::Lower(1111), "Should be lower");
     }
@@ -611,6 +588,14 @@ mod tests {
     #[test]
     fn time_incorect_negative() {
         let time_str = "-";
+        let time = time_str.parse::<FindTime>();
+
+        assert!(time.is_err(), "Should be error");
+    }
+
+    #[test]
+    fn time_incorect_positive() {
+        let time_str = "+";
         let time = time_str.parse::<FindTime>();
 
         assert!(time.is_err(), "Should be error");
