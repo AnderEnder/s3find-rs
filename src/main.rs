@@ -206,18 +206,22 @@ pub struct FindOpt {
     #[structopt(name = "aws_region", long = "aws-region",
                 help = "AWS region to access to S3, unrequired")]
     aws_region: Option<String>,
-    #[structopt(name = "npatern", long = "name", help = "match by glob shell pattern")]
+    #[structopt(name = "npatern", long = "name", help = "match by glob shell pattern",
+                raw(number_of_values = "1"))]
     name: Vec<NameGlob>,
     #[structopt(name = "ipatern", long = "iname",
-                help = "match by glob shell pattern, case insensitive")]
+                help = "match by glob shell pattern, case insensitive",
+                raw(number_of_values = "1"))]
     iname: Vec<InameGlob>,
     #[structopt(name = "rpatern", long = "regex",
-                help = "match by regex pattern, case insensitive")]
+                help = "match by regex pattern, case insensitive", raw(number_of_values = "1"))]
     regex: Vec<Regex>,
     #[structopt(name = "time", long = "mtime",
-                help = "the difference between the file last modification time")]
+                help = "the difference between the file last modification time",
+                raw(number_of_values = "1", allow_hyphen_values = "true"))]
     mtime: Vec<FindTime>,
-    #[structopt(name = "bytes_size", long = "size", help = "file size")]
+    #[structopt(name = "bytes_size", long = "size", help = "file size",
+                raw(number_of_values = "1", allow_hyphen_values = "true"))]
     size: Vec<FindSize>,
     #[structopt(subcommand)]
     cmd: Option<Cmd>,
