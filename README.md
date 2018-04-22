@@ -10,38 +10,38 @@ Utility to walk a S3 hierarchy. An analog of find for AWS S3.
 #### Print
 
 ```sh
-s3find --name='*' 's3://s3example/s3test' -print
+s3find 's3://s3example/s3test' --name '*' -print
 ```
 
 #### Delete
 
 ```sh
-s3find --name='*' 's3://s3example/s3test' -delete
+s3find 's3://s3example/s3test' --name '*' -delete
 ```
 
 #### List
 
 ```sh
-s3find --name='*' 's3://s3example/s3test' -ls
+s3find 's3://s3example/s3test' --name '*' -ls
 ```
 
 #### Exec
 
 ```sh
-s3find --name='*' 's3://s3example/s3test' -exec 'echo {}'
+s3find 's3://s3example/s3test' --name '*' -exec 'echo {}'
 
 ```
 
 ### Find path by case insensitive glob pattern
 
 ```sh
-s3find --iname='*s*' 's3://s3example/s3test' -ls
+s3find 's3://s3example/s3test' --iname '*s*' -ls
 ```
 
 ### Find path by regex pattern
 
 ```sh
-s3find --regex='1$' 's3://s3example/s3test' -print
+s3find 's3://s3example/s3test' --regex '1$' -print
 ```
 
 ### Find path by size
@@ -49,19 +49,19 @@ s3find --regex='1$' 's3://s3example/s3test' -print
 #### Exact match
 
 ```sh
-s3find --size=0 's3://s3example/s3test' -print
+s3find 's3://s3example/s3test' --size 0 -print
 ```
 
 #### Larger
 
 ```sh
-s3find --size=+10 's3://s3example/s3test' -print
+s3find 's3://s3example/s3test' --size +10 -print
 ```
 
 #### Smaller
 
 ```sh
-s3find --size=-10 's3://s3example/s3test' -print
+s3find 's3://s3example/s3test' --size -10 -print
 ```
 
 ### Multiple filters
@@ -69,11 +69,11 @@ s3find --size=-10 's3://s3example/s3test' -print
 #### Same filters
 
 ```sh
-s3find --size=+10  --size=-20 's3://s3example/s3test' -print
+s3find 's3://s3example/s3test' --size +10  --size -20 -print
 ```
 
 #### Different filters
 
 ```sh
-s3find --size=+10 --name='*file*' 's3://s3example/s3test' -print
+s3find 's3://s3example/s3test'  --size +10 --name '*file*' -print
 ```
