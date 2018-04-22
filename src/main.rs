@@ -184,8 +184,8 @@ impl Filter for FindSize {
     fn filter(&self, object: &Object) -> bool {
         let object_size = object.size.as_ref().unwrap();
         match self.relation {
-            FindRelation::Upper => object_size > &self.size,
-            FindRelation::Lower => object_size < &self.size,
+            FindRelation::Upper => object_size >= &self.size,
+            FindRelation::Lower => object_size <= &self.size,
             FindRelation::Equal => object_size == &self.size,
         }
     }
