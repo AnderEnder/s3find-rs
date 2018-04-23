@@ -38,6 +38,8 @@ enum FindError {
     SizeEmpty,
     #[fail(display = "Empty time value")]
     TimeEmpty,
+    #[fail(display = "Invalid command line value")]
+    CommandlineParse,
 }
 
 type Result<T> = ::std::result::Result<T, Error>;
@@ -136,6 +138,7 @@ trait Filter {
 impl Filter for NameGlob {
     fn filter(&self, object: &Object) -> bool {
         let object_key = object.key.as_ref().unwrap();
+        //        let object_key = object.key.as_ref().unwrap_or(&"".to_string());
         self.matches(object_key)
     }
 }
@@ -163,7 +166,7 @@ impl Filter for Regex {
 
 impl Filter for FindSize {
     fn filter(&self, object: &Object) -> bool {
-        let object_size = object.size.as_ref().unwrap();
+        let object_size = object.size.as_ref().unwrap_or(&0);
         match *self {
             FindSize::Bigger(size) => *object_size >= size,
             FindSize::Lower(size) => *object_size <= size,
@@ -241,7 +244,7 @@ impl FindOpt {
                     .map(|x| {
                         let key = x.key.as_ref().unwrap();
                         let path = format!("s3://{}/{}", bucket, key);
-                        exec(&p, &path);
+                        exec(&p, &path)
                     })
                     .collect();
             }
@@ -289,43 +292,63 @@ impl FilterList {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+struct ExecStatus {
+    status: ExitStatus,
+    output: String,
+}
+
 fn fprint(bucket: &str, item: &Object) {
-    println!("s3://{}/{}", bucket, item.key.as_ref().unwrap());
+    println!(
+        "s3://{}/{}",
+        bucket,
+        item.key.as_ref().unwrap_or(&"".to_string())
+    );
 }
 
 fn msg_print(bucket: &str, item: &Object, msg: &str) {
-    println!("{}: s3://{}/{}", msg, bucket, item.key.as_ref().unwrap());
+    println!(
+        "{}: s3://{}/{}",
+        msg,
+        bucket,
+        item.key.as_ref().unwrap_or(&"".to_string())
+    );
 }
 
 fn advanced_print(bucket: &str, item: &Object) {
     println!(
         "{} {:?} {} {} s3://{}/{} {}",
-        item.e_tag.as_ref().unwrap(),
+        item.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
         item.owner.as_ref().map(|x| x.display_name.as_ref()),
-        item.size.as_ref().unwrap(),
-        item.last_modified.as_ref().unwrap(),
+        item.size.as_ref().unwrap_or(&0),
+        item.last_modified.as_ref().unwrap_or(&"NoTime".to_string()),
         bucket,
-        item.key.as_ref().unwrap(),
-        item.storage_class.as_ref().unwrap(),
+        item.key.as_ref().unwrap_or(&"".to_string()),
+        item.storage_class
+            .as_ref()
+            .unwrap_or(&"NoStorage".to_string()),
     );
 }
 
-fn exec(command: &str, key: &str) -> (ExitStatus, String) {
+fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     let scommand = command.replace("{}", key);
 
     let mut command_args = scommand.split(" ");
-    let command_name = command_args.next().unwrap();
+    let command_name = command_args.next().ok_or(FindError::CommandlineParse)?;
 
     let mut rcommand = Command::new(command_name);
     for arg in command_args {
         rcommand.arg(arg);
     }
 
-    let output = rcommand.output().expect("failed to execute process");
+    let output = rcommand.output()?;
     let output_str = String::from_utf8_lossy(&output.stdout).to_string();
-
     print!("{}", &output_str);
-    return (output.status, output_str);
+
+    Ok(ExecStatus {
+        status: output.status,
+        output: output_str,
+    })
 }
 
 fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
@@ -479,22 +502,26 @@ mod tests {
 
     #[test]
     fn exec_true() {
-        let (status, _) = exec("true", "");
-        assert!(status.success(), "Exit code of true is 0");
+        let exec_status = exec("true", "").unwrap();
+        assert!(exec_status.status.success(), "Exit code of true is 0");
     }
 
     #[test]
     fn exec_false() {
-        let (status, _) = exec("false", "");
-        assert!(!status.success(), "Exit code of false is 1");
+        let exec_status = exec("false", "");
+        assert!(
+            !exec_status.unwrap().status.success(),
+            "Exit code of false is 1"
+        );
     }
 
     #[test]
     fn exec_echo_multiple() {
-        let (status, output) = exec("echo Hello world1", "");
-        assert!(status.success(), "Exit code of echo is 0");
+        let exec_status = exec("echo Hello world1", "").unwrap();
+
+        assert!(exec_status.status.success(), "Exit code of echo is 0");
         assert_eq!(
-            output, "Hello world1\n",
+            exec_status.output, "Hello world1\n",
             "Output of echo is 'Hello world1\n'"
         );
     }
@@ -502,16 +529,20 @@ mod tests {
     #[test]
     #[should_panic]
     fn exec_incorrect_command() {
-        let (status, _) = exec("jbrwuDxPy4ck", "");
-        assert!(!status.success(), "Exit code should not be success");
+        let exec_status = exec("jbrwuDxPy4ck", "");
+        assert!(
+            !exec_status.unwrap().status.success(),
+            "Exit code should not be success"
+        );
     }
 
     #[test]
     fn exec_echo_interpolation() {
-        let (status, output) = exec("echo Hello {}", "world2");
-        assert!(status.success(), "Exit code of echo is 0");
+        let exec_status = exec("echo Hello {}", "world2").unwrap();
+
+        assert!(exec_status.status.success(), "Exit code of echo is 0");
         assert_eq!(
-            output, "Hello world2\n",
+            exec_status.output, "Hello world2\n",
             "String should interpolated and printed"
         );
     }
@@ -532,25 +563,25 @@ mod tests {
     #[test]
     fn size_corect() {
         let size_str = "1111";
-        let size: FindSize = size_str.parse().unwrap();
+        let size = size_str.parse::<FindSize>();
 
-        assert_eq!(size, FindSize::Equal(1111), "should be equal");
+        assert_eq!(size.ok(), Some(FindSize::Equal(1111)), "should be equal");
     }
 
     #[test]
     fn size_corect_positive() {
         let size_str = "+1111";
-        let size: FindSize = size_str.parse().unwrap();
+        let size = size_str.parse::<FindSize>();
 
-        assert_eq!(size, FindSize::Bigger(1111), "should be upper");
+        assert_eq!(size.ok(), Some(FindSize::Bigger(1111)), "should be upper");
     }
 
     #[test]
     fn size_corect_negative() {
         let size_str = "-1111";
-        let size: FindSize = size_str.parse().unwrap();
+        let size = size_str.parse::<FindSize>();
 
-        assert_eq!(size, FindSize::Lower(1111), "should be lower");
+        assert_eq!(size.ok(), Some(FindSize::Lower(1111)), "should be lower");
     }
 
     #[test]
@@ -564,25 +595,25 @@ mod tests {
     #[test]
     fn time_corect() {
         let time_str = "1111";
-        let time: FindTime = time_str.parse().unwrap();
+        let time = time_str.parse::<FindTime>();
 
-        assert_eq!(time, FindTime::Upper(1111), "Should be upper");
+        assert_eq!(time.ok(), Some(FindTime::Upper(1111)), "Should be upper");
     }
 
     #[test]
     fn time_corect_positive() {
         let time_str = "+1111";
-        let time: FindTime = time_str.parse().unwrap();
+        let time = time_str.parse::<FindTime>();
 
-        assert_eq!(time, FindTime::Upper(1111), "Should be upper");
+        assert_eq!(time.ok(), Some(FindTime::Upper(1111)), "Should be upper");
     }
 
     #[test]
     fn time_corect_negative() {
         let time_str = "-1111";
-        let time = time_str.parse::<FindTime>().unwrap();
+        let time = time_str.parse::<FindTime>();
 
-        assert_eq!(time, FindTime::Lower(1111), "Should be lower");
+        assert_eq!(time.ok(), Some(FindTime::Lower(1111)), "Should be lower");
     }
 
     #[test]
