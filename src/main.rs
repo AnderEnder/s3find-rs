@@ -34,8 +34,12 @@ use rusoto_s3::*;
 enum FindError {
     #[fail(display = "Invalid s3 path")]
     S3Parse,
-    #[fail(display = "Empty size value")]
-    SizeEmpty,
+//    #[fail(display = "Invalid size parameter")]
+//    SizeParse,
+//    #[fail(display = "Empty size value")]
+//    SizeEmpty,
+    #[fail(display = "Invalid mtime parameter")]
+    TimeParse,
     #[fail(display = "Empty time value")]
     TimeEmpty,
     #[fail(display = "Invalid command line value")]
@@ -108,11 +112,28 @@ impl FromStr for FindTime {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<FindTime> {
-        match s.chars().next() {
-            Some('+') => Ok(FindTime::Upper(((*s)[1..]).parse()?)),
-            Some('-') => Ok(FindTime::Lower(((*s)[1..]).parse()?)),
-            Some(_) => Ok(FindTime::Upper(s.parse()?)),
-            None => Err(FindError::SizeEmpty.into()),
+        let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)")?;
+        let m = re.captures(s).unwrap();
+
+        let sign = m.get(1).unwrap().as_str().chars().next();
+        let number: u64 = m.get(2).unwrap().as_str().parse()?;
+        let metric = m.get(3).unwrap().as_str().chars().next();
+
+        let seconds = match metric {
+            None => number,
+            Some('s') => number,
+            Some('m') => number * 60,
+            Some('h') => number * 3600,
+            Some('d') => number * 3600 * 24,
+            Some('w') => number * 3600 * 24 * 7,
+            Some(_) => return Err(FindError::TimeParse.into()),
+        };
+
+        match sign {
+            Some('+') => Ok(FindTime::Upper(seconds)),
+            Some('-') => Ok(FindTime::Lower(seconds)),
+            None => Ok(FindTime::Upper(seconds)),
+            Some(_) => Err(FindError::TimeParse.into()),
         }
     }
 }
@@ -137,17 +158,16 @@ trait Filter {
 
 impl Filter for NameGlob {
     fn filter(&self, object: &Object) -> bool {
-        let object_key = object.key.as_ref().unwrap();
-        //        let object_key = object.key.as_ref().unwrap_or(&"".to_string());
-        self.matches(object_key)
+        let object_key = object.key.as_ref().map(|x| x.as_ref()).unwrap_or_default();
+        self.matches(&object_key)
     }
 }
 
 impl Filter for InameGlob {
     fn filter(&self, object: &Object) -> bool {
-        let object_key = object.key.as_ref().unwrap();
+        let object_key = object.key.as_ref().map(|x| x.as_ref()).unwrap_or_default();
         self.0.matches_with(
-            object_key,
+            &object_key,
             &MatchOptions {
                 case_sensitive: false,
                 require_literal_separator: false,
@@ -159,8 +179,8 @@ impl Filter for InameGlob {
 
 impl Filter for Regex {
     fn filter(&self, object: &Object) -> bool {
-        let object_key = object.key.as_ref().unwrap();
-        self.is_match(object_key)
+        let object_key = object.key.as_ref().map(|x| x.as_ref()).unwrap_or_default();
+        self.is_match(&object_key)
     }
 }
 
@@ -597,7 +617,17 @@ mod tests {
         let time_str = "1111";
         let time = time_str.parse::<FindTime>();
 
+        assert!(time.is_ok(), "Should be ok");
         assert_eq!(time.ok(), Some(FindTime::Upper(1111)), "Should be upper");
+    }
+
+    #[test]
+    fn time_corect_m() {
+        let time_str = "10m";
+        let time = time_str.parse::<FindTime>();
+
+        assert!(time.is_ok(), "Should be ok");
+        assert_eq!(time.ok(), Some(FindTime::Upper(600)), "Should be upper");
     }
 
     #[test]
@@ -605,7 +635,26 @@ mod tests {
         let time_str = "+1111";
         let time = time_str.parse::<FindTime>();
 
+        assert!(time.is_ok(), "Should be ok");
         assert_eq!(time.ok(), Some(FindTime::Upper(1111)), "Should be upper");
+    }
+
+    #[test]
+    fn time_corect_positive_m() {
+        let time_str = "+10m";
+        let time = time_str.parse::<FindTime>();
+
+        assert!(time.is_ok(), "Should be ok");
+        assert_eq!(time.ok(), Some(FindTime::Upper(600)), "Should be upper");
+    }
+
+    #[test]
+    fn time_corect_negative_m() {
+        let time_str = "-10m";
+        let time = time_str.parse::<FindTime>();
+
+        assert!(time.is_ok(), "Should be ok");
+        assert_eq!(time.ok(), Some(FindTime::Lower(600)), "Should be upper");
     }
 
     #[test]
@@ -613,6 +662,7 @@ mod tests {
         let time_str = "-1111";
         let time = time_str.parse::<FindTime>();
 
+        assert!(time.is_ok(), "Should be ok");
         assert_eq!(time.ok(), Some(FindTime::Lower(1111)), "Should be lower");
     }
 
@@ -620,7 +670,6 @@ mod tests {
     fn time_incorect_negative() {
         let time_str = "-";
         let time = time_str.parse::<FindTime>();
-
         assert!(time.is_err(), "Should be error");
     }
 
@@ -628,7 +677,6 @@ mod tests {
     fn time_incorect_positive() {
         let time_str = "+";
         let time = time_str.parse::<FindTime>();
-
         assert!(time.is_err(), "Should be error");
     }
 }
