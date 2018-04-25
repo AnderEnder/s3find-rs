@@ -6,6 +6,7 @@ use structopt::StructOpt;
 #[macro_use]
 extern crate failure;
 
+extern crate chrono;
 extern crate clap;
 extern crate glob;
 extern crate regex;
@@ -29,6 +30,7 @@ use rusoto_core::request::*;
 use rusoto_core::default_region;
 
 use rusoto_s3::*;
+use chrono::prelude::*;
 
 #[derive(Fail, Debug)]
 enum FindError {
@@ -117,8 +119,8 @@ impl FromStr for FindSize {
 
 #[derive(Debug, Clone, PartialEq)]
 enum FindTime {
-    Upper(u64),
-    Lower(u64),
+    Upper(i64),
+    Lower(i64),
 }
 
 impl FromStr for FindTime {
@@ -129,7 +131,7 @@ impl FromStr for FindTime {
         let m = re.captures(s).unwrap();
 
         let sign = m.get(1).unwrap().as_str().chars().next();
-        let number: u64 = m.get(2).unwrap().as_str().parse()?;
+        let number: i64 = m.get(2).unwrap().as_str().parse()?;
         let metric = m.get(3).unwrap().as_str().chars().next();
 
         let seconds = match metric {
@@ -204,6 +206,19 @@ impl Filter for FindSize {
             FindSize::Bigger(size) => *object_size >= size,
             FindSize::Lower(size) => *object_size <= size,
             FindSize::Equal(size) => *object_size == size,
+        }
+    }
+}
+
+impl Filter for FindTime {
+    fn filter(&self, object: &Object) -> bool {
+        let object_time = object.last_modified.as_ref().unwrap();
+        let last_modified_time = object_time.parse::<DateTime<Utc>>().unwrap().timestamp();
+        let now = Utc::now().timestamp();
+
+        match *self {
+            FindTime::Upper(seconds) => (now - last_modified_time) >= seconds,
+            FindTime::Lower(seconds) => (now - last_modified_time) <= seconds,
         }
     }
 }
@@ -309,6 +324,10 @@ impl FilterList {
 
         for size in opts.size.iter() {
             list.push(Box::new(size.clone()));
+        }
+
+        for mtime in opts.mtime.iter() {
+            list.push(Box::new(mtime.clone()));
         }
 
         FilterList(list)
