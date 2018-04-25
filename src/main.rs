@@ -34,14 +34,10 @@ use rusoto_s3::*;
 enum FindError {
     #[fail(display = "Invalid s3 path")]
     S3Parse,
-//    #[fail(display = "Invalid size parameter")]
-//    SizeParse,
-//    #[fail(display = "Empty size value")]
-//    SizeEmpty,
+    #[fail(display = "Invalid size parameter")]
+    SizeParse,
     #[fail(display = "Invalid mtime parameter")]
     TimeParse,
-    #[fail(display = "Empty time value")]
-    TimeEmpty,
     #[fail(display = "Invalid command line value")]
     CommandlineParse,
 }
@@ -93,11 +89,28 @@ impl FromStr for FindSize {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<FindSize> {
-        match s.chars().next() {
-            Some('+') => Ok(FindSize::Bigger(((*s)[1..]).parse()?)),
-            Some('-') => Ok(FindSize::Lower(((*s)[1..]).parse()?)),
-            Some(_) => Ok(FindSize::Equal(s.parse()?)),
-            None => return Err(FindError::TimeEmpty.into()),
+        let re = Regex::new(r"([+-]?)(\d*)([kMGTP]?)$")?;
+        let m = re.captures(s).unwrap();
+
+        let sign = m.get(1).unwrap().as_str().chars().next();
+        let number: i64 = m.get(2).unwrap().as_str().parse()?;
+        let metric = m.get(3).unwrap().as_str().chars().next();
+
+        let bytes = match metric {
+            None => number,
+            Some('k') => number * 1024,
+            Some('M') => number * 1024_i64.pow(2),
+            Some('G') => number * 1024_i64.pow(3),
+            Some('T') => number * 1024_i64.pow(4),
+            Some('P') => number * 1024_i64.pow(5),
+            Some(_) => return Err(FindError::SizeParse.into()),
+        };
+
+        match sign {
+            Some('+') => Ok(FindSize::Bigger(bytes)),
+            Some('-') => Ok(FindSize::Lower(bytes)),
+            None => Ok(FindSize::Equal(bytes)),
+            Some(_) => Err(FindError::SizeParse.into()),
         }
     }
 }
@@ -112,7 +125,7 @@ impl FromStr for FindTime {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<FindTime> {
-        let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)")?;
+        let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)$")?;
         let m = re.captures(s).unwrap();
 
         let sign = m.get(1).unwrap().as_str().chars().next();
@@ -589,11 +602,35 @@ mod tests {
     }
 
     #[test]
+    fn size_corect_k() {
+        let size_str = "1111k";
+        let size = size_str.parse::<FindSize>();
+
+        assert_eq!(
+            size.ok(),
+            Some(FindSize::Equal(1111 * 1024)),
+            "should be equal"
+        );
+    }
+
+    #[test]
     fn size_corect_positive() {
         let size_str = "+1111";
         let size = size_str.parse::<FindSize>();
 
         assert_eq!(size.ok(), Some(FindSize::Bigger(1111)), "should be upper");
+    }
+
+    #[test]
+    fn size_corect_positive_k() {
+        let size_str = "+1111k";
+        let size = size_str.parse::<FindSize>();
+
+        assert_eq!(
+            size.ok(),
+            Some(FindSize::Bigger(1111 * 1024)),
+            "should be upper"
+        );
     }
 
     #[test]
@@ -605,8 +642,28 @@ mod tests {
     }
 
     #[test]
+    fn size_corect_negative_k() {
+        let size_str = "-1111k";
+        let size = size_str.parse::<FindSize>();
+
+        assert_eq!(
+            size.ok(),
+            Some(FindSize::Lower(1111 * 1024)),
+            "should be lower"
+        );
+    }
+
+    #[test]
     fn size_incorect_negative() {
         let size_str = "-";
+        let size = size_str.parse::<FindSize>();
+
+        assert!(size.is_err(), "Should be error");
+    }
+
+    #[test]
+    fn size_incorect_negative_s() {
+        let size_str = "-123w";
         let size = size_str.parse::<FindSize>();
 
         assert!(size.is_err(), "Should be error");
@@ -674,8 +731,22 @@ mod tests {
     }
 
     #[test]
+    fn time_incorect_negative_t() {
+        let time_str = "-10t";
+        let time = time_str.parse::<FindTime>();
+        assert!(time.is_err(), "Should be error");
+    }
+
+    #[test]
     fn time_incorect_positive() {
         let time_str = "+";
+        let time = time_str.parse::<FindTime>();
+        assert!(time.is_err(), "Should be error");
+    }
+
+    #[test]
+    fn time_incorect_positive_t() {
+        let time_str = "+10t";
         let time = time_str.parse::<FindTime>();
         assert!(time.is_err(), "Should be error");
     }
