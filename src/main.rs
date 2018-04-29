@@ -1,8 +1,6 @@
 #[macro_use]
 extern crate structopt;
 
-use structopt::StructOpt;
-
 #[macro_use]
 extern crate failure;
 
@@ -13,9 +11,14 @@ extern crate regex;
 extern crate rusoto_core;
 extern crate rusoto_s3;
 
+use structopt::StructOpt;
 use std::process::*;
 use std::process::Command;
 use std::str::FromStr;
+use std::path::Path;
+use std::fs;
+use std::fs::File;
+use std::io::Write;
 
 use failure::Error;
 
@@ -42,6 +45,8 @@ enum FindError {
     TimeParse,
     #[fail(display = "Invalid command line value")]
     CommandlineParse,
+    #[fail(display = "Invalid path value")]
+    ParentPathParse,
 }
 
 type Result<T> = ::std::result::Result<T, Error>;
@@ -270,12 +275,17 @@ pub enum Cmd {
     Print,
     #[structopt(name = "-delete")]
     Delete,
+    #[structopt(name = "-download")]
+    Download {
+        #[structopt(name = "destination")]
+        destination: String,
+    },
     #[structopt(name = "-ls")]
     Ls,
 }
 
 impl FindOpt {
-    fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
+    fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
     where
         P: ProvideAwsCredentials,
         D: DispatchSignedRequest,
@@ -296,11 +306,13 @@ impl FindOpt {
                     })
                     .collect();
             }
-            Some(Cmd::Delete) => s3_delete(client, bucket, list),
+            Some(Cmd::Delete) => s3_delete(client, bucket, list)?,
+            Some(Cmd::Download { destination: ref d }) => s3_download(client, bucket, list, d)?,
             None => {
                 let _nlist: Vec<_> = list.iter().map(|x| fprint(bucket, x)).collect();
             }
         }
+        Ok(())
     }
 }
 
@@ -358,15 +370,6 @@ fn fprint(bucket: &str, item: &Object) {
     );
 }
 
-fn msg_print(bucket: &str, item: &Object, msg: &str) {
-    println!(
-        "{}: s3://{}/{}",
-        msg,
-        bucket,
-        item.key.as_ref().unwrap_or(&"".to_string())
-    );
-}
-
 fn advanced_print(bucket: &str, item: &Object) {
     println!(
         "{} {:?} {} {} s3://{}/{} {}",
@@ -403,7 +406,7 @@ fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     })
 }
 
-fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>)
+fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
 where
     P: ProvideAwsCredentials,
     D: DispatchSignedRequest,
@@ -425,10 +428,65 @@ where
         request_payer: None,
     };
 
-    let _result = client.delete_objects(&request);
-    for l in list.iter() {
-        msg_print(bucket, l, "deleted");
+    let result = client.delete_objects(&request)?;
+
+    if let Some(deleted_list) = result.deleted {
+        for object in deleted_list {
+            println!(
+                "deleted: s3://{}/{}",
+                bucket,
+                object.key.as_ref().unwrap_or(&"".to_string())
+            );
+        }
     }
+
+    Ok(())
+}
+
+fn s3_download<P, D>(
+    client: &S3Client<P, D>,
+    bucket: &str,
+    list: Vec<&Object>,
+    target: &str,
+) -> Result<()>
+where
+    P: ProvideAwsCredentials,
+    D: DispatchSignedRequest,
+{
+    for object in list.iter() {
+        let key = object.key.as_ref().unwrap();
+        let request = GetObjectRequest {
+            bucket: bucket.to_owned(),
+            key: key.to_owned(),
+            ..Default::default()
+        };
+
+        let file_path = format!("{}/{}", target, key);
+        let dir_path = Path::new(&file_path)
+            .parent()
+            .ok_or(FindError::ParentPathParse)?;
+
+        fs::create_dir_all(&dir_path)?;
+
+        let result = client.get_object(&request)?;
+
+        let mut output = File::create(&file_path)?;
+        let mut input = result.body.unwrap();
+        let mut buf = [0; 1024 * 64];
+
+        loop {
+            let len = input.read(&mut buf)?;
+            if len == 0 {
+                break;
+            }
+
+            output.write(&buf[0..len])?;
+        }
+
+        println!("downloaded: s3://{}/{} to {}", bucket, &key, &file_path);
+    }
+
+    Ok(())
 }
 
 fn real_main() -> Result<()> {
@@ -458,7 +516,7 @@ fn real_main() -> Result<()> {
         match output.contents {
             Some(klist) => {
                 let flist: Vec<_> = klist.iter().filter(|x| filter.filters(x)).collect();
-                status.command(&client, &s3path.bucket, flist);
+                status.command(&client, &s3path.bucket, flist)?;
 
                 match output.next_continuation_token {
                     Some(token) => request.continuation_token = Some(token),
