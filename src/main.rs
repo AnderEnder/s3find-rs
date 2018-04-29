@@ -6,6 +6,7 @@ extern crate failure;
 
 extern crate chrono;
 extern crate clap;
+extern crate futures;
 extern crate glob;
 extern crate regex;
 extern crate rusoto_core;
@@ -21,16 +22,16 @@ use std::fs::File;
 use std::io::Write;
 
 use failure::Error;
+use futures::stream::Stream;
+use futures::Future;
 
 use glob::Pattern;
 use glob::MatchOptions;
 use regex::Regex;
 
-use rusoto_core::DefaultCredentialsProvider;
-use rusoto_core::default_tls_client;
-use rusoto_core::ProvideAwsCredentials;
 use rusoto_core::request::*;
-use rusoto_core::default_region;
+use rusoto_core::Region;
+use rusoto_core::ProvideAwsCredentials;
 
 use rusoto_s3::*;
 use chrono::prelude::*;
@@ -287,8 +288,8 @@ pub enum Cmd {
 impl FindOpt {
     fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
     where
-        P: ProvideAwsCredentials,
-        D: DispatchSignedRequest,
+        P: ProvideAwsCredentials + 'static,
+        D: DispatchSignedRequest + 'static,
     {
         match self.cmd {
             Some(Cmd::Print) => {
@@ -408,8 +409,8 @@ fn exec(command: &str, key: &str) -> Result<ExecStatus> {
 
 fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
 where
-    P: ProvideAwsCredentials,
-    D: DispatchSignedRequest,
+    P: ProvideAwsCredentials + 'static,
+    D: DispatchSignedRequest + 'static,
 {
     let key_list: Vec<_> = list.iter()
         .map(|x| ObjectIdentifier {
@@ -428,7 +429,7 @@ where
         request_payer: None,
     };
 
-    let result = client.delete_objects(&request)?;
+    let result = client.delete_objects(&request).sync()?;
 
     if let Some(deleted_list) = result.deleted {
         for object in deleted_list {
@@ -450,8 +451,8 @@ fn s3_download<P, D>(
     target: &str,
 ) -> Result<()>
 where
-    P: ProvideAwsCredentials,
-    D: DispatchSignedRequest,
+    P: ProvideAwsCredentials + 'static,
+    D: DispatchSignedRequest + 'static,
 {
     for object in list.iter() {
         let key = object.key.as_ref().unwrap();
@@ -468,20 +469,12 @@ where
 
         fs::create_dir_all(&dir_path)?;
 
-        let result = client.get_object(&request)?;
+        let result = client.get_object(&request).sync()?;
 
         let mut output = File::create(&file_path)?;
-        let mut input = result.body.unwrap();
-        let mut buf = [0; 1024 * 64];
+        let mut input = result.body.unwrap().concat2().wait().unwrap();
 
-        loop {
-            let len = input.read(&mut buf)?;
-            if len == 0 {
-                break;
-            }
-
-            output.write(&buf[0..len])?;
-        }
+        output.write(&input)?;
 
         println!("downloaded: s3://{}/{} to {}", bucket, &key, &file_path);
     }
@@ -494,10 +487,9 @@ fn real_main() -> Result<()> {
     let s3path = status.path.clone();
 
     let filter = FilterList::new(&status);
-    let provider = DefaultCredentialsProvider::new()?;
-    let dispatcher = default_tls_client()?;
-    let region = default_region();
-    let client = S3Client::new(dispatcher, provider, region);
+
+    let region = Region::default();
+    let client = S3Client::simple(region);
 
     let mut request = ListObjectsV2Request {
         bucket: s3path.bucket.clone(),
@@ -512,7 +504,7 @@ fn real_main() -> Result<()> {
     };
 
     loop {
-        let output = client.list_objects_v2(&request)?;
+        let output = client.list_objects_v2(&request).sync()?;
         match output.contents {
             Some(klist) => {
                 let flist: Vec<_> = klist.iter().filter(|x| filter.filters(x)).collect();
