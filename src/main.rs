@@ -13,6 +13,7 @@ extern crate rusoto_core;
 extern crate rusoto_s3;
 
 use structopt::StructOpt;
+use structopt::clap::AppSettings;
 use std::process::*;
 use std::process::Command;
 use std::str::FromStr;
@@ -230,20 +231,22 @@ impl Filter for FindTime {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-#[structopt(name = "s3find", about = "walk a s3 path hierarchy")]
+#[structopt(name = "s3find", about = "walk a s3 path hierarchy",
+            raw(global_settings = "&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]"))]
 pub struct FindOpt {
     #[structopt(name = "path", raw(index = r#"1"#))]
     path: S3path,
-    #[structopt(name = "aws_access_key", long = "aws_access_key",
+    #[structopt(name = "aws_access_key", long = "aws-access-key",
                 help = "AWS key to access to S3, unrequired",
-                raw(requires_all = r#"&["aws_secret_key", "aws_region"]"#))]
+                raw(requires_all = r#"&["aws_secret_key"]"#))]
     aws_access_key: Option<String>,
     #[structopt(name = "aws_secret_key", long = "aws-secret-key",
-                help = "AWS secret key to access to S3, unrequired")]
+                help = "AWS secret key to access to S3, unrequired",
+                raw(requires_all = r#"&["aws_access_key"]"#))]
     aws_secret_key: Option<String>,
     #[structopt(name = "aws_region", long = "aws-region",
                 help = "AWS region to access to S3, unrequired")]
-    aws_region: Option<String>,
+    aws_region: Option<Region>,
     #[structopt(name = "npatern", long = "name", help = "match by glob shell pattern",
                 raw(number_of_values = "1"))]
     name: Vec<NameGlob>,
@@ -267,21 +270,21 @@ pub struct FindOpt {
 
 #[derive(StructOpt, Debug, PartialEq, Clone)]
 pub enum Cmd {
-    #[structopt(name = "-exec")]
+    #[structopt(name = "-exec", help = "exec any shell comand with every key")]
     Exec {
         #[structopt(name = "utility")]
         utility: String,
     },
-    #[structopt(name = "-print")]
+    #[structopt(name = "-print", help = "extended print with detail information")]
     Print,
-    #[structopt(name = "-delete")]
+    #[structopt(name = "-delete", help = "delete filtered keys")]
     Delete,
-    #[structopt(name = "-download")]
+    #[structopt(name = "-download", help = "download filtered keys")]
     Download {
         #[structopt(name = "destination")]
         destination: String,
     },
-    #[structopt(name = "-ls")]
+    #[structopt(name = "-ls", help = "list of filtered keys")]
     Ls,
 }
 
@@ -488,7 +491,7 @@ fn real_main() -> Result<()> {
 
     let filter = FilterList::new(&status);
 
-    let region = Region::default();
+    let region = status.aws_region.clone().unwrap_or(Region::default());
     let client = S3Client::simple(region);
 
     let mut request = ListObjectsV2Request {
