@@ -10,6 +10,7 @@ extern crate futures;
 extern crate glob;
 extern crate regex;
 extern crate rusoto_core;
+extern crate rusoto_credential;
 extern crate rusoto_s3;
 
 use structopt::StructOpt;
@@ -33,9 +34,13 @@ use regex::Regex;
 use rusoto_core::request::*;
 use rusoto_core::Region;
 use rusoto_core::ProvideAwsCredentials;
+use rusoto_core::reactor::RequestDispatcher;
 
 use rusoto_s3::*;
 use chrono::prelude::*;
+
+mod s3_credentials;
+use s3_credentials::*;
 
 #[derive(Fail, Debug)]
 enum FindError {
@@ -492,7 +497,9 @@ fn real_main() -> Result<()> {
     let filter = FilterList::new(&status);
 
     let region = status.aws_region.clone().unwrap_or(Region::default());
-    let client = S3Client::simple(region);
+    let provider =
+        CombinedProvider::new(status.aws_access_key.clone(), status.aws_secret_key.clone());
+    let client = S3Client::new(RequestDispatcher::default(), provider, region);
 
     let mut request = ListObjectsV2Request {
         bucket: s3path.bucket.clone(),
