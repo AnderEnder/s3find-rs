@@ -34,8 +34,8 @@ use rusoto_core::reactor::RequestDispatcher;
 
 use rusoto_s3::*;
 
-mod s3_credentials;
-use s3_credentials::*;
+mod credentials;
+use credentials::*;
 
 mod types;
 use types::*;
