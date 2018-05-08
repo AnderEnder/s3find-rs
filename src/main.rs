@@ -490,6 +490,34 @@ where
     Ok(())
 }
 
+fn s3_tags<P, D>(
+    client: &S3Client<P, D>,
+    bucket: &str,
+    list: Vec<&Object>,
+    tags: Tagging,
+) -> Result<()>
+where
+    P: ProvideAwsCredentials + 'static,
+    D: DispatchSignedRequest + 'static,
+{
+    for object in list.iter() {
+        let key = object.key.as_ref().unwrap();
+
+        let request = PutObjectTaggingRequest {
+            bucket: bucket.to_owned(),
+            key: key.to_owned(),
+            tagging: tags.clone(),
+            ..Default::default()
+        };
+
+        let result = client.put_object_tagging(&request).sync()?;
+
+        println!("tags are set for: s3://{}/{}", bucket, &key);
+    }
+
+    Ok(())
+}
+
 fn real_main() -> Result<()> {
     let status = FindOpt::from_args();
     let s3path = status.path.clone();
