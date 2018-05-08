@@ -173,7 +173,7 @@ impl FilterList {
 #[derive(Debug, PartialEq, Clone)]
 struct ExecStatus {
     status: ExitStatus,
-    output: String,
+    runcommand: String,
 }
 
 fn fprint(bucket: &str, item: &Object) {
@@ -216,7 +216,7 @@ fn exec(command: &str, key: &str) -> Result<ExecStatus> {
 
     Ok(ExecStatus {
         status: output.status,
-        output: output_str,
+        runcommand: scommand.clone(),
     })
 }
 
@@ -401,8 +401,8 @@ mod tests {
 
         assert!(exec_status.status.success(), "Exit code of echo is 0");
         assert_eq!(
-            exec_status.output, "Hello world1\n",
-            "Output of echo is 'Hello world1\n'"
+            exec_status.runcommand, "echo Hello world1",
+            "Output of echo is 'Hello world1'"
         );
     }
 
@@ -422,7 +422,7 @@ mod tests {
 
         assert!(exec_status.status.success(), "Exit code of echo is 0");
         assert_eq!(
-            exec_status.output, "Hello world2\n",
+            exec_status.runcommand, "echo Hello world2",
             "String should interpolated and printed"
         );
     }
