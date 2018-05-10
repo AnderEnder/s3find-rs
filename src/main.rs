@@ -15,19 +15,10 @@ extern crate rusoto_s3;
 
 use structopt::StructOpt;
 use structopt::clap::AppSettings;
-use std::fs;
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
-
-use futures::stream::Stream;
-use futures::Future;
 
 use regex::Regex;
 
-use rusoto_core::request::*;
 use rusoto_core::Region;
-use rusoto_core::ProvideAwsCredentials;
 use rusoto_core::reactor::RequestDispatcher;
 
 use rusoto_s3::*;
@@ -39,7 +30,6 @@ mod types;
 use types::*;
 
 mod functions;
-use functions::*;
 
 mod commands;
 use commands::*;
@@ -82,62 +72,24 @@ pub struct FindOpt {
     cmd: Option<Cmd>,
 }
 
-impl FindOpt {
-    fn command<P, D>(&self, client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
-    where
-        P: ProvideAwsCredentials + 'static,
-        D: DispatchSignedRequest + 'static,
-    {
-        match self.cmd {
-            Some(Cmd::Print) => {
-                let _nlist: Vec<_> = list.iter().map(|x| advanced_print(bucket, x)).collect();
-            }
-            Some(Cmd::Ls) => {
-                let _nlist: Vec<_> = list.iter().map(|x| fprint(bucket, x)).collect();
-            }
-            Some(Cmd::Exec { utility: ref p }) => {
-                let _nlist: Vec<_> = list.iter()
-                    .map(|x| {
-                        let key = x.key.as_ref().unwrap();
-                        let path = format!("s3://{}/{}", bucket, key);
-                        exec(&p, &path)
-                    })
-                    .collect();
-            }
-            Some(Cmd::Delete) => s3_delete(client, bucket, list)?,
-            Some(Cmd::Download { destination: ref d }) => s3_download(client, bucket, list, d)?,
-            None => {
-                let _nlist: Vec<_> = list.iter().map(|x| fprint(bucket, x)).collect();
-            }
-        }
-        Ok(())
-    }
-}
-
 impl From<FindOpt> for FindCommand {
     fn from(opts: FindOpt) -> FindCommand {
-        let s3path = opts.path.clone();
-
-        let filters = FilterList::new(&opts);
-
         let region = opts.aws_region.clone().unwrap_or(Region::default());
         let provider =
             CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
         let client = S3Client::new(RequestDispatcher::default(), provider, region);
 
         FindCommand {
-            path: s3path,
+            path: opts.path.clone(),
             client: client,
-            filters: filters,
+            filters: opts.clone().into(),
             command: opts.cmd.clone(),
         }
     }
 }
 
-// struct FilterList(Vec<Box<Filter>>);
-
-impl FilterList {
-    fn new(opts: &FindOpt) -> FilterList {
+impl From<FindOpt> for FilterList {
+    fn from(opts: FindOpt) -> FilterList {
         let mut list: Vec<Box<Filter>> = Vec::new();
 
         for name in opts.name.iter() {
@@ -162,150 +114,20 @@ impl FilterList {
 
         FilterList(list)
     }
-
-    fn filters(&self, object: &Object) -> bool {
-        for item in self.0.iter() {
-            if !item.filter(object) {
-                return false;
-            }
-        }
-
-        true
-    }
 }
 
-fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
-{
-    let key_list: Vec<_> = list.iter()
-        .map(|x| ObjectIdentifier {
-            key: x.key.as_ref().unwrap().to_string(),
-            version_id: None,
-        })
-        .collect();
+fn main() -> Result<()> {
+    let status_opts = FindOpt::from_args();
 
-    let request = DeleteObjectsRequest {
-        bucket: bucket.to_string(),
-        delete: Delete {
-            objects: key_list,
-            quiet: None,
-        },
-        mfa: None,
-        request_payer: None,
-    };
-
-    let result = client.delete_objects(&request).sync()?;
-
-    if let Some(deleted_list) = result.deleted {
-        for object in deleted_list {
-            println!(
-                "deleted: s3://{}/{}",
-                bucket,
-                object.key.as_ref().unwrap_or(&"".to_string())
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn s3_download<P, D>(
-    client: &S3Client<P, D>,
-    bucket: &str,
-    list: Vec<&Object>,
-    target: &str,
-) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
-{
-    for object in list.iter() {
-        let key = object.key.as_ref().unwrap();
-        let request = GetObjectRequest {
-            bucket: bucket.to_owned(),
-            key: key.to_owned(),
-            ..Default::default()
-        };
-
-        let file_path = format!("{}/{}", target, key);
-        let dir_path = Path::new(&file_path)
-            .parent()
-            .ok_or(FindError::ParentPathParse)?;
-
-        fs::create_dir_all(&dir_path)?;
-
-        let result = client.get_object(&request).sync()?;
-
-        let mut output = File::create(&file_path)?;
-        let mut input = result.body.unwrap().concat2().wait().unwrap();
-
-        output.write(&input)?;
-
-        println!("downloaded: s3://{}/{} to {}", bucket, &key, &file_path);
-    }
-
-    Ok(())
-}
-
-fn s3_tags<P, D>(
-    client: &S3Client<P, D>,
-    bucket: &str,
-    list: Vec<&Object>,
-    tags: Tagging,
-) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
-{
-    for object in list.iter() {
-        let key = object.key.as_ref().unwrap();
-
-        let request = PutObjectTaggingRequest {
-            bucket: bucket.to_owned(),
-            key: key.to_owned(),
-            tagging: tags.clone(),
-            ..Default::default()
-        };
-
-        let result = client.put_object_tagging(&request).sync()?;
-
-        println!("tags are set for: s3://{}/{}", bucket, &key);
-    }
-
-    Ok(())
-}
-
-fn real_main() -> Result<()> {
-    let status = FindOpt::from_args();
-    let s3path = status.path.clone();
-
-    let filter = FilterList::new(&status);
-
-    let region = status.aws_region.clone().unwrap_or(Region::default());
-    let provider =
-        CombinedProvider::new(status.aws_access_key.clone(), status.aws_secret_key.clone());
-    let client = S3Client::new(RequestDispatcher::default(), provider, region);
-
-    let mut request = ListObjectsV2Request {
-        bucket: s3path.bucket.clone(),
-        continuation_token: None,
-        delimiter: None,
-        encoding_type: None,
-        fetch_owner: None,
-        max_keys: Some(10000),
-        prefix: s3path.prefix,
-        request_payer: None,
-        start_after: None,
-    };
+    let status: FindCommand = status_opts.clone().into();
+    let mut request = status.list_request();
 
     loop {
-        let output = client.list_objects_v2(&request).sync()?;
+        let output = status.client.list_objects_v2(&request).sync()?;
         match output.contents {
             Some(klist) => {
-                let flist: Vec<_> = klist.iter().filter(|x| filter.filters(x)).collect();
-                status.command(&client, &s3path.bucket, flist)?;
+                let flist: Vec<_> = klist.iter().filter(|x| status.filters.filters(x)).collect();
+                status.exec(flist)?;
 
                 match output.next_continuation_token {
                     Some(token) => request.continuation_token = Some(token),
@@ -319,13 +141,6 @@ fn real_main() -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn main() {
-    if let Err(error) = real_main() {
-        eprintln!("Error - {:#?}", error);
-        ::std::process::exit(1);
-    }
 }
 
 #[cfg(test)]

@@ -4,13 +4,13 @@ extern crate glob;
 extern crate regex;
 extern crate rusoto_s3;
 
-use failure::Error;
-use std::str::FromStr;
-use rusoto_s3::*;
 use chrono::prelude::*;
-use glob::Pattern;
+use failure::Error;
 use glob::MatchOptions;
+use glob::Pattern;
 use regex::Regex;
+use rusoto_s3::*;
+use std::str::FromStr;
 
 #[derive(Fail, Debug)]
 pub enum FindError {
@@ -202,9 +202,9 @@ impl Filter for Regex {
 #[cfg(test)]
 mod tests {
 
-    use S3path;
     use FindSize;
     use FindTime;
+    use S3path;
     use failure::Error;
 
     #[test]

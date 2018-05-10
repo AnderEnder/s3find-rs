@@ -2,10 +2,10 @@ extern crate futures;
 extern crate rusoto_core;
 extern crate rusoto_credential;
 
-use rusoto_credential::{AwsCredentials, CredentialsError, ProvideAwsCredentials, StaticProvider};
-use rusoto_core::reactor::{CredentialsProvider, CredentialsProviderFuture};
-use futures::{Future, Poll};
 use futures::future::FutureResult;
+use futures::{Future, Poll};
+use rusoto_core::reactor::{CredentialsProvider, CredentialsProviderFuture};
+use rusoto_credential::{AwsCredentials, CredentialsError, ProvideAwsCredentials, StaticProvider};
 
 pub enum CombinedProvider {
     Static(StaticProvider),
