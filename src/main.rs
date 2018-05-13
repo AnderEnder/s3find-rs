@@ -13,6 +13,11 @@ extern crate rusoto_core;
 extern crate rusoto_credential;
 extern crate rusoto_s3;
 
+mod commands;
+mod credentials;
+mod functions;
+mod types;
+
 use structopt::StructOpt;
 use structopt::clap::AppSettings;
 
@@ -20,19 +25,11 @@ use regex::Regex;
 
 use rusoto_core::Region;
 use rusoto_core::reactor::RequestDispatcher;
-
 use rusoto_s3::*;
 
-mod credentials;
-use credentials::*;
-
-mod types;
-use types::*;
-
-mod functions;
-
-mod commands;
 use commands::*;
+use credentials::*;
+use types::*;
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(name = "s3find", about = "walk a s3 path hierarchy",
