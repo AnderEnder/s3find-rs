@@ -2,7 +2,7 @@ extern crate rusoto_core;
 extern crate rusoto_s3;
 
 use rusoto_core::reactor::RequestDispatcher;
-use rusoto_s3::{ListObjectsV2Request, Object, S3Client};
+use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tagging};
 
 use credentials::*;
 use functions::*;
@@ -26,6 +26,13 @@ pub enum Cmd {
     },
     #[structopt(name = "-ls", help = "list of filtered keys")]
     Ls,
+    #[structopt(name = "-lstags", help = "list of filtered keys with tags")]
+    LsTags,
+    #[structopt(name = "-tags", help = "set tags for the keys")]
+    Tags {
+        #[structopt(name = "key:value", raw(min_values = "1"))]
+        tags: Vec<FindTag>,
+    },
 }
 
 pub struct FilterList(pub Vec<Box<Filter>>);
@@ -73,6 +80,13 @@ impl FindCommand {
             Some(Cmd::Download { destination: ref d }) => {
                 s3_download(&self.client, &self.path.bucket, list, d)?
             }
+            Some(Cmd::Tags { tags: ref t }) => {
+                let tags = Tagging {
+                    tag_set: t.into_iter().map(|x| (*x).clone().into()).collect(),
+                };
+                s3_set_tags(&self.client, &self.path.bucket, list, tags)?
+            }
+            Some(Cmd::LsTags) => s3_list_tags(&self.client, &self.path.bucket, list)?,
             None => {
                 let _nlist: Vec<_> = list.iter().map(|x| fprint(&self.path.bucket, x)).collect();
             }

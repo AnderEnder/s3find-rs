@@ -5,11 +5,11 @@ extern crate regex;
 extern crate rusoto_s3;
 
 use chrono::prelude::*;
-use failure::Error;
+use failure::{err_msg, Error};
 use glob::MatchOptions;
 use glob::Pattern;
 use regex::Regex;
-use rusoto_s3::*;
+use rusoto_s3::{Object, Tag};
 use std::str::FromStr;
 
 #[derive(Fail, Debug)]
@@ -199,10 +199,43 @@ impl Filter for Regex {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct FindTag {
+    key: String,
+    value: String,
+}
+
+impl FromStr for FindTag {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<FindTag> {
+        let re = Regex::new(r"(\w+):(\w+)$")?;
+        let m = re.captures(s).ok_or(err_msg("cannot parse tag"))?;
+
+        let key = m.get(1).ok_or(err_msg("cannot parse key"))?.as_str();
+        let value = m.get(2).ok_or(err_msg("cannot parse value"))?.as_str();
+
+        Ok(FindTag {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+    }
+}
+
+impl From<FindTag> for Tag {
+    fn from(tag: FindTag) -> Tag {
+        Tag {
+            key: tag.key,
+            value: tag.value,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
     use FindSize;
+    use FindTag;
     use FindTime;
     use S3path;
     use failure::Error;
@@ -425,5 +458,36 @@ mod tests {
         let time_str = "+10t";
         let time = time_str.parse::<FindTime>();
         assert!(time.is_err(), "Should be error");
+    }
+
+    #[test]
+    fn tag_ok() {
+        let str = "tag1:value2";
+        let tag = str.parse::<FindTag>();
+        assert!(tag.is_ok(), "Should be ok");
+        let ftag = tag.unwrap();
+        assert_eq!(ftag.key, "tag1", "Should be tag1");
+        assert_eq!(ftag.value, "value2", "Should be value2");
+    }
+
+    #[test]
+    fn tag_incorect_1() {
+        let str = "tag1value2";
+        let time = str.parse::<FindTag>();
+        assert!(time.is_err(), "Should not be parsed");
+    }
+
+    #[test]
+    fn tag_incorect_2() {
+        let str = "tag1:value2:";
+        let time = str.parse::<FindTag>();
+        assert!(time.is_err(), "Should not be parsed");
+    }
+
+    #[test]
+    fn tag_incorect_3() {
+        let str = ":";
+        let time = str.parse::<FindTag>();
+        assert!(time.is_err(), "Should not be parsed");
     }
 }

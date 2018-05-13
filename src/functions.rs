@@ -1,6 +1,7 @@
 extern crate rusoto_s3;
 
-use rusoto_s3::Object;
+use rusoto_s3::{Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
+                ObjectIdentifier, PutObjectTaggingRequest, S3, S3Client, Tagging};
 use std::process::Command;
 use std::process::ExitStatus;
 
@@ -11,7 +12,6 @@ use std::path::Path;
 
 use rusoto_core::ProvideAwsCredentials;
 use rusoto_core::request::*;
-use rusoto_s3::*;
 
 use futures::Future;
 use futures::stream::Stream;
@@ -143,7 +143,7 @@ where
     Ok(())
 }
 
-pub fn s3_tags<P, D>(
+pub fn s3_set_tags<P, D>(
     client: &S3Client<P, D>,
     bucket: &str,
     list: Vec<&Object>,
@@ -163,9 +163,44 @@ where
             ..Default::default()
         };
 
-        let result = client.put_object_tagging(&request).sync()?;
+        client.put_object_tagging(&request).sync()?;
 
         println!("tags are set for: s3://{}/{}", bucket, &key);
+    }
+
+    Ok(())
+}
+
+pub fn s3_list_tags<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
+where
+    P: ProvideAwsCredentials + 'static,
+    D: DispatchSignedRequest + 'static,
+{
+    for object in list.iter() {
+        let key = object.key.as_ref().unwrap();
+
+        let request = GetObjectTaggingRequest {
+            bucket: bucket.to_owned(),
+            key: key.to_owned(),
+            ..Default::default()
+        };
+
+        let tag_output = client.get_object_tagging(&request).sync()?;
+
+        let tags: String = tag_output
+            .tag_set
+            .into_iter()
+            .map(|x| format!("{}:{}", x.key, x.value))
+            .collect::<Vec<String>>()
+            .join(",");
+
+        println!(
+            "s3://{}/{} {}",
+            bucket,
+            object.key.as_ref().unwrap_or(&"".to_string()),
+            tags,
+            // tag_output.tag_set
+        );
     }
 
     Ok(())
