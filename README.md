@@ -84,6 +84,26 @@ s3find 's3://s3example/s3test' --size +10 -print
 s3find 's3://s3example/s3test' --size -10 -print
 ```
 
+### Find path by time
+
+#### Files modified less than 10 seconds ago
+
+```sh
+s3find 's3://s3example/s3test' --time 10 -print
+```
+
+#### Files modified less than 10 minutes ago
+
+```sh
+s3find 's3://s3example/s3test' --size +10m -print
+```
+
+#### Files modified before 10 hours ago
+
+```sh
+s3find 's3://s3example/s3test' --size -10h -print
+```
+
 ### Multiple filters
 
 #### Same filters
