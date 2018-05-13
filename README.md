@@ -75,13 +75,13 @@ s3find 's3://s3example/s3test' --size 0 -print
 #### Larger
 
 ```sh
-s3find 's3://s3example/s3test' --size +10 -print
+s3find 's3://s3example/s3test' --size +10M -print
 ```
 
 #### Smaller
 
 ```sh
-s3find 's3://s3example/s3test' --size -10 -print
+s3find 's3://s3example/s3test' --size -10k -print
 ```
 
 ### Find path by time
