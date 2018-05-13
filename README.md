@@ -25,10 +25,30 @@ s3find 's3://s3example/s3test' --name '*' -delete
 s3find 's3://s3example/s3test' --name '*' -ls
 ```
 
+#### List keys with tags
+
+```sh
+s3find 's3://s3example/s3test' --name '*' -lstags
+```
+
 #### Exec
 
 ```sh
 s3find 's3://s3example/s3test' --name '*' -exec 'echo {}'
+
+```
+
+#### Download(simple implementation)
+
+```sh
+s3find 's3://s3example/s3test' --name '*' -download
+
+```
+
+#### Set tags
+
+```sh
+s3find 's3://s3example/s3test' --name '*9*' -tags 'key:value' 'env:staging'
 
 ```
 
