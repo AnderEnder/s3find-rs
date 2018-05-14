@@ -21,6 +21,9 @@ pub enum Cmd {
     Delete,
     #[structopt(name = "-download", help = "download filtered keys")]
     Download {
+        #[structopt(long = "force", short = "f",
+                    help = "download files even if the target files are already present")]
+        force: bool,
         #[structopt(name = "destination")]
         destination: String,
     },
@@ -77,9 +80,10 @@ impl FindCommand {
                     .collect();
             }
             Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, list)?,
-            Some(Cmd::Download { destination: ref d }) => {
-                s3_download(&self.client, &self.path.bucket, list, d)?
-            }
+            Some(Cmd::Download {
+                destination: ref d,
+                force: ref f,
+            }) => s3_download(&self.client, &self.path.bucket, list, d, f)?,
             Some(Cmd::Tags { tags: ref t }) => {
                 let tags = Tagging {
                     tag_set: t.into_iter().map(|x| (*x).clone().into()).collect(),

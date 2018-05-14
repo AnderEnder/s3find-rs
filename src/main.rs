@@ -8,6 +8,7 @@ extern crate chrono;
 extern crate clap;
 extern crate futures;
 extern crate glob;
+extern crate indicatif;
 extern crate regex;
 extern crate rusoto_core;
 extern crate rusoto_credential;

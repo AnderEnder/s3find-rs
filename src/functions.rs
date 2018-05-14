@@ -16,6 +16,9 @@ use rusoto_core::request::*;
 use futures::Future;
 use futures::stream::Stream;
 
+use failure::err_msg;
+use indicatif::{ProgressBar, ProgressStyle};
+
 use types::*;
 
 pub fn fprint(bucket: &str, item: &Object) {
@@ -110,6 +113,7 @@ pub fn s3_download<P, D>(
     bucket: &str,
     list: Vec<&Object>,
     target: &str,
+    force: &bool,
 ) -> Result<()>
 where
     P: ProvideAwsCredentials + 'static,
@@ -123,21 +127,43 @@ where
             ..Default::default()
         };
 
-        let file_path = format!("{}/{}", target, key);
-        let dir_path = Path::new(&file_path)
-            .parent()
-            .ok_or(FindError::ParentPathParse)?;
+        let size = (*object.size.as_ref().unwrap()) as u64;
+        let file_path = Path::new(target).join(key);
+        let dir_path = file_path.parent().ok_or(FindError::ParentPathParse)?;
 
-        fs::create_dir_all(&dir_path)?;
+        let mut count: u64 = 0;
+        let pb = ProgressBar::new(size);
+        pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+        .progress_chars("#>-"));
+        println!(
+            "downloading: s3://{}/{} => {}",
+            bucket,
+            &key,
+            file_path.to_str().ok_or(err_msg("cannot parse filename"))?
+        );
+
+        if file_path.exists() && !force {
+            return Err(err_msg("file is already present"));
+        }
 
         let result = client.get_object(&request).sync()?;
 
+        let mut stream = result
+            .body
+            .ok_or(err_msg("cannot fetch body from s3 response"))?;
+
+        fs::create_dir_all(&dir_path)?;
         let mut output = File::create(&file_path)?;
-        let mut input = result.body.unwrap().concat2().wait().unwrap();
 
-        output.write(&input)?;
-
-        println!("downloaded: s3://{}/{} to {}", bucket, &key, &file_path);
+        let _r = stream
+            .for_each(|buf| {
+                output.write(&buf)?;
+                count = count + (buf.len() as u64);
+                pb.set_position(count);
+                Ok(())
+            })
+            .wait();
     }
 
     Ok(())
@@ -199,7 +225,6 @@ where
             bucket,
             object.key.as_ref().unwrap_or(&"".to_string()),
             tags,
-            // tag_output.tag_set
         );
     }
 
