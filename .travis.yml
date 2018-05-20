@@ -15,3 +15,15 @@ matrix:
 script:
   - cargo build --verbose --all
   - cargo test --verbose --all
+  - cargo build --release
+  - tar -C target/release -czf $(pwd)/s3find-$TRAVIS_TAG-x86_64-$TRAVIS_OS_NAME.tar.gz s3find
+deploy:
+  api_key:
+    secure: "aETdgBzYdHgC2Wxf/IbYlD2YH98I9ZGn6D+CeN67K/UjkidbTnh8BavJjIu9OW50rfXyt5MkTXz0v4bgrcllCgDUFVoDa9RqItr9v8b2S3HTbB3dgdQVrRnbAt8OALMY+xDb2ih50H2i6/nbRmOiOMY0K9icx2miwrlS1Q2emtm7x6q3cOaJl4IqMfOWkvt7fuqbfhiX6QXjbm/SbNlENrwLdRvMbWQQoSIlucDTVDbSSpSJbs9Tnp6N7lYox7CeCJniVBSkUQ78ytKhCVuYCmZlwOowzF2RsunApzPvweAixS4gGCzOkAzMc2jyAzyAma7XFxlgtJHKVyn5OtSJ1/fjTnsAh64RFmllteJnCHrhIAw4HhNIjiszQZQmlvWT2zGZA5yuR/asz8yxQ6z2O/khcHA4PYkFjn2yNg/suYhV8iug71YQscnlBQ2H894wAjIAhvGoNA6DON8aF+Nwu0Qz5bXzJLPjJDpEgm74Jm+Ngw0dUll0Y7SE3EQYrwTwXeveJdyNOI1cu1qWCa4gqeBYk/IevpxR8Mm4EikZiKT3UiZPkOc4VHiliqlKBK5/rxX99UrQmrtMibOzd/DnjwdQEZFMVVZ++cKzf4zKDvBKnew6yWHVAWWeGa8xkzb9xY9MpA0n2cVIqmenxdQ0pj4AJmycZ09ohM7suAly5A0="
+  file_glob: true
+  file: s3find-$TRAVIS_TAG-x86_64-$TRAVIS_OS_NAME.*
+  on:
+    condition: "$TRAVIS_RUST_VERSION = stable"
+    tags: true
+  provider: releases
+  skip_cleanup: true
