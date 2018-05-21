@@ -3,6 +3,10 @@
 set -ex
 
 main() {
+    if [ "$(uname)" != "Linux" ]; then
+        exit 0
+    fi
+
     local version=1.0.2m
     local os=$1 \
           triple=$2
@@ -14,7 +18,9 @@ main() {
         make
         perl
         pkg-config
+        g++
     )
+
 
     # NOTE cross toolchain must be already installed
     apt-get update
@@ -39,14 +45,6 @@ main() {
       ${@:3}
     nice make -j$(nproc)
     make install
-
-    # clean up
-    apt-get purge --auto-remove -y ${purge_list[@]}
-
-    popd
-
-    rm -rf $td
-    rm $0
 }
 
 main "${@}"
