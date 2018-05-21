@@ -15,6 +15,7 @@ matrix:
 script:
   - cargo build --verbose --all
   - cargo test --verbose --all
+before_deploy:
   - cargo build --release
   - tar -C target/release -czf $(pwd)/s3find-$TRAVIS_TAG-x86_64-$TRAVIS_OS_NAME.tar.gz s3find
 deploy:
