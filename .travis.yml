@@ -16,8 +16,8 @@ script:
   - cargo build --verbose --all
   - cargo test --verbose --all
 before_deploy:
-  - sudo bash -x ci/openssl.sh linux-x86_64
-  - OPENSSL_STATIC=yes OPENSSL_LIB_DIR=/openssl/lib OPENSSL_INCLUDE_DIR=/openssl/include cargo build --release
+  - sudo bash -x ci/openssl.sh linux-x86_64 musl- -static
+  - CC_x86_64_unknown_linux_musl=musl-gcc OPENSSL_STATIC=yes OPENSSL_LIB_DIR=/openssl/lib OPENSSL_INCLUDE_DIR=/openssl/include cargo build --release
   - tar -C target/release -czf $(pwd)/s3find-$TRAVIS_TAG-x86_64-$TRAVIS_OS_NAME.tar.gz s3find
 deploy:
   api_key:

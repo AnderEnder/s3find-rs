@@ -10,6 +10,7 @@ main() {
     local version=1.0.2m
     local os=$1 \
           triple=$2
+    local m_version=1.1.15
 
     local dependencies=(
         ca-certificates
@@ -31,6 +32,22 @@ main() {
             purge_list+=( $dep )
         fi
     done
+
+    local td=$(mktemp -d)
+
+    pushd $td
+    curl https://www.musl-libc.org/releases/musl-$m_version.tar.gz | \
+        tar --strip-components=1 -xz
+
+    CFLAGS="-fPIC ${@:3}" ./configure \
+          --disable-shared \
+          --prefix=/usr/local \
+          $(test -z $target || echo --target=$target)
+    nice make -j$(nproc)
+    nice make install
+    ln -s /usr/bin/ar /usr/local/bin/musl-ar
+
+    popd
 
     td=$(mktemp -d)
 
