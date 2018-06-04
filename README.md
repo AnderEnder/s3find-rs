@@ -1,5 +1,6 @@
 # s3find
 [![build status](https://travis-ci.org/AnderEnder/s3find-rs.svg?branch=master)](https://travis-ci.org/AnderEnder/s3find-rs)
+[![codecov](https://codecov.io/gh/AnderEnder/s3find-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/AnderEnder/s3find-rs)
 
 Utility to walk a S3 hierarchy. An analog of find for AWS S3.
 
