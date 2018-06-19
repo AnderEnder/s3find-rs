@@ -10,11 +10,11 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use rusoto_core::ProvideAwsCredentials;
 use rusoto_core::request::*;
+use rusoto_core::ProvideAwsCredentials;
 
-use futures::Future;
 use futures::stream::Stream;
+use futures::Future;
 
 use failure::err_msg;
 use indicatif::{ProgressBar, ProgressStyle};

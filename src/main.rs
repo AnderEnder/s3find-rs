@@ -19,53 +19,102 @@ mod credentials;
 mod functions;
 mod types;
 
-use structopt::StructOpt;
 use structopt::clap::AppSettings;
+use structopt::StructOpt;
 
 use regex::Regex;
 
-use rusoto_core::Region;
 use rusoto_core::reactor::RequestDispatcher;
+use rusoto_core::Region;
 use rusoto_s3::*;
 
 use commands::*;
 use credentials::*;
 use types::*;
 
+/// Walk a s3 path hierarchy
 #[derive(StructOpt, Debug, Clone)]
-#[structopt(name = "s3find", about = "walk a s3 path hierarchy",
-            raw(global_settings = "&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]"))]
+#[structopt(
+    name = "s3find",
+    raw(
+        global_settings = "&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]"
+    )
+)]
 pub struct FindOpt {
-    #[structopt(name = "path", raw(index = r#"1"#))]
+    /// S3 Path to walk through, it should be s3://bucket/path
+    #[structopt(name = "path")] //, raw(index = r#"1"#))]
     path: S3path,
-    #[structopt(name = "aws_access_key", long = "aws-access-key",
-                help = "AWS key to access to S3, unrequired",
-                raw(requires_all = r#"&["aws_secret_key"]"#))]
+
+    /// AWS key to access to S3, unrequired
+    #[structopt(
+        name = "aws_access_key",
+        long = "aws-access-key",
+        raw(requires_all = r#"&["aws_secret_key"]"#)
+    )]
     aws_access_key: Option<String>,
-    #[structopt(name = "aws_secret_key", long = "aws-secret-key",
-                help = "AWS secret key to access to S3, unrequired",
-                raw(requires_all = r#"&["aws_access_key"]"#))]
+
+    /// AWS secret key to access to S3, unrequired",
+    #[structopt(
+        name = "aws_secret_key",
+        long = "aws-secret-key",
+        raw(requires_all = r#"&["aws_access_key"]"#)
+    )]
     aws_secret_key: Option<String>,
-    #[structopt(name = "aws_region", long = "aws-region",
-                help = "AWS region to access to S3, unrequired")]
+
+    /// AWS region to access to S3, default value is us-east-1
+    #[structopt(name = "aws_region", long = "aws-region")]
     aws_region: Option<Region>,
-    #[structopt(name = "npatern", long = "name", help = "match by glob shell pattern",
-                raw(number_of_values = "1"))]
+
+    /// Glob pattern for match, can be multiple
+    #[structopt(name = "npatern", long = "name", raw(number_of_values = "1"))]
     name: Vec<NameGlob>,
-    #[structopt(name = "ipatern", long = "iname",
-                help = "match by glob shell pattern, case insensitive",
-                raw(number_of_values = "1"))]
+
+    /// Case-insensitive glob pattern for match, can be multiple
+    #[structopt(name = "ipatern", long = "iname", raw(number_of_values = "1"))]
     iname: Vec<InameGlob>,
-    #[structopt(name = "rpatern", long = "regex",
-                help = "match by regex pattern, case insensitive", raw(number_of_values = "1"))]
+
+    /// Regex pattern for match, can be multiple
+    #[structopt(name = "rpatern", long = "regex", raw(number_of_values = "1"))]
     regex: Vec<Regex>,
-    #[structopt(name = "time", long = "mtime",
-                help = "the difference between the file last modification time",
-                raw(number_of_values = "1", allow_hyphen_values = "true"))]
+
+    #[structopt(
+        name = "time",
+        long = "mtime",
+        raw(number_of_values = "1", allow_hyphen_values = "true"),
+        help = r#"Modification time for match, a time period:
+    +5d - for period from now-5d to now
+    -5d - for period  before now-5d
+
+Possible time units are as follows:
+    s - seconds
+    m - minutes
+    h - hours
+    d - days
+    w - weeks
+
+Can be multiple, but should be overlaping"#
+    )]
     mtime: Vec<FindTime>,
-    #[structopt(name = "bytes_size", long = "size", help = "file size",
-                raw(number_of_values = "1", allow_hyphen_values = "true"))]
+
+    #[structopt(
+        name = "bytes_size",
+        long = "size",
+        raw(number_of_values = "1", allow_hyphen_values = "true"),
+        help = r#"File size for match:
+    5k - exact match 5k,
+    +5k - bigger than 5k,
+    -5k - smaller than 5k,
+
+Possible file size units are as follows:
+    k - kilobytes (1024 bytes)
+    M - megabytes (1024 kilobytes)
+    G - gigabytes (1024 megabytes)
+    T - terabytes (1024 gigabytes)
+    P - petabytes (1024 terabytes)"#
+    )]
     size: Vec<FindSize>,
+
+    //  /// Action to be ran with matched list of paths
     #[structopt(subcommand)]
     cmd: Option<Cmd>,
 }

@@ -234,11 +234,11 @@ impl From<FindTag> for Tag {
 #[cfg(test)]
 mod tests {
 
+    use failure::Error;
     use FindSize;
     use FindTag;
     use FindTime;
     use S3path;
-    use failure::Error;
 
     #[test]
     fn s3path_corect() {

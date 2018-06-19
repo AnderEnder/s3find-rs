@@ -10,29 +10,46 @@ use types::*;
 
 #[derive(StructOpt, Debug, PartialEq, Clone)]
 pub enum Cmd {
-    #[structopt(name = "-exec", help = "exec any shell comand with every key")]
+    /// Exec any shell program with every key
+    #[structopt(name = "-exec")]
     Exec {
+        /// Utility(program) to run
         #[structopt(name = "utility")]
         utility: String,
     },
-    #[structopt(name = "-print", help = "extended print with detail information")]
+
+    /// Extended print with detail information
+    #[structopt(name = "-print")]
     Print,
-    #[structopt(name = "-delete", help = "delete filtered keys")]
+
+    /// Delete matched keys
+    #[structopt(name = "-delete")]
     Delete,
-    #[structopt(name = "-download", help = "download filtered keys")]
+
+    /// Download matched keys
+    #[structopt(name = "-download")]
     Download {
-        #[structopt(long = "force", short = "f",
-                    help = "download files even if the target files are already present")]
+        /// Force download files(overwrite) even if the target files are already present
+        #[structopt(long = "force", short = "f")]
         force: bool,
+
+        /// Directory destination to download files to
         #[structopt(name = "destination")]
         destination: String,
     },
-    #[structopt(name = "-ls", help = "list of filtered keys")]
+
+    /// Print the list of matched keys
+    #[structopt(name = "-ls")]
     Ls,
-    #[structopt(name = "-lstags", help = "list of filtered keys with tags")]
+
+    /// Print the list of matched keys with tags
+    #[structopt(name = "-lstags")]
     LsTags,
-    #[structopt(name = "-tags", help = "set tags for the keys")]
+
+    /// Set the tags(overwrite) for the matched keys
+    #[structopt(name = "-tags")]
     Tags {
+        /// List of the tags to set
         #[structopt(name = "key:value", raw(min_values = "1"))]
         tags: Vec<FindTag>,
     },
