@@ -41,11 +41,11 @@ use types::*;
     )
 )]
 pub struct FindOpt {
-    /// S3 Path to walk through, it should be s3://bucket/path
+    /// S3 path to walk through. It should be s3://bucket/path
     #[structopt(name = "path")] //, raw(index = r#"1"#))]
     path: S3path,
 
-    /// AWS key to access to S3, unrequired
+    /// AWS access key. Unrequired
     #[structopt(
         name = "aws_access_key",
         long = "aws-access-key",
@@ -53,7 +53,7 @@ pub struct FindOpt {
     )]
     aws_access_key: Option<String>,
 
-    /// AWS secret key to access to S3, unrequired",
+    /// AWS secret key. Unrequired
     #[structopt(
         name = "aws_secret_key",
         long = "aws-secret-key",
@@ -61,7 +61,7 @@ pub struct FindOpt {
     )]
     aws_secret_key: Option<String>,
 
-    /// AWS region to access to S3, default value is us-east-1
+    /// The region to use. Default value is us-east-1
     #[structopt(name = "aws_region", long = "aws-region")]
     aws_region: Option<Region>,
 
