@@ -1,7 +1,9 @@
 extern crate rusoto_s3;
 
-use rusoto_s3::{Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
-                ObjectIdentifier, PutObjectTaggingRequest, S3, S3Client, Tagging};
+use rusoto_s3::{
+    Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
+    ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3, S3Client, Tagging,
+};
 use std::process::Command;
 use std::process::ExitStatus;
 
@@ -12,6 +14,7 @@ use std::path::Path;
 
 use rusoto_core::request::*;
 use rusoto_core::ProvideAwsCredentials;
+use rusoto_core::Region;
 
 use futures::stream::Stream;
 use futures::Future;
@@ -226,6 +229,42 @@ where
             object.key.as_ref().unwrap_or(&"".to_string()),
             tags,
         );
+    }
+
+    Ok(())
+}
+
+fn s3_public_url(key: &str, bucket: &str, region: &str) -> String {
+    match region {
+        "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", bucket, key),
+        _ => format!("http://{}.s3-{}.amazonaws.com/{}", bucket, region, key),
+    }
+}
+
+pub fn s3_set_public<P, D>(
+    client: &S3Client<P, D>,
+    bucket: &str,
+    list: Vec<&Object>,
+    region: &Region,
+) -> Result<()>
+where
+    P: ProvideAwsCredentials + 'static,
+    D: DispatchSignedRequest + 'static,
+{
+    let region_str = region.name();
+    for object in list.iter() {
+        let key = object.key.as_ref().unwrap();
+
+        let request = PutObjectAclRequest {
+            bucket: bucket.to_owned(),
+            key: key.to_owned(),
+            acl: Some("public-read".to_string()),
+            ..Default::default()
+        };
+
+        client.put_object_acl(&request).sync()?;
+        let url = s3_public_url(key, bucket, region_str);
+        println!("{} {}", &key, url);
     }
 
     Ok(())

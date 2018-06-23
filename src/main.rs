@@ -124,11 +124,12 @@ impl From<FindOpt> for FindCommand {
         let region = opts.aws_region.clone().unwrap_or(Region::default());
         let provider =
             CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
-        let client = S3Client::new(RequestDispatcher::default(), provider, region);
+        let client = S3Client::new(RequestDispatcher::default(), provider, region.clone());
 
         FindCommand {
             path: opts.path.clone(),
             client: client,
+            region: region,
             filters: opts.clone().into(),
             command: opts.cmd.clone(),
         }

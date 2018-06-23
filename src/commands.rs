@@ -2,6 +2,7 @@ extern crate rusoto_core;
 extern crate rusoto_s3;
 
 use rusoto_core::reactor::RequestDispatcher;
+use rusoto_core::Region;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tagging};
 
 use credentials::*;
@@ -53,6 +54,10 @@ pub enum Cmd {
         #[structopt(name = "key:value", raw(min_values = "1"))]
         tags: Vec<FindTag>,
     },
+
+    /// Make the matched keys public available (readonly)
+    #[structopt(name = "-public")]
+    Public,
 }
 
 pub struct FilterList(pub Vec<Box<Filter>>);
@@ -71,6 +76,7 @@ impl FilterList {
 
 pub struct FindCommand {
     pub client: S3Client<CombinedProvider, RequestDispatcher>,
+    pub region: Region,
     pub path: S3path,
     pub filters: FilterList,
     pub command: Option<Cmd>,
@@ -108,6 +114,10 @@ impl FindCommand {
                 s3_set_tags(&self.client, &self.path.bucket, list, tags)?
             }
             Some(Cmd::LsTags) => s3_list_tags(&self.client, &self.path.bucket, list)?,
+            Some(Cmd::Public) => {
+                s3_set_public(&self.client, &self.path.bucket, list, &self.region)?
+            }
+            Some(_) => println!("Not implemented"),
             None => {
                 let _nlist: Vec<_> = list.iter().map(|x| fprint(&self.path.bucket, x)).collect();
             }
