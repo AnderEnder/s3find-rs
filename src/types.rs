@@ -5,26 +5,14 @@ extern crate regex;
 extern crate rusoto_s3;
 
 use chrono::prelude::*;
-use failure::{err_msg, Error};
+use failure::Error;
 use glob::MatchOptions;
 use glob::Pattern;
 use regex::Regex;
 use rusoto_s3::{Object, Tag};
 use std::str::FromStr;
 
-#[derive(Fail, Debug)]
-pub enum FindError {
-    #[fail(display = "Invalid s3 path")]
-    S3Parse,
-    #[fail(display = "Invalid size parameter")]
-    SizeParse,
-    #[fail(display = "Invalid mtime parameter")]
-    TimeParse,
-    #[fail(display = "Invalid command line value")]
-    CommandlineParse,
-    #[fail(display = "Invalid path value")]
-    ParentPathParse,
-}
+use error::*;
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
@@ -210,10 +198,10 @@ impl FromStr for FindTag {
 
     fn from_str(s: &str) -> Result<FindTag> {
         let re = Regex::new(r"(\w+):(\w+)$")?;
-        let m = re.captures(s).ok_or(err_msg("cannot parse tag"))?;
+        let m = re.captures(s).ok_or(FindError::TagParseError)?;
 
-        let key = m.get(1).ok_or(err_msg("cannot parse key"))?.as_str();
-        let value = m.get(2).ok_or(err_msg("cannot parse value"))?.as_str();
+        let key = m.get(1).ok_or(FindError::TagKeyParseError)?.as_str();
+        let value = m.get(2).ok_or(FindError::TagValueParseError)?.as_str();
 
         Ok(FindTag {
             key: key.to_string(),

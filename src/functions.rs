@@ -19,10 +19,10 @@ use rusoto_core::Region;
 use futures::stream::Stream;
 use futures::Future;
 
-use failure::err_msg;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use types::*;
+use error::*;
 
 pub fn fprint(bucket: &str, item: &Object) {
     println!(
@@ -143,25 +143,25 @@ where
             "downloading: s3://{}/{} => {}",
             bucket,
             &key,
-            file_path.to_str().ok_or(err_msg("cannot parse filename"))?
+            file_path.to_str().ok_or(FindError::FileNameParseError)?
         );
 
         if file_path.exists() && !force {
-            return Err(err_msg("file is already present"));
+            return Err(FindError::PresentFileError.into());
         }
 
         let result = client.get_object(&request).sync()?;
 
         let mut stream = result
             .body
-            .ok_or(err_msg("cannot fetch body from s3 response"))?;
+            .ok_or(FindError::S3FetchBodyError)?;
 
         fs::create_dir_all(&dir_path)?;
         let mut output = File::create(&file_path)?;
 
         let _r = stream
             .for_each(|buf| {
-                output.write(&buf)?;
+                output.write_all(&buf)?;
                 count += buf.len() as u64;
                 pb.set_position(count);
                 Ok(())
