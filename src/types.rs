@@ -233,12 +233,7 @@ impl From<FindTag> for Tag {
 
 #[cfg(test)]
 mod tests {
-
-    use failure::Error;
-    use FindSize;
-    use FindTag;
-    use FindTime;
-    use S3path;
+    use super::*;
 
     #[test]
     fn s3path_corect() {
@@ -275,7 +270,7 @@ mod tests {
     #[test]
     fn s3path_only_bucket() {
         let url = "testbucket";
-        let path: Result<S3path, Error> = url.parse();
+        let path: Result<S3path> = url.parse();
         assert!(
             path.is_err(),
             "This s3 url should not be validated posivitely"
@@ -285,7 +280,7 @@ mod tests {
     #[test]
     fn s3path_without_bucket() {
         let url = "s3://";
-        let path: Result<S3path, Error> = url.parse();
+        let path: Result<S3path> = url.parse();
         assert!(
             path.is_err(),
             "This s3 url should not be validated posivitely"
@@ -295,7 +290,7 @@ mod tests {
     #[test]
     fn s3path_without_2_slash() {
         let url = "s3:/testbucket";
-        let path: Result<S3path, Error> = url.parse();
+        let path: Result<S3path> = url.parse();
         assert!(
             path.is_err(),
             "This s3 url should not be validated posivitely"
