@@ -56,7 +56,7 @@ pub struct ExecStatus {
 pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     let scommand = command.replace("{}", key);
 
-    let mut command_args = scommand.split(" ");
+    let mut command_args = scommand.split(' ');
     let command_name = command_args.next().ok_or(FindError::CommandlineParse)?;
 
     let mut rcommand = Command::new(command_name);
@@ -74,7 +74,7 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     })
 }
 
-pub fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
+pub fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: &[&Object]) -> Result<()>
 where
     P: ProvideAwsCredentials + 'static,
     D: DispatchSignedRequest + 'static,
@@ -114,15 +114,15 @@ where
 pub fn s3_download<P, D>(
     client: &S3Client<P, D>,
     bucket: &str,
-    list: Vec<&Object>,
+    list: &[&Object],
     target: &str,
-    force: &bool,
+    force: bool,
 ) -> Result<()>
 where
     P: ProvideAwsCredentials + 'static,
     D: DispatchSignedRequest + 'static,
 {
-    for object in list.iter() {
+    for object in list {
         let key = object.key.as_ref().unwrap();
         let request = GetObjectRequest {
             bucket: bucket.to_owned(),
@@ -162,7 +162,7 @@ where
         let _r = stream
             .for_each(|buf| {
                 output.write(&buf)?;
-                count = count + (buf.len() as u64);
+                count += buf.len() as u64;
                 pb.set_position(count);
                 Ok(())
             })
@@ -175,14 +175,14 @@ where
 pub fn s3_set_tags<P, D>(
     client: &S3Client<P, D>,
     bucket: &str,
-    list: Vec<&Object>,
+    list: &[&Object],
     tags: Tagging,
 ) -> Result<()>
 where
     P: ProvideAwsCredentials + 'static,
     D: DispatchSignedRequest + 'static,
 {
-    for object in list.iter() {
+    for object in list {
         let key = object.key.as_ref().unwrap();
 
         let request = PutObjectTaggingRequest {
@@ -205,7 +205,7 @@ where
     P: ProvideAwsCredentials + 'static,
     D: DispatchSignedRequest + 'static,
 {
-    for object in list.iter() {
+    for object in &list {
         let key = object.key.as_ref().unwrap();
 
         let request = GetObjectTaggingRequest {
@@ -244,7 +244,7 @@ fn s3_public_url(key: &str, bucket: &str, region: &str) -> String {
 pub fn s3_set_public<P, D>(
     client: &S3Client<P, D>,
     bucket: &str,
-    list: Vec<&Object>,
+    list: &[&Object],
     region: &Region,
 ) -> Result<()>
 where
@@ -252,7 +252,7 @@ where
     D: DispatchSignedRequest + 'static,
 {
     let region_str = region.name();
-    for object in list.iter() {
+    for object in list {
         let key = object.key.as_ref().unwrap();
 
         let request = PutObjectAclRequest {

@@ -1,29 +1,6 @@
-#[macro_use]
-extern crate structopt;
-
-#[macro_use]
-extern crate failure;
-
-extern crate chrono;
-extern crate clap;
-extern crate futures;
-extern crate glob;
-extern crate indicatif;
-extern crate regex;
-extern crate rusoto_core;
-extern crate rusoto_credential;
-extern crate rusoto_s3;
-
-mod commands;
-mod credentials;
-mod functions;
-mod types;
-
 use structopt::clap::AppSettings;
-use structopt::StructOpt;
 
 use regex::Regex;
-
 use rusoto_core::reactor::RequestDispatcher;
 use rusoto_core::Region;
 use rusoto_s3::*;
@@ -121,15 +98,15 @@ Possible file size units are as follows:
 
 impl From<FindOpt> for FindCommand {
     fn from(opts: FindOpt) -> FindCommand {
-        let region = opts.aws_region.clone().unwrap_or(Region::default());
+        let region = opts.aws_region.clone().unwrap_or_default();
         let provider =
             CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
         let client = S3Client::new(RequestDispatcher::default(), provider, region.clone());
 
         FindCommand {
             path: opts.path.clone(),
-            client: client,
-            region: region,
+            client,
+            region,
             filters: opts.clone().into(),
             command: opts.cmd.clone(),
         }
@@ -163,33 +140,3 @@ impl From<FindOpt> for FilterList {
         FilterList(list)
     }
 }
-
-fn main() -> Result<()> {
-    let status_opts = FindOpt::from_args();
-
-    let status: FindCommand = status_opts.clone().into();
-    let mut request = status.list_request();
-
-    loop {
-        let output = status.client.list_objects_v2(&request).sync()?;
-        match output.contents {
-            Some(klist) => {
-                let flist: Vec<_> = klist.iter().filter(|x| status.filters.filters(x)).collect();
-                status.exec(flist)?;
-
-                match output.next_continuation_token {
-                    Some(token) => request.continuation_token = Some(token),
-                    None => break,
-                }
-            }
-            None => {
-                println!("No keys!");
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {}

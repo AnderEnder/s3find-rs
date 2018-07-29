@@ -64,7 +64,7 @@ pub struct FilterList(pub Vec<Box<Filter>>);
 
 impl FilterList {
     pub fn filters(&self, object: &Object) -> bool {
-        for item in self.0.iter() {
+        for item in &self.0 {
             if !item.filter(object) {
                 return false;
             }
@@ -102,20 +102,20 @@ impl FindCommand {
                     })
                     .collect();
             }
-            Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, list)?,
+            Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, &list)?,
             Some(Cmd::Download {
                 destination: ref d,
                 force: ref f,
-            }) => s3_download(&self.client, &self.path.bucket, list, d, f)?,
+            }) => s3_download(&self.client, &self.path.bucket, &list, d, f.to_owned())?,
             Some(Cmd::Tags { tags: ref t }) => {
                 let tags = Tagging {
                     tag_set: t.into_iter().map(|x| (*x).clone().into()).collect(),
                 };
-                s3_set_tags(&self.client, &self.path.bucket, list, tags)?
+                s3_set_tags(&self.client, &self.path.bucket, &list, tags)?
             }
             Some(Cmd::LsTags) => s3_list_tags(&self.client, &self.path.bucket, list)?,
             Some(Cmd::Public) => {
-                s3_set_public(&self.client, &self.path.bucket, list, &self.region)?
+                s3_set_public(&self.client, &self.path.bucket, &list, &self.region)?
             }
             Some(_) => println!("Not implemented"),
             None => {

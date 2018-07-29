@@ -42,7 +42,7 @@ impl FromStr for S3path {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<S3path> {
-        let s3_vec: Vec<&str> = s.split("/").collect();
+        let s3_vec: Vec<&str> = s.split('/').collect();
         let bucket = s3_vec.get(2).unwrap_or(&"");
         let prefix = s3_vec.get(3).map(|x| x.to_owned());
 
