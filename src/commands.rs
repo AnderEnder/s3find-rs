@@ -83,6 +83,7 @@ pub struct FindCommand {
 }
 
 impl FindCommand {
+    #![allow(unreachable_patterns)]
     pub fn exec(&self, list: &[&Object]) -> Result<()> {
         match (*self).command {
             Some(Cmd::Print) => {

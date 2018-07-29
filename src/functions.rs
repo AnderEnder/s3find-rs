@@ -272,9 +272,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use functions::advanced_print;
-    use functions::exec;
     use rusoto_s3::*;
+    use super::*;
 
     #[test]
     fn exec_true() {

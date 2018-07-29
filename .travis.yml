@@ -20,6 +20,7 @@ script:
       bash <(curl -s https://codecov.io/bash)
       echo "Uploaded code coverage"
     else
+      cargo build --verbose --all
       cargo test --verbose --all
     fi
 before_deploy:
