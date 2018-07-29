@@ -83,7 +83,7 @@ pub struct FindCommand {
 }
 
 impl FindCommand {
-    pub fn exec(&self, list: Vec<&Object>) -> Result<()> {
+    pub fn exec(&self, list: &[&Object]) -> Result<()> {
         match (*self).command {
             Some(Cmd::Print) => {
                 let _nlist: Vec<_> = list.iter()
@@ -102,7 +102,7 @@ impl FindCommand {
                     })
                     .collect();
             }
-            Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, &list)?,
+            Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, list)?,
             Some(Cmd::Download {
                 destination: ref d,
                 force: ref f,
@@ -111,11 +111,11 @@ impl FindCommand {
                 let tags = Tagging {
                     tag_set: t.into_iter().map(|x| (*x).clone().into()).collect(),
                 };
-                s3_set_tags(&self.client, &self.path.bucket, &list, tags)?
+                s3_set_tags(&self.client, &self.path.bucket, &list, &tags)?
             }
             Some(Cmd::LsTags) => s3_list_tags(&self.client, &self.path.bucket, list)?,
             Some(Cmd::Public) => {
-                s3_set_public(&self.client, &self.path.bucket, &list, &self.region)?
+                s3_set_public(&self.client, &self.path.bucket, list, &self.region)?
             }
             Some(_) => println!("Not implemented"),
             None => {

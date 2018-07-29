@@ -176,7 +176,7 @@ pub fn s3_set_tags<P, D>(
     client: &S3Client<P, D>,
     bucket: &str,
     list: &[&Object],
-    tags: Tagging,
+    tags: &Tagging,
 ) -> Result<()>
 where
     P: ProvideAwsCredentials + 'static,
@@ -200,12 +200,12 @@ where
     Ok(())
 }
 
-pub fn s3_list_tags<P, D>(client: &S3Client<P, D>, bucket: &str, list: Vec<&Object>) -> Result<()>
+pub fn s3_list_tags<P, D>(client: &S3Client<P, D>, bucket: &str, list: &[&Object]) -> Result<()>
 where
     P: ProvideAwsCredentials + 'static,
     D: DispatchSignedRequest + 'static,
 {
-    for object in &list {
+    for object in list {
         let key = object.key.as_ref().unwrap();
 
         let request = GetObjectTaggingRequest {

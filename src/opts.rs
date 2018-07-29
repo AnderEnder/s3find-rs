@@ -117,23 +117,23 @@ impl From<FindOpt> for FilterList {
     fn from(opts: FindOpt) -> FilterList {
         let mut list: Vec<Box<Filter>> = Vec::new();
 
-        for name in opts.name.iter() {
+        for name in &opts.name {
             list.push(Box::new(name.clone()));
         }
 
-        for iname in opts.iname.iter() {
+        for iname in &opts.iname {
             list.push(Box::new(iname.clone()));
         }
 
-        for regex in opts.regex.iter() {
+        for regex in &opts.regex {
             list.push(Box::new(regex.clone()));
         }
 
-        for size in opts.size.iter() {
+        for size in &opts.size {
             list.push(Box::new(size.clone()));
         }
 
-        for mtime in opts.mtime.iter() {
+        for mtime in &opts.mtime {
             list.push(Box::new(mtime.clone()));
         }
 

@@ -20,7 +20,7 @@ fn main() -> Result<()> {
         match output.contents {
             Some(klist) => {
                 let flist: Vec<_> = klist.iter().filter(|x| status.filters.filters(x)).collect();
-                status.exec(flist)?;
+                status.exec(&flist)?;
 
                 match output.next_continuation_token {
                     Some(token) => request.continuation_token = Some(token),
