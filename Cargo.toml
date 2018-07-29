@@ -4,6 +4,14 @@ version = "0.1.0"
 description = "walk a s3 path hierarchy"
 authors = ["Andrii Radyk <andrii.m.radyk@gmail.com>"]
 
+[lib]
+name = "s3find"
+path = "src/lib.rs"
+
+[[bin]]
+name = "s3find"
+path = "src/bin/s3find.rs"
+
 [dependencies]
 rusoto_core = "0.32.0"
 rusoto_s3 = "0.32.0"
