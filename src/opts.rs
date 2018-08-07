@@ -1,9 +1,9 @@
 use structopt::clap::AppSettings;
 
 use regex::Regex;
-use rusoto_core::Region;
-use rusoto_core::request::HttpClient;
 use rusoto_core::credential::DefaultCredentialsProvider;
+use rusoto_core::request::HttpClient;
+use rusoto_core::Region;
 use rusoto_s3::*;
 
 use commands::*;
@@ -102,10 +102,11 @@ impl From<FindOpt> for FindCommand {
         // let provider =
         //    CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
 
-        // let dispatcher = HttpClient::new();
-        // let provider = DefaultCredentialsProvider::new();
+        let dispatcher = HttpClient::new().unwrap();
+        let provider = DefaultCredentialsProvider::new().unwrap();
 
-        let client = S3Client::new(region.clone());
+        let client = S3Client::new_with(dispatcher, provider, region.clone());
+        // let client = S3Client::new(region.clone());
 
         FindCommand {
             path: opts.path.clone(),
