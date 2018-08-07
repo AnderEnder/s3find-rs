@@ -1,11 +1,9 @@
 extern crate rusoto_core;
 extern crate rusoto_s3;
 
-use rusoto_core::reactor::RequestDispatcher;
 use rusoto_core::Region;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tagging};
 
-use credentials::*;
 use functions::*;
 use types::*;
 
@@ -75,7 +73,7 @@ impl FilterList {
 }
 
 pub struct FindCommand {
-    pub client: S3Client<CombinedProvider, RequestDispatcher>,
+    pub client: S3Client,
     pub region: Region,
     pub path: S3path,
     pub filters: FilterList,

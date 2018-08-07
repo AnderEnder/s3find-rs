@@ -4,12 +4,12 @@ extern crate rusoto_credential;
 
 use futures::future::FutureResult;
 use futures::{Future, Poll};
-use rusoto_core::reactor::{CredentialsProvider, CredentialsProviderFuture};
 use rusoto_credential::{AwsCredentials, CredentialsError, ProvideAwsCredentials, StaticProvider};
+use rusoto_credential::{DefaultCredentialsProvider, DefaultCredentialsProviderFuture};
 
 pub enum CombinedProvider {
     Static(StaticProvider),
-    Simple(CredentialsProvider),
+    Simple(DefaultCredentialsProvider),
 }
 
 impl CombinedProvider {
@@ -32,13 +32,13 @@ impl CombinedProvider {
     }
 
     pub fn with_default() -> CombinedProvider {
-        CombinedProvider::Simple(CredentialsProvider::default())
+        CombinedProvider::Simple(DefaultCredentialsProvider::new().unwrap())
     }
 }
 
 pub enum CombinedProviderFuture {
     Static(FutureResult<AwsCredentials, CredentialsError>),
-    Simple(CredentialsProviderFuture),
+    Simple(DefaultCredentialsProviderFuture),
 }
 
 impl Future for CombinedProviderFuture {
@@ -64,8 +64,8 @@ impl ProvideAwsCredentials for CombinedProvider {
     }
 }
 
-impl From<CredentialsProviderFuture> for CombinedProviderFuture {
-    fn from(future: CredentialsProviderFuture) -> CombinedProviderFuture {
+impl From<DefaultCredentialsProviderFuture> for CombinedProviderFuture {
+    fn from(future: DefaultCredentialsProviderFuture) -> CombinedProviderFuture {
         CombinedProviderFuture::Simple(future)
     }
 }

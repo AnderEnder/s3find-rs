@@ -13,18 +13,18 @@ name = "s3find"
 path = "src/bin/s3find.rs"
 
 [dependencies]
-rusoto_core = "0.32.0"
-rusoto_s3 = "0.32.0"
-rusoto_credential = "0.11.0"
+rusoto_core = "0.33"
+rusoto_s3 = "0.33"
+rusoto_credential = "0.12.0"
 #rusoto_mock = "0.26.0"
-structopt = "0.2.10"
-clap = "2.31.2"
-glob = "0.2.11"
+structopt = "0.2"
+clap = "2.31"
+glob = "0.2"
 regex = "1"
-failure = "0.1.1"
-chrono = "0.4.2"
+failure = "0.1"
+chrono = "0.4"
 futures = "0.1"
-indicatif = "0.9.0"
+indicatif = "0.9"
 
 [profile.release]
 lto = true
