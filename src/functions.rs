@@ -12,8 +12,6 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use rusoto_core::request::*;
-use rusoto_core::ProvideAwsCredentials;
 use rusoto_core::Region;
 
 use futures::stream::Stream;
@@ -74,10 +72,7 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     })
 }
 
-pub fn s3_delete<P, D>(client: &S3Client<P, D>, bucket: &str, list: &[&Object]) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
+pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()>
 {
     let key_list: Vec<_> = list.iter()
         .map(|x| ObjectIdentifier {
@@ -96,7 +91,7 @@ where
         request_payer: None,
     };
 
-    let result = client.delete_objects(&request).sync()?;
+    let result = client.delete_objects(request).sync()?;
 
     if let Some(deleted_list) = result.deleted {
         for object in deleted_list {
@@ -111,16 +106,13 @@ where
     Ok(())
 }
 
-pub fn s3_download<P, D>(
-    client: &S3Client<P, D>,
+pub fn s3_download(
+    client: &S3Client,
     bucket: &str,
     list: &[&Object],
     target: &str,
     force: bool,
 ) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
 {
     for object in list {
         let key = object.key.as_ref().unwrap();
@@ -150,7 +142,7 @@ where
             return Err(FindError::PresentFileError.into());
         }
 
-        let result = client.get_object(&request).sync()?;
+        let result = client.get_object(request).sync()?;
 
         let mut stream = result
             .body
@@ -172,15 +164,12 @@ where
     Ok(())
 }
 
-pub fn s3_set_tags<P, D>(
-    client: &S3Client<P, D>,
+pub fn s3_set_tags(
+    client: &S3Client,
     bucket: &str,
     list: &[&Object],
     tags: &Tagging,
 ) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
 {
     for object in list {
         let key = object.key.as_ref().unwrap();
@@ -192,7 +181,7 @@ where
             ..Default::default()
         };
 
-        client.put_object_tagging(&request).sync()?;
+        client.put_object_tagging(request).sync()?;
 
         println!("tags are set for: s3://{}/{}", bucket, &key);
     }
@@ -200,10 +189,7 @@ where
     Ok(())
 }
 
-pub fn s3_list_tags<P, D>(client: &S3Client<P, D>, bucket: &str, list: &[&Object]) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
+pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()>
 {
     for object in list {
         let key = object.key.as_ref().unwrap();
@@ -214,7 +200,7 @@ where
             ..Default::default()
         };
 
-        let tag_output = client.get_object_tagging(&request).sync()?;
+        let tag_output = client.get_object_tagging(request).sync()?;
 
         let tags: String = tag_output
             .tag_set
@@ -241,15 +227,12 @@ fn s3_public_url(key: &str, bucket: &str, region: &str) -> String {
     }
 }
 
-pub fn s3_set_public<P, D>(
-    client: &S3Client<P, D>,
+pub fn s3_set_public(
+    client: &S3Client,
     bucket: &str,
     list: &[&Object],
     region: &Region,
 ) -> Result<()>
-where
-    P: ProvideAwsCredentials + 'static,
-    D: DispatchSignedRequest + 'static,
 {
     let region_str = region.name();
     for object in list {
@@ -262,7 +245,7 @@ where
             ..Default::default()
         };
 
-        client.put_object_acl(&request).sync()?;
+        client.put_object_acl(request).sync()?;
         let url = s3_public_url(key, bucket, region_str);
         println!("{} {}", &key, url);
     }

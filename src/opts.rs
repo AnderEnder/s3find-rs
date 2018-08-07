@@ -1,12 +1,12 @@
 use structopt::clap::AppSettings;
 
 use regex::Regex;
-use rusoto_core::reactor::RequestDispatcher;
 use rusoto_core::Region;
+use rusoto_core::request::HttpClient;
+use rusoto_core::credential::DefaultCredentialsProvider;
 use rusoto_s3::*;
 
 use commands::*;
-use credentials::*;
 use types::*;
 
 /// Walk a s3 path hierarchy
@@ -99,9 +99,13 @@ Possible file size units are as follows:
 impl From<FindOpt> for FindCommand {
     fn from(opts: FindOpt) -> FindCommand {
         let region = opts.aws_region.clone().unwrap_or_default();
-        let provider =
-            CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
-        let client = S3Client::new(RequestDispatcher::default(), provider, region.clone());
+        // let provider =
+        //    CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
+
+        // let dispatcher = HttpClient::new();
+        // let provider = DefaultCredentialsProvider::new();
+
+        let client = S3Client::new(region.clone());
 
         FindCommand {
             path: opts.path.clone(),
