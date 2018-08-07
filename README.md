@@ -4,6 +4,62 @@
 
 Utility to walk a S3 hierarchy. An analog of find for AWS S3.
 
+## Usage
+
+```sh
+USAGE:
+    s3find [OPTIONS] <path> [SUBCOMMAND]
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --aws-access-key <aws_access_key>    AWS access key. Unrequired
+        --aws-region <aws_region>            The region to use. Default value is us-east-1
+        --aws-secret-key <aws_secret_key>    AWS secret key. Unrequired
+        --size <bytes_size>...               File size for match:
+                                                 5k - exact match 5k,
+                                                 +5k - bigger than 5k,
+                                                 -5k - smaller than 5k,
+
+                                             Possible file size units are as follows:
+                                                 k - kilobytes (1024 bytes)
+                                                 M - megabytes (1024 kilobytes)
+                                                 G - gigabytes (1024 megabytes)
+                                                 T - terabytes (1024 gigabytes)
+                                                 P - petabytes (1024 terabytes)
+        --iname <ipatern>...                 Case-insensitive glob pattern for match, can be multiple
+        --name <npatern>...                  Glob pattern for match, can be multiple
+        --regex <rpatern>...                 Regex pattern for match, can be multiple
+        --mtime <time>...                    Modification time for match, a time period:
+                                                 +5d - for period from now-5d to now
+                                                 -5d - for period  before now-5d
+
+                                             Possible time units are as follows:
+                                                 s - seconds
+                                                 m - minutes
+                                                 h - hours
+                                                 d - days
+                                                 w - weeks
+
+                                             Can be multiple, but should be overlaping
+
+ARGS:
+    <path>    S3 path to walk through. It should be s3://bucket/path
+
+SUBCOMMANDS:
+    -delete      Delete matched keys
+    -download    Download matched keys
+    -exec        Exec any shell program with every key
+    -ls          Print the list of matched keys
+    -lstags      Print the list of matched keys with tags
+    -print       Extended print with detail information
+    -public      Make the matched keys public available (readonly)
+    -tags        Set the tags(overwrite) for the matched keys
+    help         Prints this message or the help of the given subcommand(s)
+```
+
 ## Examples
 
 ### Find path by glob pattern
