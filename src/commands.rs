@@ -1,3 +1,4 @@
+use failure::Error;
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag, Tagging};
@@ -7,6 +8,8 @@ use filter::Filter;
 use functions::*;
 use opts::*;
 use types::*;
+
+pub type Result<T> = ::std::result::Result<T, Error>;
 
 pub struct FilterList(pub Vec<Box<Filter>>);
 

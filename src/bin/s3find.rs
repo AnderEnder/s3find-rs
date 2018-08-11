@@ -7,7 +7,6 @@ use structopt::StructOpt;
 
 use s3find::commands::*;
 use s3find::opts::*;
-use s3find::types::*;
 
 fn main() -> Result<()> {
     let status_opts = FindOpt::from_args();

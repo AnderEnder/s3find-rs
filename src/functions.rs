@@ -19,8 +19,8 @@ use futures::Future;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use types::*;
 use error::*;
+use parse::*;
 
 pub fn fprint(bucket: &str, item: &Object) {
     println!(
@@ -72,9 +72,9 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     })
 }
 
-pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()>
-{
-    let key_list: Vec<_> = list.iter()
+pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()> {
+    let key_list: Vec<_> = list
+        .iter()
         .map(|x| ObjectIdentifier {
             key: x.key.as_ref().unwrap().to_string(),
             version_id: None,
@@ -112,8 +112,7 @@ pub fn s3_download(
     list: &[&Object],
     target: &str,
     force: bool,
-) -> Result<()>
-{
+) -> Result<()> {
     for object in list {
         let key = object.key.as_ref().unwrap();
         let request = GetObjectRequest {
@@ -144,9 +143,7 @@ pub fn s3_download(
 
         let result = client.get_object(request).sync()?;
 
-        let mut stream = result
-            .body
-            .ok_or(FindError::S3FetchBodyError)?;
+        let mut stream = result.body.ok_or(FindError::S3FetchBodyError)?;
 
         fs::create_dir_all(&dir_path)?;
         let mut output = File::create(&file_path)?;
@@ -169,8 +166,7 @@ pub fn s3_set_tags(
     bucket: &str,
     list: &[&Object],
     tags: &Tagging,
-) -> Result<()>
-{
+) -> Result<()> {
     for object in list {
         let key = object.key.as_ref().unwrap();
 
@@ -189,8 +185,7 @@ pub fn s3_set_tags(
     Ok(())
 }
 
-pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()>
-{
+pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()> {
     for object in list {
         let key = object.key.as_ref().unwrap();
 
@@ -232,8 +227,7 @@ pub fn s3_set_public(
     bucket: &str,
     list: &[&Object],
     region: &Region,
-) -> Result<()>
-{
+) -> Result<()> {
     let region_str = region.name();
     for object in list {
         let key = object.key.as_ref().unwrap();
@@ -255,7 +249,6 @@ pub fn s3_set_public(
 
 #[cfg(test)]
 mod tests {
-    use rusoto_s3::*;
     use super::*;
 
     #[test]
