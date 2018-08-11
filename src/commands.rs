@@ -1,62 +1,12 @@
-extern crate rusoto_core;
-extern crate rusoto_s3;
-
+use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
-use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tagging};
+use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag, Tagging};
 
+use credentials::*;
+use filter::Filter;
 use functions::*;
+use opts::*;
 use types::*;
-
-#[derive(StructOpt, Debug, PartialEq, Clone)]
-pub enum Cmd {
-    /// Exec any shell program with every key
-    #[structopt(name = "-exec")]
-    Exec {
-        /// Utility(program) to run
-        #[structopt(name = "utility")]
-        utility: String,
-    },
-
-    /// Extended print with detail information
-    #[structopt(name = "-print")]
-    Print,
-
-    /// Delete matched keys
-    #[structopt(name = "-delete")]
-    Delete,
-
-    /// Download matched keys
-    #[structopt(name = "-download")]
-    Download {
-        /// Force download files(overwrite) even if the target files are already present
-        #[structopt(long = "force", short = "f")]
-        force: bool,
-
-        /// Directory destination to download files to
-        #[structopt(name = "destination")]
-        destination: String,
-    },
-
-    /// Print the list of matched keys
-    #[structopt(name = "-ls")]
-    Ls,
-
-    /// Print the list of matched keys with tags
-    #[structopt(name = "-lstags")]
-    LsTags,
-
-    /// Set the tags(overwrite) for the matched keys
-    #[structopt(name = "-tags")]
-    Tags {
-        /// List of the tags to set
-        #[structopt(name = "key:value", raw(min_values = "1"))]
-        tags: Vec<FindTag>,
-    },
-
-    /// Make the matched keys public available (readonly)
-    #[structopt(name = "-public")]
-    Public,
-}
 
 pub struct FilterList(pub Vec<Box<Filter>>);
 
@@ -85,7 +35,8 @@ impl FindCommand {
     pub fn exec(&self, list: &[&Object]) -> Result<()> {
         match (*self).command {
             Some(Cmd::Print) => {
-                let _nlist: Vec<_> = list.iter()
+                let _nlist: Vec<_> = list
+                    .iter()
                     .map(|x| advanced_print(&self.path.bucket, x))
                     .collect();
             }
@@ -93,7 +44,8 @@ impl FindCommand {
                 let _nlist: Vec<_> = list.iter().map(|x| fprint(&self.path.bucket, x)).collect();
             }
             Some(Cmd::Exec { utility: ref p }) => {
-                let _nlist: Vec<_> = list.iter()
+                let _nlist: Vec<_> = list
+                    .iter()
                     .map(|x| {
                         let key = x.key.as_ref().unwrap();
                         let path = format!("s3://{}/{}", &self.path.bucket, key);
@@ -135,6 +87,62 @@ impl FindCommand {
             prefix: self.path.prefix.clone(),
             request_payer: None,
             start_after: None,
+        }
+    }
+}
+
+impl From<FindOpt> for FindCommand {
+    fn from(opts: FindOpt) -> FindCommand {
+        let region = opts.aws_region.clone().unwrap_or_default();
+        let provider =
+            CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
+        let dispatcher = HttpClient::new().unwrap();
+
+        let client = S3Client::new_with(dispatcher, provider, region.clone());
+
+        FindCommand {
+            path: opts.path.clone(),
+            client,
+            region,
+            filters: opts.clone().into(),
+            command: opts.cmd.clone(),
+        }
+    }
+}
+
+impl From<FindOpt> for FilterList {
+    fn from(opts: FindOpt) -> FilterList {
+        let mut list: Vec<Box<Filter>> = Vec::new();
+
+        for name in &opts.name {
+            list.push(Box::new(name.clone()));
+        }
+
+        for iname in &opts.iname {
+            list.push(Box::new(iname.clone()));
+        }
+
+        for regex in &opts.regex {
+            list.push(Box::new(regex.clone()));
+        }
+
+        for size in &opts.size {
+            list.push(Box::new(size.clone()));
+        }
+
+        for mtime in &opts.mtime {
+            list.push(Box::new(mtime.clone()));
+        }
+
+        FilterList(list)
+    }
+}
+
+impl From<FindTag> for Tag {
+    fn from(tag: FindTag) -> Tag {
+        Tag {
+            key: tag.key,
+            value: tag.value,
         }
     }
 }

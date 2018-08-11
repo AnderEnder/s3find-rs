@@ -16,7 +16,8 @@ extern crate rusoto_s3;
 
 pub mod commands;
 pub mod credentials;
-pub mod functions;
-pub mod types;
-pub mod opts;
 pub mod error;
+pub mod filter;
+pub mod functions;
+pub mod opts;
+pub mod types;

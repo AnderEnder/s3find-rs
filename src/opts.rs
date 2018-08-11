@@ -1,12 +1,8 @@
 use structopt::clap::AppSettings;
 
 use regex::Regex;
-use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
-use rusoto_s3::*;
 
-use commands::*;
-use credentials::*;
 use types::*;
 
 /// Walk a s3 path hierarchy
@@ -20,7 +16,7 @@ use types::*;
 pub struct FindOpt {
     /// S3 path to walk through. It should be s3://bucket/path
     #[structopt(name = "path")] //, raw(index = r#"1"#))]
-    path: S3path,
+    pub path: S3path,
 
     /// AWS access key. Unrequired
     #[structopt(
@@ -28,7 +24,7 @@ pub struct FindOpt {
         long = "aws-access-key",
         raw(requires_all = r#"&["aws_secret_key"]"#)
     )]
-    aws_access_key: Option<String>,
+    pub aws_access_key: Option<String>,
 
     /// AWS secret key. Unrequired
     #[structopt(
@@ -36,23 +32,23 @@ pub struct FindOpt {
         long = "aws-secret-key",
         raw(requires_all = r#"&["aws_access_key"]"#)
     )]
-    aws_secret_key: Option<String>,
+    pub aws_secret_key: Option<String>,
 
     /// The region to use. Default value is us-east-1
     #[structopt(name = "aws_region", long = "aws-region")]
-    aws_region: Option<Region>,
+    pub aws_region: Option<Region>,
 
     /// Glob pattern for match, can be multiple
     #[structopt(name = "npatern", long = "name", raw(number_of_values = "1"))]
-    name: Vec<NameGlob>,
+    pub name: Vec<NameGlob>,
 
     /// Case-insensitive glob pattern for match, can be multiple
     #[structopt(name = "ipatern", long = "iname", raw(number_of_values = "1"))]
-    iname: Vec<InameGlob>,
+    pub iname: Vec<InameGlob>,
 
     /// Regex pattern for match, can be multiple
     #[structopt(name = "rpatern", long = "regex", raw(number_of_values = "1"))]
-    regex: Vec<Regex>,
+    pub regex: Vec<Regex>,
 
     #[structopt(
         name = "time",
@@ -71,7 +67,7 @@ Possible time units are as follows:
 
 Can be multiple, but should be overlaping"#
     )]
-    mtime: Vec<FindTime>,
+    pub mtime: Vec<FindTime>,
 
     #[structopt(
         name = "bytes_size",
@@ -89,56 +85,60 @@ Possible file size units are as follows:
     T - terabytes (1024 gigabytes)
     P - petabytes (1024 terabytes)"#
     )]
-    size: Vec<FindSize>,
+    pub size: Vec<FindSize>,
 
     //  /// Action to be ran with matched list of paths
     #[structopt(subcommand)]
-    cmd: Option<Cmd>,
+    pub cmd: Option<Cmd>,
 }
 
-impl From<FindOpt> for FindCommand {
-    fn from(opts: FindOpt) -> FindCommand {
-        let region = opts.aws_region.clone().unwrap_or_default();
-        let provider =
-            CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
-        let dispatcher = HttpClient::new().unwrap();
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub enum Cmd {
+    /// Exec any shell program with every key
+    #[structopt(name = "-exec")]
+    Exec {
+        /// Utility(program) to run
+        #[structopt(name = "utility")]
+        utility: String,
+    },
 
-        let client = S3Client::new_with(dispatcher, provider, region.clone());
+    /// Extended print with detail information
+    #[structopt(name = "-print")]
+    Print,
 
-        FindCommand {
-            path: opts.path.clone(),
-            client,
-            region,
-            filters: opts.clone().into(),
-            command: opts.cmd.clone(),
-        }
-    }
-}
+    /// Delete matched keys
+    #[structopt(name = "-delete")]
+    Delete,
 
-impl From<FindOpt> for FilterList {
-    fn from(opts: FindOpt) -> FilterList {
-        let mut list: Vec<Box<Filter>> = Vec::new();
+    /// Download matched keys
+    #[structopt(name = "-download")]
+    Download {
+        /// Force download files(overwrite) even if the target files are already present
+        #[structopt(long = "force", short = "f")]
+        force: bool,
 
-        for name in &opts.name {
-            list.push(Box::new(name.clone()));
-        }
+        /// Directory destination to download files to
+        #[structopt(name = "destination")]
+        destination: String,
+    },
 
-        for iname in &opts.iname {
-            list.push(Box::new(iname.clone()));
-        }
+    /// Print the list of matched keys
+    #[structopt(name = "-ls")]
+    Ls,
 
-        for regex in &opts.regex {
-            list.push(Box::new(regex.clone()));
-        }
+    /// Print the list of matched keys with tags
+    #[structopt(name = "-lstags")]
+    LsTags,
 
-        for size in &opts.size {
-            list.push(Box::new(size.clone()));
-        }
+    /// Set the tags(overwrite) for the matched keys
+    #[structopt(name = "-tags")]
+    Tags {
+        /// List of the tags to set
+        #[structopt(name = "key:value", raw(min_values = "1"))]
+        tags: Vec<FindTag>,
+    },
 
-        for mtime in &opts.mtime {
-            list.push(Box::new(mtime.clone()));
-        }
-
-        FilterList(list)
-    }
+    /// Make the matched keys public available (readonly)
+    #[structopt(name = "-public")]
+    Public,
 }
