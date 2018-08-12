@@ -12,6 +12,7 @@ use std::path::Path;
 
 use rusoto_core::Region;
 
+use failure::Error;
 use futures::stream::Stream;
 use futures::Future;
 
@@ -48,7 +49,7 @@ pub struct ExecStatus {
     pub runcommand: String,
 }
 
-pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
+pub fn exec(command: &str, key: &str) -> Result<ExecStatus, Error> {
     let scommand = command.replace("{}", key);
 
     let mut command_args = scommand.split(' ');
@@ -69,7 +70,7 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     })
 }
 
-pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()> {
+pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     let key_list: Vec<_> = list
         .iter()
         .map(|x| ObjectIdentifier {
@@ -109,7 +110,7 @@ pub fn s3_download(
     list: &[&Object],
     target: &str,
     force: bool,
-) -> Result<()> {
+) -> Result<(), Error> {
     for object in list {
         let key = object.key.as_ref().unwrap();
         let request = GetObjectRequest {
@@ -163,7 +164,7 @@ pub fn s3_set_tags(
     bucket: &str,
     list: &[&Object],
     tags: &Tagging,
-) -> Result<()> {
+) -> Result<(), Error> {
     for object in list {
         let key = object.key.as_ref().unwrap();
 
@@ -182,7 +183,7 @@ pub fn s3_set_tags(
     Ok(())
 }
 
-pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()> {
+pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     for object in list {
         let key = object.key.as_ref().unwrap();
 
@@ -224,7 +225,7 @@ pub fn s3_set_public(
     bucket: &str,
     list: &[&Object],
     region: &Region,
-) -> Result<()> {
+) -> Result<(), Error> {
     let region_str = region.name();
     for object in list {
         let key = object.key.as_ref().unwrap();

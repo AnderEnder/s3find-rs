@@ -143,8 +143,6 @@ pub enum Cmd {
     Public,
 }
 
-type Result<T> = ::std::result::Result<T, Error>;
-
 #[derive(Fail, Debug)]
 pub enum FindError {
     #[fail(display = "Invalid s3 path")]
@@ -170,7 +168,7 @@ pub struct S3path {
 impl FromStr for S3path {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<S3path> {
+    fn from_str(s: &str) -> Result<S3path, Error> {
         let s3_vec: Vec<&str> = s.split('/').collect();
         let bucket = s3_vec.get(2).unwrap_or(&"");
         let prefix = s3_vec.get(3).map(|x| x.to_owned());
@@ -199,7 +197,7 @@ pub enum FindSize {
 impl FromStr for FindSize {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<FindSize> {
+    fn from_str(s: &str) -> Result<FindSize, Error> {
         let re = Regex::new(r"([+-]?)(\d*)([kMGTP]?)$")?;
         let m = re.captures(s).unwrap();
 
@@ -235,7 +233,7 @@ pub enum FindTime {
 impl FromStr for FindTime {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<FindTime> {
+    fn from_str(s: &str) -> Result<FindTime, Error> {
         let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)$")?;
         let m = re.captures(s).unwrap();
 
@@ -270,7 +268,7 @@ pub struct InameGlob(pub Pattern);
 impl FromStr for InameGlob {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<InameGlob> {
+    fn from_str(s: &str) -> Result<InameGlob, Error> {
         let pattern = Pattern::from_str(s)?;
         Ok(InameGlob(pattern))
     }
@@ -285,7 +283,7 @@ pub struct FindTag {
 impl FromStr for FindTag {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<FindTag> {
+    fn from_str(s: &str) -> Result<FindTag, Error> {
         let re = Regex::new(r"(\w+):(\w+)$")?;
         let m = re.captures(s).ok_or(FindError::TagParseError)?;
 
@@ -338,7 +336,7 @@ mod tests {
     #[test]
     fn s3path_only_bucket() {
         let url = "testbucket";
-        let path: Result<S3path> = url.parse();
+        let path: Result<S3path, Error> = url.parse();
         assert!(
             path.is_err(),
             "This s3 url should not be validated posivitely"
@@ -348,7 +346,7 @@ mod tests {
     #[test]
     fn s3path_without_bucket() {
         let url = "s3://";
-        let path: Result<S3path> = url.parse();
+        let path: Result<S3path, Error> = url.parse();
         assert!(
             path.is_err(),
             "This s3 url should not be validated posivitely"
@@ -358,7 +356,7 @@ mod tests {
     #[test]
     fn s3path_without_2_slash() {
         let url = "s3:/testbucket";
-        let path: Result<S3path> = url.parse();
+        let path: Result<S3path, Error> = url.parse();
         assert!(
             path.is_err(),
             "This s3 url should not be validated posivitely"

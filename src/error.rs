@@ -1,5 +1,3 @@
-use failure::Error;
-
 #[derive(Fail, Debug)]
 pub enum FunctionError {
     #[fail(display = "Invalid command line value")]
@@ -19,5 +17,3 @@ pub enum FunctionError {
     #[fail(display = "File is already present")]
     PresentFileError,
 }
-
-pub type Result<T> = ::std::result::Result<T, Error>;
