@@ -5,8 +5,8 @@ extern crate structopt;
 use rusoto_s3::*;
 use structopt::StructOpt;
 
-use s3find::commands::*;
-use s3find::opts::*;
+use s3find::arg::*;
+use s3find::command::*;
 
 fn main() -> Result<()> {
     let status_opts = FindOpt::from_args();

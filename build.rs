@@ -16,7 +16,7 @@ use std::process::exit;
 
 use structopt::StructOpt;
 
-include!("src/opts.rs");
+include!("src/arg.rs");
 
 fn main() {
     match version_check::is_min_version("1.20") {
