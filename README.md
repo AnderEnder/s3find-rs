@@ -97,7 +97,7 @@ s3find 's3://s3example/s3test' --name '*' -exec 'echo {}'
 
 ```
 
-#### Download(simple implementation)
+#### Download
 
 ```sh
 s3find 's3://s3example/s3test' --name '*' -download

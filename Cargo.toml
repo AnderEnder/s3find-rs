@@ -23,6 +23,7 @@ exclude = [
     ".travis.yml",
     "ci/*",
 ]
+build = "build.rs"
 
 [[bin]]
 name = "s3find"
@@ -35,7 +36,7 @@ codecov = { repository = "AnderEnder/s3find-rs" }
 [dependencies]
 rusoto_core = "0.33"
 rusoto_s3 = "0.33"
-rusoto_credential = "0.12.0"
+rusoto_credential = "0.12"
 structopt = "0.2"
 glob = "0.2"
 regex = "1"
@@ -45,9 +46,18 @@ futures = "0.1"
 indicatif = "0.9"
 
 [dependencies.clap]
-version = "2.31"
+version = "2"
 default-features = false
 features = [ "suggestions", "color" ]
+
+[build-dependencies]
+version_check = "0.1"
+rusoto_core = "0.33"
+structopt = "0.2"
+clap = "2"
+glob = "0.2"
+regex = "1"
+failure = "0.1"
 
 [profile.release]
 lto = true
