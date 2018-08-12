@@ -1,11 +1,7 @@
+use failure::Error;
+
 #[derive(Fail, Debug)]
-pub enum FindError {
-    #[fail(display = "Invalid s3 path")]
-    S3Parse,
-    #[fail(display = "Invalid size parameter")]
-    SizeParse,
-    #[fail(display = "Invalid mtime parameter")]
-    TimeParse,
+pub enum FunctionError {
     #[fail(display = "Invalid command line value")]
     CommandlineParse,
     #[fail(display = "Invalid path value")]
@@ -23,3 +19,5 @@ pub enum FindError {
     #[fail(display = "File is already present")]
     PresentFileError,
 }
+
+pub type Result<T> = ::std::result::Result<T, Error>;

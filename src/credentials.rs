@@ -1,7 +1,3 @@
-extern crate futures;
-extern crate rusoto_core;
-extern crate rusoto_credential;
-
 use futures::future::FutureResult;
 use futures::{Future, Poll};
 use rusoto_credential::{AwsCredentials, CredentialsError, ProvideAwsCredentials, StaticProvider};

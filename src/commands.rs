@@ -7,7 +7,6 @@ use credentials::*;
 use filter::Filter;
 use functions::*;
 use opts::*;
-use types::*;
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 

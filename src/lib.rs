@@ -20,5 +20,3 @@ pub mod error;
 pub mod filter;
 pub mod functions;
 pub mod opts;
-pub mod parse;
-pub mod types;

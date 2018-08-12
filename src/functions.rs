@@ -1,5 +1,3 @@
-extern crate rusoto_s3;
-
 use rusoto_s3::{
     Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
     ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3, S3Client, Tagging,
@@ -20,7 +18,6 @@ use futures::Future;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use error::*;
-use parse::*;
 
 pub fn fprint(bucket: &str, item: &Object) {
     println!(
@@ -55,7 +52,7 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     let scommand = command.replace("{}", key);
 
     let mut command_args = scommand.split(' ');
-    let command_name = command_args.next().ok_or(FindError::CommandlineParse)?;
+    let command_name = command_args.next().ok_or(FunctionError::CommandlineParse)?;
 
     let mut rcommand = Command::new(command_name);
     for arg in command_args {
@@ -123,7 +120,7 @@ pub fn s3_download(
 
         let size = (*object.size.as_ref().unwrap()) as u64;
         let file_path = Path::new(target).join(key);
-        let dir_path = file_path.parent().ok_or(FindError::ParentPathParse)?;
+        let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
 
         let mut count: u64 = 0;
         let pb = ProgressBar::new(size);
@@ -134,16 +131,16 @@ pub fn s3_download(
             "downloading: s3://{}/{} => {}",
             bucket,
             &key,
-            file_path.to_str().ok_or(FindError::FileNameParseError)?
+            file_path.to_str().ok_or(FunctionError::FileNameParseError)?
         );
 
         if file_path.exists() && !force {
-            return Err(FindError::PresentFileError.into());
+            return Err(FunctionError::PresentFileError.into());
         }
 
         let result = client.get_object(request).sync()?;
 
-        let mut stream = result.body.ok_or(FindError::S3FetchBodyError)?;
+        let mut stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
 
         fs::create_dir_all(&dir_path)?;
         let mut output = File::create(&file_path)?;
