@@ -1,3 +1,6 @@
 /target/
 **/*.rs.bk
 **/*.iml
+/.idea/
+.DS_Store
+cobertura.xml

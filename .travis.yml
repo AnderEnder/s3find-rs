@@ -12,10 +12,15 @@ matrix:
   allow_failures:
     - rust: nightly
   fast_finish: true
+env:
+  global:
+    - RUST_BACKTRACE=1
 script:
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
-      RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin
+      CARGO_TARGET_DIR="$(pwd)/target" \
+        RUSTFLAGS="--cfg procmacro2_semver_exempt" \
+        cargo install --force cargo-tarpaulin
       cargo tarpaulin --out Xml --no-count
       bash <(curl -s https://codecov.io/bash)
       echo "Uploaded code coverage"
@@ -24,6 +29,11 @@ script:
       cargo test --verbose --all
     fi
 before_deploy:
+  - |
+    if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
+      cargo package
+      cargo publish --token $CARGO_TOKEN
+    fi
   - cargo build --release
 #  - sudo bash -x ci/openssl.sh linux-x86_64 musl- -static
 #  - CC_x86_64_unknown_linux_musl=musl-gcc OPENSSL_STATIC=yes OPENSSL_LIB_DIR=/openssl/lib OPENSSL_INCLUDE_DIR=/openssl/include cargo build --release

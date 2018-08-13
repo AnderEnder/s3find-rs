@@ -1,30 +1,53 @@
 [package]
 name = "s3find"
-version = "0.1.0"
-description = "walk a s3 path hierarchy"
-authors = ["Andrii Radyk <andrii.m.radyk@gmail.com>"]
-
-[lib]
-name = "s3find"
-path = "src/lib.rs"
+authors = ["Andrii Radyk <ander.ender@gmail.com>"]
+version = "0.1.4"
+description = """
+walk a s3 path hierarchy.
+s3find is an analog of find for s3.
+"""
+documentation = "https://github.com/AnderEnder/s3find-rs"
+homepage = "https://github.com/AnderEnder/s3find-rs"
+repository = "https://github.com/AnderEnder/s3find-rs"
+readme = "README.md"
+keywords = [
+    "find",
+    "aws",
+    "s3",
+    "pattern",
+    "regex",
+]
+categories = ["command-line-utilities"]
+license = "BSD-2-Clause"
+exclude = [
+    ".travis.yml",
+    "ci/*",
+]
 
 [[bin]]
 name = "s3find"
 path = "src/bin/s3find.rs"
 
+[badges]
+travis-ci = { repository = "AnderEnder/s3find-rs"}
+codecov = { repository = "AnderEnder/s3find-rs" }
+
 [dependencies]
 rusoto_core = "0.33"
 rusoto_s3 = "0.33"
 rusoto_credential = "0.12.0"
-#rusoto_mock = "0.26.0"
 structopt = "0.2"
-clap = "2.31"
 glob = "0.2"
 regex = "1"
 failure = "0.1"
 chrono = "0.4"
 futures = "0.1"
 indicatif = "0.9"
+
+[dependencies.clap]
+version = "2.31"
+default-features = false
+features = [ "suggestions", "color" ]
 
 [profile.release]
 lto = true
