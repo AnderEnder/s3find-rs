@@ -1,6 +1,8 @@
 # s3find
 [![build status](https://travis-ci.org/AnderEnder/s3find-rs.svg?branch=master)](https://travis-ci.org/AnderEnder/s3find-rs)
 [![codecov](https://codecov.io/gh/AnderEnder/s3find-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/AnderEnder/s3find-rs)
+[![Crates.io](https://img.shields.io/crates/v/s3find.svg)](https://crates.io/crates/s3find)
+
 
 Utility to walk a S3 hierarchy. An analog of find for AWS S3.
 
@@ -188,6 +190,9 @@ cargo build --release
 # Install from local source
 cargo install
 
-# Install from git
+# Install latest from git
 cargo install --git https://github.com/AnderEnder/s3find-rs
+
+# Install from crate package
+cargo install s3find
 ```
