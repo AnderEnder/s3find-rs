@@ -8,8 +8,6 @@ use credential::*;
 use filter::Filter;
 use function::*;
 
-pub type Result<T> = ::std::result::Result<T, Error>;
-
 pub struct FilterList(pub Vec<Box<Filter>>);
 
 impl FilterList {
@@ -34,7 +32,7 @@ pub struct FindCommand {
 
 impl FindCommand {
     #![allow(unreachable_patterns)]
-    pub fn exec(&self, list: &[&Object]) -> Result<()> {
+    pub fn exec(&self, list: &[&Object]) -> Result<(), Error> {
         match (*self).command {
             Some(Cmd::Print) => {
                 let _nlist: Vec<_> = list
@@ -147,4 +145,27 @@ impl From<FindTag> for Tag {
             value: tag.value,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_findtag() -> Result<(), Error> {
+        let tag: Tag = FindTag {
+            key: "tag".to_owned(),
+            value: "val".to_owned(),
+        }.into();
+
+        assert_eq!(
+            tag,
+            Tag {
+                key: "tag".to_owned(),
+                value: "val".to_owned()
+            }
+        );
+        Ok(())
+    }
+
 }

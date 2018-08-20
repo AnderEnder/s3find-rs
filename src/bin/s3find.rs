@@ -1,14 +1,16 @@
+extern crate failure;
 extern crate rusoto_s3;
 extern crate s3find;
 extern crate structopt;
 
+use failure::Error;
 use rusoto_s3::*;
 use structopt::StructOpt;
 
 use s3find::arg::*;
 use s3find::command::*;
 
-fn main() -> Result<()> {
+fn main() -> Result<(), Error> {
     let status_opts = FindOpt::from_args();
 
     let status: FindCommand = status_opts.clone().into();
