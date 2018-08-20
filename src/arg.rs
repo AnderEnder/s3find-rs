@@ -11,14 +11,24 @@ use structopt::clap::AppSettings;
     name = "s3find",
     raw(
         global_settings = "&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]"
-    )
+    ),
+    after_help = r#"
+The authorization flow is the following chain:
+  * use credentials from arguments provided by users
+  * use environment variable credentials: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+  * use credentials via aws file profile.
+    Profile can be set via environment variable AWS_PROFILE
+    Profile file can be set via environment variable AWS_SHARED_CREDENTIALS_FILE
+  * use AWS instance IAM profile
+  * use AWS container IAM profile
+"#
 )]
 pub struct FindOpt {
     /// S3 path to walk through. It should be s3://bucket/path
     #[structopt(name = "path")] //, raw(index = r#"1"#))]
     pub path: S3path,
 
-    /// AWS access key. Unrequired
+    /// AWS access key. Unrequired.
     #[structopt(
         name = "aws_access_key",
         long = "aws-access-key",
@@ -50,11 +60,12 @@ pub struct FindOpt {
     #[structopt(name = "rpatern", long = "regex", raw(number_of_values = "1"))]
     pub regex: Vec<Regex>,
 
+    /// Modification time for match
     #[structopt(
         name = "time",
         long = "mtime",
         raw(number_of_values = "1", allow_hyphen_values = "true"),
-        help = r#"Modification time for match, a time period:
+        long_help = r#"Modification time for match, a time period:
     +5d - for period from now-5d to now
     -5d - for period  before now-5d
 
@@ -69,11 +80,12 @@ Can be multiple, but should be overlaping"#
     )]
     pub mtime: Vec<FindTime>,
 
+    /// File size for match
     #[structopt(
         name = "bytes_size",
         long = "size",
         raw(number_of_values = "1", allow_hyphen_values = "true"),
-        help = r#"File size for match:
+        long_help = r#"File size for match:
     5k - exact match 5k,
     +5k - bigger than 5k,
     -5k - smaller than 5k,
@@ -365,160 +377,45 @@ mod tests {
 
     #[test]
     fn size_corect() {
-        let size_str = "1111";
-        let size = size_str.parse::<FindSize>();
-
-        assert_eq!(size.ok(), Some(FindSize::Equal(1111)), "should be equal");
+        assert_eq!("11".parse().ok(), Some(FindSize::Equal(11)));
+        assert_eq!("11k".parse().ok(), Some(FindSize::Equal(11 * 1024)));
+        assert_eq!("11M".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(2))));
+        assert_eq!("11G".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(3))));
+        assert_eq!("11T".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(4))));
+        assert_eq!("11P".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(5))));
+        assert_eq!("+11".parse().ok(), Some(FindSize::Bigger(11)));
+        assert_eq!("+11k".parse().ok(), Some(FindSize::Bigger(11 * 1024)));
+        assert_eq!("-11".parse().ok(), Some(FindSize::Lower(11)));
+        assert_eq!("-11k".parse().ok(), Some(FindSize::Lower(11 * 1024)));
     }
 
     #[test]
-    fn size_corect_k() {
-        let size_str = "1111k";
-        let size = size_str.parse::<FindSize>();
-
-        assert_eq!(
-            size.ok(),
-            Some(FindSize::Equal(1111 * 1024)),
-            "should be equal"
-        );
-    }
-
-    #[test]
-    fn size_corect_positive() {
-        let size_str = "+1111";
-        let size = size_str.parse::<FindSize>();
-
-        assert_eq!(size.ok(), Some(FindSize::Bigger(1111)), "should be upper");
-    }
-
-    #[test]
-    fn size_corect_positive_k() {
-        let size_str = "+1111k";
-        let size = size_str.parse::<FindSize>();
-
-        assert_eq!(
-            size.ok(),
-            Some(FindSize::Bigger(1111 * 1024)),
-            "should be upper"
-        );
-    }
-
-    #[test]
-    fn size_corect_negative() {
-        let size_str = "-1111";
-        let size = size_str.parse::<FindSize>();
-
-        assert_eq!(size.ok(), Some(FindSize::Lower(1111)), "should be lower");
-    }
-
-    #[test]
-    fn size_corect_negative_k() {
-        let size_str = "-1111k";
-        let size = size_str.parse::<FindSize>();
-
-        assert_eq!(
-            size.ok(),
-            Some(FindSize::Lower(1111 * 1024)),
-            "should be lower"
-        );
-    }
-
-    #[test]
-    fn size_incorect_negative() {
-        let size_str = "-";
-        let size = size_str.parse::<FindSize>();
-
-        assert!(size.is_err(), "Should be error");
-    }
-
-    #[test]
-    fn size_incorect_negative_s() {
-        let size_str = "-123w";
-        let size = size_str.parse::<FindSize>();
-
-        assert!(size.is_err(), "Should be error");
+    fn size_incorect() {
+        assert!("-".parse::<FindSize>().is_err());
+        assert!("-123w".parse::<FindSize>().is_err());
     }
 
     #[test]
     fn time_corect() {
-        let time_str = "1111";
-        let time = time_str.parse::<FindTime>();
+        assert_eq!("11".parse().ok(), Some(FindTime::Upper(11)));
+        assert_eq!("11s".parse().ok(), Some(FindTime::Upper(11)));
+        assert_eq!("11m".parse().ok(), Some(FindTime::Upper(11 * 60)));
+        assert_eq!("11h".parse().ok(), Some(FindTime::Upper(11 * 3600)));
+        assert_eq!("11d".parse().ok(), Some(FindTime::Upper(11 * 3600 * 24)));
+        assert_eq!("11w".parse().ok(), Some(FindTime::Upper(11 * 3600 * 24 * 7)));
+        assert_eq!("+11".parse().ok(), Some(FindTime::Upper(11)));
+        assert_eq!("+11m".parse().ok(), Some(FindTime::Upper(11 * 60)));
+        assert_eq!("-11m".parse().ok(), Some(FindTime::Lower(11 * 60)));
+        assert_eq!("-11".parse().ok(), Some(FindTime::Lower(11)));
 
-        assert!(time.is_ok(), "Should be ok");
-        assert_eq!(time.ok(), Some(FindTime::Upper(1111)), "Should be upper");
     }
 
     #[test]
-    fn time_corect_m() {
-        let time_str = "10m";
-        let time = time_str.parse::<FindTime>();
-
-        assert!(time.is_ok(), "Should be ok");
-        assert_eq!(time.ok(), Some(FindTime::Upper(600)), "Should be upper");
-    }
-
-    #[test]
-    fn time_corect_positive() {
-        let time_str = "+1111";
-        let time = time_str.parse::<FindTime>();
-
-        assert!(time.is_ok(), "Should be ok");
-        assert_eq!(time.ok(), Some(FindTime::Upper(1111)), "Should be upper");
-    }
-
-    #[test]
-    fn time_corect_positive_m() {
-        let time_str = "+10m";
-        let time = time_str.parse::<FindTime>();
-
-        assert!(time.is_ok(), "Should be ok");
-        assert_eq!(time.ok(), Some(FindTime::Upper(600)), "Should be upper");
-    }
-
-    #[test]
-    fn time_corect_negative_m() {
-        let time_str = "-10m";
-        let time = time_str.parse::<FindTime>();
-
-        assert!(time.is_ok(), "Should be ok");
-        assert_eq!(time.ok(), Some(FindTime::Lower(600)), "Should be upper");
-    }
-
-    #[test]
-    fn time_corect_negative() {
-        let time_str = "-1111";
-        let time = time_str.parse::<FindTime>();
-
-        assert!(time.is_ok(), "Should be ok");
-        assert_eq!(time.ok(), Some(FindTime::Lower(1111)), "Should be lower");
-    }
-
-    #[test]
-    fn time_incorect_negative() {
-        let time_str = "-";
-        let time = time_str.parse::<FindTime>();
-        assert!(time.is_err(), "Should be error");
-    }
-
-    #[test]
-    fn time_incorect_negative_t() {
-        let time_str = "-10t";
-        let time = time_str.parse::<FindTime>();
-        assert!(time.is_err(), "Should be error");
-    }
-
-    #[test]
-    fn time_incorect_positive() {
-        let time_str = "+";
-        let time = time_str.parse::<FindTime>();
-        assert!(time.is_err(), "Should be error");
-    }
-
-    #[test]
-    fn time_incorect_positive_t() {
-        let time_str = "+10t";
-        let time = time_str.parse::<FindTime>();
-        assert!(time.is_err(), "Should be error");
+    fn time_incorect() {
+        assert!("-".parse::<FindTime>().is_err());
+        assert!("-10t".parse::<FindTime>().is_err());
+        assert!("+".parse::<FindTime>().is_err());
+        assert!("+10t".parse::<FindTime>().is_err());
     }
 
     #[test]
@@ -532,23 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn tag_incorect_1() {
-        let str = "tag1value2";
-        let time = str.parse::<FindTag>();
-        assert!(time.is_err(), "Should not be parsed");
-    }
-
-    #[test]
-    fn tag_incorect_2() {
-        let str = "tag1:value2:";
-        let time = str.parse::<FindTag>();
-        assert!(time.is_err(), "Should not be parsed");
-    }
-
-    #[test]
-    fn tag_incorect_3() {
-        let str = ":";
-        let time = str.parse::<FindTag>();
-        assert!(time.is_err(), "Should not be parsed");
+    fn tag_incorect() {
+        assert!("tag1value2".parse::<FindTag>().is_err());
+        assert!("tag1:value2:".parse::<FindTag>().is_err());
+        assert!(":".parse::<FindTag>().is_err());
     }
 }
