@@ -420,12 +420,10 @@ mod tests {
 
     #[test]
     fn tag_ok() {
-        let str = "tag1:value2";
-        let tag = str.parse::<FindTag>();
-        assert!(tag.is_ok(), "Should be ok");
-        let ftag = tag.unwrap();
-        assert_eq!(ftag.key, "tag1", "Should be tag1");
-        assert_eq!(ftag.value, "value2", "Should be value2");
+        assert_eq!(
+            "tag1:value2".parse().ok(),
+            Some(FindTag { key: "tag1".to_owned(), value: "value2".to_owned() })
+        );
     }
 
     #[test]
