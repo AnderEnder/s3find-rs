@@ -126,8 +126,8 @@ pub fn s3_download(
         let mut count: u64 = 0;
         let pb = ProgressBar::new(size);
         pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .progress_chars("#>-"));
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .progress_chars("#>-"));
         println!(
             "downloading: s3://{}/{} => {}",
             bucket,
@@ -306,7 +306,7 @@ mod tests {
             size: Some(4997288),
             storage_class: Some("STANDARD".to_string()),
         };
+
         advanced_print("bucket", &object);
     }
-
 }

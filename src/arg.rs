@@ -45,8 +45,8 @@ pub struct FindOpt {
     pub aws_secret_key: Option<String>,
 
     /// The region to use. Default value is us-east-1
-    #[structopt(name = "aws_region", long = "aws-region")]
-    pub aws_region: Option<Region>,
+    #[structopt(name = "aws_region", long = "aws-region", default_value="us-east-1")]
+    pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
     #[structopt(name = "npatern", long = "name", raw(number_of_values = "1"))]

@@ -8,10 +8,11 @@ use credential::*;
 use filter::Filter;
 use function::*;
 
+
 pub struct FilterList(pub Vec<Box<Filter>>);
 
 impl FilterList {
-    pub fn filters(&self, object: &Object) -> bool {
+    pub fn test_match(&self, object: &Object) -> bool {
         for item in &self.0 {
             if !item.filter(object) {
                 return false;
@@ -93,9 +94,10 @@ impl FindCommand {
 
 impl From<FindOpt> for FindCommand {
     fn from(opts: FindOpt) -> FindCommand {
-        let region = opts.aws_region.clone().unwrap_or_default();
+        let region = opts.aws_region.clone();
         let provider =
             CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
+
         let dispatcher = HttpClient::new().unwrap();
 
         let client = S3Client::new_with(dispatcher, provider, region.clone());
@@ -150,6 +152,8 @@ impl From<FindTag> for Tag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex::Regex;
+    use std::str::FromStr;
 
     #[test]
     fn from_findtag() -> Result<(), Error> {
@@ -162,10 +166,52 @@ mod tests {
             tag,
             Tag {
                 key: "tag".to_owned(),
-                value: "val".to_owned()
+                value: "val".to_owned(),
             }
         );
         Ok(())
     }
 
+    #[test]
+    fn from_findopt_to_findcommand() {
+        let find: FindCommand = FindOpt {
+            path: S3path {
+                bucket: "bucket".to_owned(),
+                prefix: Some("prefix".to_owned()),
+            },
+            aws_access_key: Some("access".to_owned()),
+            aws_secret_key: Some("secret".to_owned()),
+            aws_region: Region::UsEast1,
+            name: vec![NameGlob::from_str("*ref*").unwrap()],
+            iname: vec![InameGlob::from_str("Pre*").unwrap()],
+            regex: vec![Regex::from_str("^pre").unwrap()],
+            mtime: Vec::new(),
+            size: vec![FindSize::Lower(1000)],
+            cmd: Some(Cmd::Ls),
+        }.into();
+
+        assert_eq!(
+            find.path,
+            S3path {
+                bucket: "bucket".to_owned(),
+                prefix: Some("prefix".to_owned()),
+            }
+        );
+        assert_eq!(find.region, Region::UsEast1);
+        assert_eq!(find.command, Some(Cmd::Ls));
+
+        let object_ok = Object {
+            key: Some("pref".to_owned()),
+            size: Some(10),
+            ..Default::default()
+        };
+        assert!(find.filters.test_match(&object_ok));
+
+        let object_fail = Object {
+            key: Some("Refer".to_owned()),
+            size: Some(10),
+            ..Default::default()
+        };
+        assert!(!find.filters.test_match(&object_fail));
+    }
 }

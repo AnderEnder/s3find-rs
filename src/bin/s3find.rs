@@ -20,7 +20,7 @@ fn main() -> Result<(), Error> {
         let output = status.client.list_objects_v2(request.clone()).sync()?;
         match output.contents {
             Some(klist) => {
-                let flist: Vec<_> = klist.iter().filter(|x| status.filters.filters(x)).collect();
+                let flist: Vec<_> = klist.iter().filter(|x| status.filters.test_match(x)).collect();
                 status.exec(&flist)?;
 
                 match output.next_continuation_token {
