@@ -10,9 +10,9 @@ pub enum FindError {
     CommandlineParse,
     #[fail(display = "Invalid path value")]
     ParentPathParse,
-	#[fail(display = "Cannot parse tag")]
-	TagParseError,
-	#[fail(display = "Cannot parse tag key")]
+    #[fail(display = "Cannot parse tag")]
+    TagParseError,
+    #[fail(display = "Cannot parse tag key")]
     TagKeyParseError,
     #[fail(display = "Cannot parse tag value")]
     TagValueParseError,
