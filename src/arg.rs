@@ -181,17 +181,16 @@ impl FromStr for S3path {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<S3path, Error> {
-        let s3_vec: Vec<&str> = s.split('/').collect();
-        let bucket = s3_vec.get(2).unwrap_or(&"");
-        let prefix = s3_vec.get(3).map(|x| x.to_owned());
+        let regex = Regex::new(r#"s3://([\d\w _-]*)(/([\d\w _-]*))?"#).unwrap();
+        let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
-        let is_validated =
-            (s3_vec.get(0) == Some(&"s3:")) && (s3_vec.get(1) == Some(&"")) && (bucket != &"");
+        let bucket = captures.get(1).map(|x| x.as_str()).ok_or(FindError::S3Parse)?;
+        let prefix = captures.get(3).map(|x|x.as_str().to_owned());
 
-        if is_validated {
+        if bucket != "" {
             Ok(S3path {
-                bucket: bucket.to_string(),
-                prefix: prefix.map(|x| (*x).to_string()),
+                bucket: bucket.to_owned(),
+                prefix: prefix,
             })
         } else {
             Err(FindError::S3Parse.into())
