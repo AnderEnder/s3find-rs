@@ -1,7 +1,3 @@
-extern crate futures;
-extern crate rusoto_core;
-extern crate rusoto_credential;
-
 use futures::future::FutureResult;
 use futures::{Future, Poll};
 use rusoto_credential::{AwsCredentials, CredentialsError, ProvideAwsCredentials, StaticProvider};
@@ -15,9 +11,8 @@ pub enum CombinedProvider {
 impl CombinedProvider {
     pub fn new(access_key: Option<String>, secret_key: Option<String>) -> CombinedProvider {
         match (access_key, secret_key) {
-            (Some(aws_access_key), Some(aws_secret_key)) => {
-                CombinedProvider::with_credentials(aws_access_key, aws_secret_key)
-            }
+            (Some(aws_access_key), Some(aws_secret_key)) =>
+                CombinedProvider::with_credentials(aws_access_key, aws_secret_key),
             _ => CombinedProvider::with_default(),
         }
     }

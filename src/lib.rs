@@ -14,9 +14,9 @@ extern crate rusoto_core;
 extern crate rusoto_credential;
 extern crate rusoto_s3;
 
-pub mod commands;
-pub mod credentials;
-pub mod functions;
-pub mod types;
-pub mod opts;
+pub mod arg;
+pub mod command;
+pub mod credential;
 pub mod error;
+pub mod filter;
+pub mod function;

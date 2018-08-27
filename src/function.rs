@@ -1,5 +1,3 @@
-extern crate rusoto_s3;
-
 use rusoto_s3::{
     Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
     ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3, S3Client, Tagging,
@@ -14,12 +12,12 @@ use std::path::Path;
 
 use rusoto_core::Region;
 
+use failure::Error;
 use futures::stream::Stream;
 use futures::Future;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use types::*;
 use error::*;
 
 pub fn fprint(bucket: &str, item: &Object) {
@@ -51,11 +49,11 @@ pub struct ExecStatus {
     pub runcommand: String,
 }
 
-pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
+pub fn exec(command: &str, key: &str) -> Result<ExecStatus, Error> {
     let scommand = command.replace("{}", key);
 
     let mut command_args = scommand.split(' ');
-    let command_name = command_args.next().ok_or(FindError::CommandlineParse)?;
+    let command_name = command_args.next().ok_or(FunctionError::CommandlineParse)?;
 
     let mut rcommand = Command::new(command_name);
     for arg in command_args {
@@ -72,9 +70,9 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus> {
     })
 }
 
-pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()>
-{
-    let key_list: Vec<_> = list.iter()
+pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
+    let key_list: Vec<_> = list
+        .iter()
         .map(|x| ObjectIdentifier {
             key: x.key.as_ref().unwrap().to_string(),
             version_id: None,
@@ -112,8 +110,7 @@ pub fn s3_download(
     list: &[&Object],
     target: &str,
     force: bool,
-) -> Result<()>
-{
+) -> Result<(), Error> {
     for object in list {
         let key = object.key.as_ref().unwrap();
         let request = GetObjectRequest {
@@ -124,29 +121,27 @@ pub fn s3_download(
 
         let size = (*object.size.as_ref().unwrap()) as u64;
         let file_path = Path::new(target).join(key);
-        let dir_path = file_path.parent().ok_or(FindError::ParentPathParse)?;
+        let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
 
         let mut count: u64 = 0;
         let pb = ProgressBar::new(size);
         pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .progress_chars("#>-"));
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .progress_chars("#>-"));
         println!(
             "downloading: s3://{}/{} => {}",
             bucket,
             &key,
-            file_path.to_str().ok_or(FindError::FileNameParseError)?
+            file_path.to_str().ok_or(FunctionError::FileNameParseError)?
         );
 
         if file_path.exists() && !force {
-            return Err(FindError::PresentFileError.into());
+            return Err(FunctionError::PresentFileError.into());
         }
 
         let result = client.get_object(request).sync()?;
 
-        let mut stream = result
-            .body
-            .ok_or(FindError::S3FetchBodyError)?;
+        let mut stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
 
         fs::create_dir_all(&dir_path)?;
         let mut output = File::create(&file_path)?;
@@ -169,8 +164,7 @@ pub fn s3_set_tags(
     bucket: &str,
     list: &[&Object],
     tags: &Tagging,
-) -> Result<()>
-{
+) -> Result<(), Error> {
     for object in list {
         let key = object.key.as_ref().unwrap();
 
@@ -189,8 +183,7 @@ pub fn s3_set_tags(
     Ok(())
 }
 
-pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()>
-{
+pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     for object in list {
         let key = object.key.as_ref().unwrap();
 
@@ -232,8 +225,7 @@ pub fn s3_set_public(
     bucket: &str,
     list: &[&Object],
     region: &Region,
-) -> Result<()>
-{
+) -> Result<(), Error> {
     let region_str = region.name();
     for object in list {
         let key = object.key.as_ref().unwrap();
@@ -255,7 +247,6 @@ pub fn s3_set_public(
 
 #[cfg(test)]
 mod tests {
-    use rusoto_s3::*;
     use super::*;
 
     #[test]
@@ -315,7 +306,7 @@ mod tests {
             size: Some(4997288),
             storage_class: Some("STANDARD".to_string()),
         };
+
         advanced_print("bucket", &object);
     }
-
 }
