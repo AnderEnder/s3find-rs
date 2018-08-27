@@ -181,20 +181,16 @@ impl FromStr for S3path {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<S3path, Error> {
-        let regex = Regex::new(r#"s3://([\d\w _-]*)(/([\d\w _-]*))?"#).unwrap();
+        let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w _-]*))?"#).unwrap();
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
-        let bucket = captures.get(1).map(|x| x.as_str()).ok_or(FindError::S3Parse)?;
+        let bucket = captures.get(1).map(|x| x.as_str().to_owned()).ok_or(FindError::S3Parse)?;
         let prefix = captures.get(3).map(|x|x.as_str().to_owned());
 
-        if bucket != "" {
-            Ok(S3path {
-                bucket: bucket.to_owned(),
-                prefix: prefix,
-            })
-        } else {
-            Err(FindError::S3Parse.into())
-        }
+        Ok(S3path {
+            bucket,
+            prefix,
+        })
     }
 }
 
@@ -313,65 +309,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn s3path_corect() {
-        let url = "s3://testbucket/";
-        let path: S3path = url.parse().unwrap();
-        assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
+    fn s3path_correct() {
         assert_eq!(
-            path.prefix,
-            Some("".to_string()),
-            "This should be empty path"
+            "s3://testbucket/".parse().ok(),
+            Some(S3path {
+                bucket: "testbucket".to_owned(),
+                prefix: Some("".to_owned()),
+            })
         );
-    }
 
-    #[test]
-    fn s3path_correct_full() {
-        let url = "s3://testbucket/path";
-        let path: S3path = url.parse().unwrap();
-        assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
         assert_eq!(
-            path.prefix,
-            Some("path".to_string()),
-            "This should be 'path'"
+            "s3://testbucket/path".parse().ok(),
+            Some(S3path {
+                bucket: "testbucket".to_owned(),
+                prefix: Some("path".to_owned())
+            })
+        );
+
+        assert_eq!(
+            "s3://testbucket".parse().ok(),
+            Some(S3path {
+                bucket: "testbucket".to_owned(),
+                prefix: None
+            })
         );
     }
 
     #[test]
-    fn s3path_correct_short() {
-        let url = "s3://testbucket";
-        let path: S3path = url.parse().unwrap();
-        assert_eq!(path.bucket, "testbucket", "This should be 'testbucket'");
-        assert_eq!(path.prefix, None, "This should be None");
-    }
-
-    #[test]
-    fn s3path_only_bucket() {
-        let url = "testbucket";
-        let path: Result<S3path, Error> = url.parse();
-        assert!(
-            path.is_err(),
-            "This s3 url should not be validated posivitely"
-        );
-    }
-
-    #[test]
-    fn s3path_without_bucket() {
-        let url = "s3://";
-        let path: Result<S3path, Error> = url.parse();
-        assert!(
-            path.is_err(),
-            "This s3 url should not be validated posivitely"
-        );
-    }
-
-    #[test]
-    fn s3path_without_2_slash() {
-        let url = "s3:/testbucket";
-        let path: Result<S3path, Error> = url.parse();
-        assert!(
-            path.is_err(),
-            "This s3 url should not be validated posivitely"
-        );
+    fn s3path_incorrect() {
+        assert!("testbucket".parse::<S3path>().is_err());
+        assert!("s3://".parse::<S3path>().is_err());
+        assert!("s3:/testbucket".parse::<S3path>().is_err());
+        assert!("://testbucket".parse::<S3path>().is_err());
     }
 
     #[test]
