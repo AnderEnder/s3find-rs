@@ -13,42 +13,62 @@ USAGE:
     s3find [OPTIONS] <path> [SUBCOMMAND]
 
 FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
+    -h, --help
+            Prints help information
+
+    -V, --version
+            Prints version information
+
 
 OPTIONS:
-        --aws-access-key <aws_access_key>    AWS access key. Unrequired
-        --aws-region <aws_region>            The region to use. Default value is us-east-1
-        --aws-secret-key <aws_secret_key>    AWS secret key. Unrequired
-        --size <bytes_size>...               File size for match:
-                                                 5k - exact match 5k,
-                                                 +5k - bigger than 5k,
-                                                 -5k - smaller than 5k,
+        --aws-access-key <aws_access_key>
+            AWS access key. Unrequired.
 
-                                             Possible file size units are as follows:
-                                                 k - kilobytes (1024 bytes)
-                                                 M - megabytes (1024 kilobytes)
-                                                 G - gigabytes (1024 megabytes)
-                                                 T - terabytes (1024 gigabytes)
-                                                 P - petabytes (1024 terabytes)
-        --iname <ipatern>...                 Case-insensitive glob pattern for match, can be multiple
-        --name <npatern>...                  Glob pattern for match, can be multiple
-        --regex <rpatern>...                 Regex pattern for match, can be multiple
-        --mtime <time>...                    Modification time for match, a time period:
-                                                 +5d - for period from now-5d to now
-                                                 -5d - for period  before now-5d
+        --aws-region <aws_region>
+            The region to use. Default value is us-east-1 [default: us-east-1]
 
-                                             Possible time units are as follows:
-                                                 s - seconds
-                                                 m - minutes
-                                                 h - hours
-                                                 d - days
-                                                 w - weeks
+        --aws-secret-key <aws_secret_key>
+            AWS secret key. Unrequired
 
-                                             Can be multiple, but should be overlaping
+        --size <bytes_size>...
+            File size for match:
+                5k - exact match 5k,
+                +5k - bigger than 5k,
+                -5k - smaller than 5k,
+
+            Possible file size units are as follows:
+                k - kilobytes (1024 bytes)
+                M - megabytes (1024 kilobytes)
+                G - gigabytes (1024 megabytes)
+                T - terabytes (1024 gigabytes)
+                P - petabytes (1024 terabytes)
+        --iname <ipatern>...
+            Case-insensitive glob pattern for match, can be multiple
+
+        --name <npatern>...
+            Glob pattern for match, can be multiple
+
+        --regex <rpatern>...
+            Regex pattern for match, can be multiple
+
+        --mtime <time>...
+            Modification time for match, a time period:
+                +5d - for period from now-5d to now
+                -5d - for period  before now-5d
+
+            Possible time units are as follows:
+                s - seconds
+                m - minutes
+                h - hours
+                d - days
+                w - weeks
+
+            Can be multiple, but should be overlaping
 
 ARGS:
-    <path>    S3 path to walk through. It should be s3://bucket/path
+    <path>
+            S3 path to walk through. It should be s3://bucket/path
+
 
 SUBCOMMANDS:
     -delete      Delete matched keys
@@ -60,6 +80,16 @@ SUBCOMMANDS:
     -public      Make the matched keys public available (readonly)
     -tags        Set the tags(overwrite) for the matched keys
     help         Prints this message or the help of the given subcommand(s)
+
+
+The authorization flow is the following chain:
+  * use credentials from arguments provided by users
+  * use environment variable credentials: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+  * use credentials via aws file profile.
+    Profile can be set via environment variable AWS_PROFILE
+    Profile file can be set via environment variable AWS_SHARED_CREDENTIALS_FILE
+  * use AWS instance IAM profile
+  * use AWS container IAM profile
 ```
 
 ## Examples
