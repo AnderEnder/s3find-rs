@@ -34,7 +34,7 @@ travis-ci = { repository = "AnderEnder/s3find-rs"}
 codecov = { repository = "AnderEnder/s3find-rs" }
 
 [dependencies]
-rusoto_core = "0.33"
+rusoto_core = "0.34"
 rusoto_s3 = "0.33"
 rusoto_credential = "0.12"
 structopt = "0.2"
@@ -52,7 +52,7 @@ features = [ "suggestions", "color" ]
 
 [build-dependencies]
 version_check = "0.1"
-rusoto_core = "0.33"
+rusoto_core = "0.34"
 structopt = "0.2"
 clap = "2"
 glob = "0.2"
