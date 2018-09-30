@@ -1,6 +1,6 @@
 use rusoto_s3::{
-    Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
-    ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3Client, Tagging, S3,
+    CopyObjectRequest, Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest,
+    Object, ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3Client, Tagging, S3,
 };
 use std::process::Command;
 use std::process::ExitStatus;
@@ -114,14 +114,17 @@ pub fn s3_download(
     force: bool,
 ) -> Result<(), Error> {
     for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
+        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
         let request = GetObjectRequest {
             bucket: bucket.to_owned(),
             key: key.to_owned(),
             ..Default::default()
         };
 
-        let size = (*object.size.as_ref().ok_or(FunctionError::S3MetaAbsent)?) as u64;
+        let size = (*object
+            .size
+            .as_ref()
+            .ok_or(FunctionError::ObjectFieldError)?) as u64;
         let file_path = Path::new(target).join(key);
         let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
 
@@ -169,7 +172,7 @@ pub fn s3_set_tags(
     tags: &Tagging,
 ) -> Result<(), Error> {
     for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
+        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
         let request = PutObjectTaggingRequest {
             bucket: bucket.to_owned(),
@@ -188,7 +191,7 @@ pub fn s3_set_tags(
 
 pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
+        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
         let request = GetObjectTaggingRequest {
             bucket: bucket.to_owned(),
@@ -231,7 +234,7 @@ pub fn s3_set_public(
 ) -> Result<(), Error> {
     let region_str = region.name();
     for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
+        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
         let request = PutObjectAclRequest {
             bucket: bucket.to_owned(),
@@ -243,6 +246,38 @@ pub fn s3_set_public(
         client.put_object_acl(request).sync()?;
         let url = s3_public_url(key, bucket, region_str);
         println!("{} {}", &key, url);
+    }
+
+    Ok(())
+}
+
+pub fn s3_copy(
+    client: &S3Client,
+    bucket: &str,
+    list: &[&Object],
+    target_bucket: &str,
+    target_path: &str,
+) -> Result<(), Error> {
+    for object in list {
+        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
+
+        let target_key = Path::new(target_path).join(key);
+        let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
+        let source_path = format!("{}/{}", bucket, key);
+
+        println!(
+            "copying: s3://{} => s3://{}/{}",
+            source_path, target_bucket, target_key_str,
+        );
+
+        let request = CopyObjectRequest {
+            bucket: target_bucket.to_owned(),
+            key: target_key_str.to_owned(),
+            copy_source: source_path,
+            ..Default::default()
+        };
+
+        client.copy_object(request).sync()?;
     }
 
     Ok(())

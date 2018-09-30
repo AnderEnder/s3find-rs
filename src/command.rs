@@ -67,6 +67,13 @@ impl FindCommand {
             Some(Cmd::Public) => {
                 s3_set_public(&self.client, &self.path.bucket, list, &self.region)?
             }
+            Some(Cmd::Copy { destination: ref d }) => s3_copy(
+                &self.client,
+                &self.path.bucket,
+                &list,
+                &d.bucket,
+                &d.clone().prefix.unwrap_or_default(),
+            )?,
             Some(_) => println!("Not implemented"),
             None => {
                 let _nlist: Vec<_> = list.iter().map(|x| fprint(&self.path.bucket, x)).collect();
