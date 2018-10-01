@@ -73,9 +73,15 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus, Error> {
 pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     let key_list: Vec<_> = list
         .iter()
-        .map(|x| ObjectIdentifier {
-            key: x.key.as_ref().unwrap().to_string(),
-            version_id: None,
+        .flat_map(|x| {
+            match x.key.as_ref() {
+               Some(key) => Some(
+                    ObjectIdentifier {
+                        key: key.to_string(),
+                        version_id: None,
+                    }),
+                _ => None
+            }
         })
         .collect();
 
@@ -112,14 +118,14 @@ pub fn s3_download(
     force: bool,
 ) -> Result<(), Error> {
     for object in list {
-        let key = object.key.as_ref().unwrap();
+        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
         let request = GetObjectRequest {
             bucket: bucket.to_owned(),
             key: key.to_owned(),
             ..Default::default()
         };
 
-        let size = (*object.size.as_ref().unwrap()) as u64;
+        let size = (*object.size.as_ref().ok_or(FunctionError::S3MetaAbsent)?) as u64;
         let file_path = Path::new(target).join(key);
         let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
 
@@ -166,7 +172,7 @@ pub fn s3_set_tags(
     tags: &Tagging,
 ) -> Result<(), Error> {
     for object in list {
-        let key = object.key.as_ref().unwrap();
+        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
 
         let request = PutObjectTaggingRequest {
             bucket: bucket.to_owned(),
@@ -185,7 +191,7 @@ pub fn s3_set_tags(
 
 pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     for object in list {
-        let key = object.key.as_ref().unwrap();
+        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
 
         let request = GetObjectTaggingRequest {
             bucket: bucket.to_owned(),
@@ -228,7 +234,7 @@ pub fn s3_set_public(
 ) -> Result<(), Error> {
     let region_str = region.name();
     for object in list {
-        let key = object.key.as_ref().unwrap();
+        let key = object.key.as_ref().ok_or(FunctionError::S3MetaAbsent)?;
 
         let request = PutObjectAclRequest {
             bucket: bucket.to_owned(),

@@ -48,7 +48,7 @@ impl FindCommand {
                 let _nlist: Vec<_> = list
                     .iter()
                     .map(|x| {
-                        let key = x.key.as_ref().unwrap();
+                        let key = x.key.as_ref().map(|x| x.as_str()).unwrap_or("");
                         let path = format!("s3://{}/{}", &self.path.bucket, key);
                         exec(&p, &path)
                     })
