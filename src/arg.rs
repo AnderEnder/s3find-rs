@@ -181,7 +181,7 @@ impl FromStr for S3path {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<S3path, Error> {
-        let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w _-]*))?"#).unwrap();
+        let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#).unwrap();
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
         let bucket = captures.get(1).map(|x| x.as_str().to_owned()).ok_or(FindError::S3Parse)?;
