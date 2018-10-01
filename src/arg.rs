@@ -327,6 +327,14 @@ mod tests {
         );
 
         assert_eq!(
+            "s3://testbucket/multi/path".parse().ok(),
+            Some(S3path {
+                bucket: "testbucket".to_owned(),
+                prefix: Some("multi/path".to_owned())
+            })
+        );
+
+        assert_eq!(
             "s3://testbucket".parse().ok(),
             Some(S3path {
                 bucket: "testbucket".to_owned(),
