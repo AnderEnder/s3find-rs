@@ -22,7 +22,7 @@ script:
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
       export CARGO_TARGET_DIR="$(pwd)/target"
-      RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install --force cargo-tarpaulin
+      RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install --force --git https://github.com/xd009642/tarpaulin --tag 0.6.6 cargo-tarpaulin
       unset CARGO_TARGET_DIR
     fi
 after_success:
