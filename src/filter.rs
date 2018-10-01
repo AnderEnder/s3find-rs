@@ -22,8 +22,16 @@ impl Filter for FindSize {
 
 impl Filter for FindTime {
     fn filter(&self, object: &Object) -> bool {
-        let object_time = object.last_modified.as_ref().unwrap();
-        let last_modified_time = object_time.parse::<DateTime<Utc>>().unwrap().timestamp();
+        let last_modified_time = match object.last_modified.as_ref() {
+            Some(object_time) => {
+                match object_time.parse::<DateTime<Utc>>() {
+                    Ok(mtime) => mtime.timestamp(),
+                    _ => return false
+                }
+            },
+            _ => return false
+        };
+
         let now = Utc::now().timestamp();
 
         match *self {

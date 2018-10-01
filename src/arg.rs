@@ -181,7 +181,7 @@ impl FromStr for S3path {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<S3path, Error> {
-        let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#).unwrap();
+        let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#)?;
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
         let bucket = captures.get(1).map(|x| x.as_str().to_owned()).ok_or(FindError::S3Parse)?;
@@ -206,11 +206,11 @@ impl FromStr for FindSize {
 
     fn from_str(s: &str) -> Result<FindSize, Error> {
         let re = Regex::new(r"([+-]?)(\d*)([kMGTP]?)$")?;
-        let m = re.captures(s).unwrap();
+        let m = re.captures(s).ok_or(FindError::SizeParse)?;
 
-        let sign = m.get(1).unwrap().as_str().chars().next();
-        let number: i64 = m.get(2).unwrap().as_str().parse()?;
-        let metric = m.get(3).unwrap().as_str().chars().next();
+        let sign = m.get(1).ok_or(FindError::SizeParse)?.as_str().chars().next();
+        let number: i64 = m.get(2).ok_or(FindError::SizeParse)?.as_str().parse()?;
+        let metric = m.get(3).ok_or(FindError::SizeParse)?.as_str().chars().next();
 
         let bytes = match metric {
             None => number,
@@ -242,11 +242,11 @@ impl FromStr for FindTime {
 
     fn from_str(s: &str) -> Result<FindTime, Error> {
         let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)$")?;
-        let m = re.captures(s).unwrap();
+        let m = re.captures(s).ok_or(FindError::TimeParse)?;
 
-        let sign = m.get(1).unwrap().as_str().chars().next();
-        let number: i64 = m.get(2).unwrap().as_str().parse()?;
-        let metric = m.get(3).unwrap().as_str().chars().next();
+        let sign = m.get(1).ok_or(FindError::TimeParse)?.as_str().chars().next();
+        let number: i64 = m.get(2).ok_or(FindError::TimeParse)?.as_str().parse()?;
+        let metric = m.get(3).ok_or(FindError::TimeParse)?.as_str().chars().next();
 
         let seconds = match metric {
             None => number,

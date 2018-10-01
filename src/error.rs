@@ -10,4 +10,6 @@ pub enum FunctionError {
     S3FetchBodyError,
     #[fail(display = "File is already present")]
     PresentFileError,
+    #[fail(display = "S3 meta key is absent")]
+    S3MetaAbsent,
 }
