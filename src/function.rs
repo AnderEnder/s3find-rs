@@ -87,8 +87,7 @@ pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()
             objects: key_list,
             quiet: None,
         },
-        mfa: None,
-        request_payer: None,
+        ..Default::default()
     };
 
     let result = client.delete_objects(request).sync()?;
@@ -328,8 +327,7 @@ pub fn s3_move(
             objects: key_list,
             quiet: None,
         },
-        mfa: None,
-        request_payer: None,
+        ..Default::default()
     };
 
     let _result = client.delete_objects(request).sync()?;
