@@ -2,7 +2,6 @@ use failure::Error;
 use glob::Pattern;
 use regex::Regex;
 use rusoto_core::Region;
-use std::fmt;
 use std::str::FromStr;
 use structopt::clap::AppSettings;
 
@@ -147,9 +146,17 @@ pub enum Cmd {
         destination: String,
     },
 
-    /// Download matched keys
+    /// Copy matched keys to destination
     #[structopt(name = "-copy")]
     Copy {
+        /// S3 path destination to copy files to
+        #[structopt(name = "destination")]
+        destination: S3path,
+    },
+
+    /// Move matched keys to destination
+    #[structopt(name = "-move")]
+    Move {
         /// S3 path destination to copy files to
         #[structopt(name = "destination")]
         destination: S3path,
@@ -212,13 +219,6 @@ impl FromStr for S3path {
         let prefix = captures.get(3).map(|x| x.as_str().to_owned());
 
         Ok(S3path { bucket, prefix })
-    }
-}
-
-impl fmt::Display for S3path {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix_str = self.clone().prefix.unwrap_or_default();
-        write!(f, "(s3://{}/{})", self.bucket, prefix_str)
     }
 }
 

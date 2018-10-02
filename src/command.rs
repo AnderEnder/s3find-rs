@@ -74,6 +74,13 @@ impl FindCommand {
                 &d.bucket,
                 &d.clone().prefix.unwrap_or_default(),
             )?,
+            Some(Cmd::Move { destination: ref d }) => s3_move(
+                &self.client,
+                &self.path.bucket,
+                &list,
+                &d.bucket,
+                &d.clone().prefix.unwrap_or_default(),
+            )?,
             Some(_) => println!("Not implemented"),
             None => {
                 let _nlist: Vec<_> = list.iter().map(|x| fprint(&self.path.bucket, x)).collect();
