@@ -18,12 +18,12 @@ use structopt::StructOpt;
 include!("src/arg.rs");
 
 fn main() {
-    match version_check::is_min_version("1.20") {
-        // rustc >= 1.20
+    match version_check::is_min_version("1.30") {
+        // rustc >= 1.30
         Some((true, _)) => {}
         // rustc < 1.20 or can't figure it out
         _ => {
-            writeln!(&mut io::stderr(), "This crate requires rustc >= 1.20").unwrap();
+            writeln!(&mut io::stderr(), "This crate requires rustc >= 1.30").unwrap();
             exit(1);
         }
     }
