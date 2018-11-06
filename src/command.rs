@@ -73,13 +73,15 @@ impl FindCommand {
                 &list,
                 &d.bucket,
                 &d.clone().prefix.unwrap_or_default(),
+                false,
             )?,
-            Some(Cmd::Move { destination: ref d }) => s3_move(
+            Some(Cmd::Move { destination: ref d }) => s3_copy(
                 &self.client,
                 &self.path.bucket,
                 &list,
                 &d.bucket,
                 &d.clone().prefix.unwrap_or_default(),
+                true,
             )?,
             Some(_) => println!("Not implemented"),
             None => {

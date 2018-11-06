@@ -256,7 +256,10 @@ pub fn s3_copy(
     list: &[&Object],
     target_bucket: &str,
     target_path: &str,
+    delete: bool,
 ) -> Result<(), Error> {
+    let action = if delete { "moving" } else { "copying" };
+
     for object in list {
         let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
@@ -265,8 +268,8 @@ pub fn s3_copy(
         let source_path = format!("{}/{}", bucket, key);
 
         println!(
-            "copying: s3://{} => s3://{}/{}",
-            source_path, target_bucket, target_key_str,
+            "{}: s3://{} => s3://{}/{}",
+            action, source_path, target_bucket, target_key_str,
         );
 
         let request = CopyObjectRequest {
@@ -279,58 +282,28 @@ pub fn s3_copy(
         client.copy_object(request).sync()?;
     }
 
-    Ok(())
-}
+    if delete {
+        let key_list: Vec<_> = list
+            .iter()
+            .flat_map(|x| match x.key.as_ref() {
+                Some(key) => Some(ObjectIdentifier {
+                    key: key.to_string(),
+                    version_id: None,
+                }),
+                _ => None,
+            }).collect();
 
-pub fn s3_move(
-    client: &S3Client,
-    bucket: &str,
-    list: &[&Object],
-    target_bucket: &str,
-    target_path: &str,
-) -> Result<(), Error> {
-    for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
-
-        let target_key = Path::new(target_path).join(key);
-        let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
-        let source_path = format!("{}/{}", bucket, key);
-
-        println!(
-            "moving: s3://{} => s3://{}/{}",
-            source_path, target_bucket, target_key_str,
-        );
-
-        let request = CopyObjectRequest {
-            bucket: target_bucket.to_owned(),
-            key: target_key_str.to_owned(),
-            copy_source: source_path,
+        let request = DeleteObjectsRequest {
+            bucket: bucket.to_string(),
+            delete: Delete {
+                objects: key_list,
+                quiet: None,
+            },
             ..Default::default()
         };
 
-        client.copy_object(request).sync()?;
+        let _result = client.delete_objects(request).sync()?;
     }
-
-    let key_list: Vec<_> = list
-        .iter()
-        .flat_map(|x| match x.key.as_ref() {
-            Some(key) => Some(ObjectIdentifier {
-                key: key.to_string(),
-                version_id: None,
-            }),
-            _ => None,
-        }).collect();
-
-    let request = DeleteObjectsRequest {
-        bucket: bucket.to_string(),
-        delete: Delete {
-            objects: key_list,
-            quiet: None,
-        },
-        ..Default::default()
-    };
-
-    let _result = client.delete_objects(request).sync()?;
 
     Ok(())
 }
