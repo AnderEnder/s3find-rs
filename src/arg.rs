@@ -152,6 +152,10 @@ pub enum Cmd {
         /// S3 path destination to copy files to
         #[structopt(name = "destination")]
         destination: S3path,
+
+        /// Copy keys like files
+        #[structopt(long = "flat", short = "f")]
+        flat: bool,
     },
 
     /// Move matched keys to destination
@@ -160,6 +164,10 @@ pub enum Cmd {
         /// S3 path destination to copy files to
         #[structopt(name = "destination")]
         destination: S3path,
+
+        /// Copy keys like files
+        #[structopt(long = "flat", short = "f")]
+        flat: bool,
     },
 
     /// Print the list of matched keys

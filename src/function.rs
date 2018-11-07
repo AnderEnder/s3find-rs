@@ -256,6 +256,7 @@ pub fn s3_copy(
     list: &[&Object],
     target_bucket: &str,
     target_path: &str,
+    flat: bool,
     delete: bool,
 ) -> Result<(), Error> {
     let action = if delete { "moving" } else { "copying" };
@@ -263,7 +264,17 @@ pub fn s3_copy(
     for object in list {
         let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-        let target_key = Path::new(target_path).join(key);
+        let key2 = if flat {
+            Path::new(key)
+                .file_name()
+                .ok_or(FunctionError::PathConverError)?
+                .to_str()
+                .ok_or(FunctionError::PathConverError)?
+        } else {
+            key
+        };
+
+        let target_key = Path::new(target_path).join(key2);
         let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
         let source_path = format!("{}/{}", bucket, key);
 
