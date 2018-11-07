@@ -1,6 +1,6 @@
 use rusoto_s3::{
     Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
-    ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3, S3Client, Tagging,
+    ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3Client, Tagging, S3,
 };
 use std::process::Command;
 use std::process::ExitStatus;
@@ -73,17 +73,13 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus, Error> {
 pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     let key_list: Vec<_> = list
         .iter()
-        .flat_map(|x| {
-            match x.key.as_ref() {
-               Some(key) => Some(
-                    ObjectIdentifier {
-                        key: key.to_string(),
-                        version_id: None,
-                    }),
-                _ => None
-            }
-        })
-        .collect();
+        .flat_map(|x| match x.key.as_ref() {
+            Some(key) => Some(ObjectIdentifier {
+                key: key.to_string(),
+                version_id: None,
+            }),
+            _ => None,
+        }).collect();
 
     let request = DeleteObjectsRequest {
         bucket: bucket.to_string(),
@@ -138,7 +134,9 @@ pub fn s3_download(
             "downloading: s3://{}/{} => {}",
             bucket,
             &key,
-            file_path.to_str().ok_or(FunctionError::FileNameParseError)?
+            file_path
+                .to_str()
+                .ok_or(FunctionError::FileNameParseError)?
         );
 
         if file_path.exists() && !force {
@@ -158,8 +156,7 @@ pub fn s3_download(
                 count += buf.len() as u64;
                 pb.set_position(count);
                 Ok(())
-            })
-            .wait();
+            }).wait();
     }
 
     Ok(())
@@ -253,7 +250,11 @@ pub fn s3_set_public(
 
 #[cfg(test)]
 mod tests {
+    extern crate rusoto_mock;
+
+    use self::rusoto_mock::*;
     use super::*;
+    use rusoto_core::Region;
 
     #[test]
     fn exec_true() {
@@ -314,5 +315,46 @@ mod tests {
         };
 
         advanced_print("bucket", &object);
+    }
+
+    #[test]
+    fn s3_delete_test() {
+        let mock = MockRequestDispatcher::with_status(200).with_body(
+            r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Deleted>
+    <Key>sample1.txt</Key>
+  </Deleted>
+  <Deleted>
+    <Key>sample2.txt</Key>
+  </Deleted>
+</DeleteResult>"#,
+        );
+
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let res = s3_delete(&client, "bucket", objects);
+
+        assert!(res.is_ok());
     }
 }
