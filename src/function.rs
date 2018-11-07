@@ -251,8 +251,10 @@ pub fn s3_set_public(
 #[cfg(test)]
 mod tests {
     extern crate rusoto_mock;
+    extern crate tempfile;
 
     use self::rusoto_mock::*;
+    use self::tempfile::Builder;
     use super::*;
     use rusoto_core::Region;
 
@@ -355,6 +357,33 @@ mod tests {
 
         let res = s3_delete(&client, "bucket", objects);
 
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn s3_download_test() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[&Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("sample1.txt".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        }];
+
+        let target = Builder::new()
+            .prefix("s3_download")
+            .tempdir()
+            .unwrap()
+            .path()
+            .to_path_buf();
+
+        let target_str = target.to_str().unwrap();
+
+        let res = s3_download(&client, "bucket", objects, target_str, false);
         assert!(res.is_ok());
     }
 }
