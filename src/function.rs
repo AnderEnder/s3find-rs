@@ -257,6 +257,10 @@ mod tests {
     use self::tempfile::Builder;
     use super::*;
     use rusoto_core::Region;
+    use std::fs::remove_dir_all;
+
+    use std::fs::File;
+    use std::io::prelude::*;
 
     #[test]
     fn exec_true() {
@@ -362,12 +366,14 @@ mod tests {
 
     #[test]
     fn s3_download_test() {
-        let mock = MockRequestDispatcher::with_status(200);
+        let test_data = "testdata";
+        let mock = MockRequestDispatcher::with_status(200).with_body(test_data);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+        let filename = "sample1.txt";
 
         let objects: &[&Object] = &[&Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-            key: Some("sample1.txt".to_string()),
+            key: Some(filename.to_string()),
             last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
             owner: None,
             size: Some(4997288),
@@ -385,5 +391,28 @@ mod tests {
 
         let res = s3_download(&client, "bucket", objects, target_str, false);
         assert!(res.is_ok());
+
+        let file = target.join(&filename);
+
+        let mut f = File::open(file).expect("file not found");
+        let mut contents = String::new();
+        f.read_to_string(&mut contents)
+            .expect("something went wrong reading the file");
+
+        assert_eq!(contents, test_data);
+
+        remove_dir_all(&target).unwrap();
+    }
+
+    #[test]
+    fn s3_public_url_test() {
+        assert_eq!(
+            s3_public_url("key", "bucket", "us-east-1"),
+            "http://bucket.s3.amazonaws.com/key"
+        );
+        assert_eq!(
+            s3_public_url("key", "bucket", "us-west-1"),
+            "http://bucket.s3-us-west-1.amazonaws.com/key"
+        );
     }
 }
