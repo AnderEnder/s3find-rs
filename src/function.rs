@@ -405,6 +405,34 @@ mod tests {
     }
 
     #[test]
+    fn s3_set_public_test() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let res = s3_set_public(&client, "testbucket", objects, &Region::UsEast1);
+        assert!(res.is_ok());
+    }
+
+    #[test]
     fn s3_public_url_test() {
         assert_eq!(
             s3_public_url("key", "bucket", "us-east-1"),
