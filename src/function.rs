@@ -324,6 +324,20 @@ mod tests {
     }
 
     #[test]
+    fn fprint_test() {
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        fprint("bucket", &object);
+    }
+
+    #[test]
     fn s3_delete_test() {
         let mock = MockRequestDispatcher::with_status(200).with_body(
             r#"

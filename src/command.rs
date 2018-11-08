@@ -8,7 +8,6 @@ use credential::*;
 use filter::Filter;
 use function::*;
 
-
 pub struct FilterList(pub Vec<Box<Filter>>);
 
 impl FilterList {
@@ -51,8 +50,7 @@ impl FindCommand {
                         let key = x.key.as_ref().map(|x| x.as_str()).unwrap_or("");
                         let path = format!("s3://{}/{}", &self.path.bucket, key);
                         exec(&p, &path)
-                    })
-                    .collect();
+                    }).collect();
             }
             Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, list)?,
             Some(Cmd::Download {
