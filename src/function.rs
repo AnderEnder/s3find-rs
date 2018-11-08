@@ -598,4 +598,30 @@ mod tests {
             "http://bucket.s3-us-west-1.amazonaws.com/key"
         );
     }
+
+    #[test]
+    fn s3_copy_test() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[&Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("key".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        }];
+
+        let res = s3_copy(
+            &client,
+            "bucket",
+            objects,
+            "newbucket",
+            "newpath",
+            true,
+            true,
+        );
+        assert!(res.is_ok());
+    }
 }
