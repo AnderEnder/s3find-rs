@@ -1,6 +1,6 @@
 use rusoto_s3::{
     Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest, Object,
-    ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3, S3Client, Tagging,
+    ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3Client, Tagging, S3,
 };
 use std::process::Command;
 use std::process::ExitStatus;
@@ -73,17 +73,13 @@ pub fn exec(command: &str, key: &str) -> Result<ExecStatus, Error> {
 pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
     let key_list: Vec<_> = list
         .iter()
-        .flat_map(|x| {
-            match x.key.as_ref() {
-               Some(key) => Some(
-                    ObjectIdentifier {
-                        key: key.to_string(),
-                        version_id: None,
-                    }),
-                _ => None
-            }
-        })
-        .collect();
+        .flat_map(|x| match x.key.as_ref() {
+            Some(key) => Some(ObjectIdentifier {
+                key: key.to_string(),
+                version_id: None,
+            }),
+            _ => None,
+        }).collect();
 
     let request = DeleteObjectsRequest {
         bucket: bucket.to_string(),
@@ -138,7 +134,9 @@ pub fn s3_download(
             "downloading: s3://{}/{} => {}",
             bucket,
             &key,
-            file_path.to_str().ok_or(FunctionError::FileNameParseError)?
+            file_path
+                .to_str()
+                .ok_or(FunctionError::FileNameParseError)?
         );
 
         if file_path.exists() && !force {
@@ -158,8 +156,7 @@ pub fn s3_download(
                 count += buf.len() as u64;
                 pb.set_position(count);
                 Ok(())
-            })
-            .wait();
+            }).wait();
     }
 
     Ok(())
@@ -253,7 +250,18 @@ pub fn s3_set_public(
 
 #[cfg(test)]
 mod tests {
+    extern crate rusoto_mock;
+    extern crate tempfile;
+
+    use self::rusoto_mock::*;
+    use self::tempfile::Builder;
     use super::*;
+    use rusoto_core::Region;
+    use rusoto_s3::Tag;
+
+    use std::fs::remove_dir_all;
+    use std::fs::File;
+    use std::io::prelude::*;
 
     #[test]
     fn exec_true() {
@@ -314,5 +322,209 @@ mod tests {
         };
 
         advanced_print("bucket", &object);
+    }
+
+    #[test]
+    fn fprint_test() {
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        fprint("bucket", &object);
+    }
+
+    #[test]
+    fn s3_delete_test() {
+        let mock = MockRequestDispatcher::with_status(200).with_body(
+            r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Deleted>
+    <Key>sample1.txt</Key>
+  </Deleted>
+  <Deleted>
+    <Key>sample2.txt</Key>
+  </Deleted>
+</DeleteResult>"#,
+        );
+
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let res = s3_delete(&client, "bucket", objects);
+
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn s3_download_test() {
+        let test_data = "testdata";
+        let mock = MockRequestDispatcher::with_status(200).with_body(test_data);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+        let filename = "sample1.txt";
+
+        let objects: &[&Object] = &[&Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some(filename.to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        }];
+
+        let target = Builder::new()
+            .prefix("s3_download")
+            .tempdir()
+            .unwrap()
+            .path()
+            .to_path_buf();
+
+        let target_str = target.to_str().unwrap();
+
+        let res = s3_download(&client, "bucket", objects, target_str, false);
+        assert!(res.is_ok());
+
+        let file = target.join(&filename);
+
+        let mut f = File::open(file).expect("file not found");
+        let mut contents = String::new();
+        f.read_to_string(&mut contents)
+            .expect("something went wrong reading the file");
+
+        assert_eq!(contents, test_data);
+
+        remove_dir_all(&target).unwrap();
+    }
+
+    #[test]
+    fn s3_set_public_test() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let res = s3_set_public(&client, "testbucket", objects, &Region::UsEast1);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn s3_set_tags_test() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let tags = Tagging {
+            tag_set: vec![
+                Tag {
+                    key: "testkey1".to_owned(),
+                    value: "testvalue1".to_owned(),
+                },
+                Tag {
+                    key: "testkey2".to_owned(),
+                    value: "testvalue2".to_owned(),
+                },
+            ],
+        };
+
+        let res = s3_set_tags(&client, "testbucket", objects, &tags);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn s3_list_tags_test() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects: &[&Object] = &[
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            &Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let res = s3_list_tags(&client, "testbucket", objects);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn s3_public_url_test() {
+        assert_eq!(
+            s3_public_url("key", "bucket", "us-east-1"),
+            "http://bucket.s3.amazonaws.com/key"
+        );
+        assert_eq!(
+            s3_public_url("key", "bucket", "us-west-1"),
+            "http://bucket.s3-us-west-1.amazonaws.com/key"
+        );
     }
 }
