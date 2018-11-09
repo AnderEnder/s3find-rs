@@ -71,11 +71,13 @@ ARGS:
 
 
 SUBCOMMANDS:
+    -copy        Copy matched keys to destination
     -delete      Delete matched keys
     -download    Download matched keys
     -exec        Exec any shell program with every key
     -ls          Print the list of matched keys
     -lstags      Print the list of matched keys with tags
+    -move        Move matched keys to destination
     -print       Extended print with detail information
     -public      Make the matched keys public available (readonly)
     -tags        Set the tags(overwrite) for the matched keys

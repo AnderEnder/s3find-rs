@@ -45,7 +45,11 @@ pub struct FindOpt {
     pub aws_secret_key: Option<String>,
 
     /// The region to use. Default value is us-east-1
-    #[structopt(name = "aws_region", long = "aws-region", default_value="us-east-1")]
+    #[structopt(
+        name = "aws_region",
+        long = "aws-region",
+        default_value = "us-east-1"
+    )]
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
@@ -53,11 +57,19 @@ pub struct FindOpt {
     pub name: Vec<NameGlob>,
 
     /// Case-insensitive glob pattern for match, can be multiple
-    #[structopt(name = "ipatern", long = "iname", raw(number_of_values = "1"))]
+    #[structopt(
+        name = "ipatern",
+        long = "iname",
+        raw(number_of_values = "1")
+    )]
     pub iname: Vec<InameGlob>,
 
     /// Regex pattern for match, can be multiple
-    #[structopt(name = "rpatern", long = "regex", raw(number_of_values = "1"))]
+    #[structopt(
+        name = "rpatern",
+        long = "regex",
+        raw(number_of_values = "1")
+    )]
     pub regex: Vec<Regex>,
 
     /// Modification time for match
@@ -134,6 +146,30 @@ pub enum Cmd {
         destination: String,
     },
 
+    /// Copy matched keys to destination
+    #[structopt(name = "-copy")]
+    Copy {
+        /// S3 path destination to copy files to
+        #[structopt(name = "destination")]
+        destination: S3path,
+
+        /// Copy keys like files
+        #[structopt(long = "flat", short = "f")]
+        flat: bool,
+    },
+
+    /// Move matched keys to destination
+    #[structopt(name = "-move")]
+    Move {
+        /// S3 path destination to copy files to
+        #[structopt(name = "destination")]
+        destination: S3path,
+
+        /// Copy keys like files
+        #[structopt(long = "flat", short = "f")]
+        flat: bool,
+    },
+
     /// Print the list of matched keys
     #[structopt(name = "-ls")]
     Ls,
@@ -184,13 +220,13 @@ impl FromStr for S3path {
         let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#)?;
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
-        let bucket = captures.get(1).map(|x| x.as_str().to_owned()).ok_or(FindError::S3Parse)?;
-        let prefix = captures.get(3).map(|x|x.as_str().to_owned());
+        let bucket = captures
+            .get(1)
+            .map(|x| x.as_str().to_owned())
+            .ok_or(FindError::S3Parse)?;
+        let prefix = captures.get(3).map(|x| x.as_str().to_owned());
 
-        Ok(S3path {
-            bucket,
-            prefix,
-        })
+        Ok(S3path { bucket, prefix })
     }
 }
 
@@ -208,9 +244,19 @@ impl FromStr for FindSize {
         let re = Regex::new(r"([+-]?)(\d*)([kMGTP]?)$")?;
         let m = re.captures(s).ok_or(FindError::SizeParse)?;
 
-        let sign = m.get(1).ok_or(FindError::SizeParse)?.as_str().chars().next();
+        let sign = m
+            .get(1)
+            .ok_or(FindError::SizeParse)?
+            .as_str()
+            .chars()
+            .next();
         let number: i64 = m.get(2).ok_or(FindError::SizeParse)?.as_str().parse()?;
-        let metric = m.get(3).ok_or(FindError::SizeParse)?.as_str().chars().next();
+        let metric = m
+            .get(3)
+            .ok_or(FindError::SizeParse)?
+            .as_str()
+            .chars()
+            .next();
 
         let bytes = match metric {
             None => number,
@@ -244,9 +290,19 @@ impl FromStr for FindTime {
         let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)$")?;
         let m = re.captures(s).ok_or(FindError::TimeParse)?;
 
-        let sign = m.get(1).ok_or(FindError::TimeParse)?.as_str().chars().next();
+        let sign = m
+            .get(1)
+            .ok_or(FindError::TimeParse)?
+            .as_str()
+            .chars()
+            .next();
         let number: i64 = m.get(2).ok_or(FindError::TimeParse)?.as_str().parse()?;
-        let metric = m.get(3).ok_or(FindError::TimeParse)?.as_str().chars().next();
+        let metric = m
+            .get(3)
+            .ok_or(FindError::TimeParse)?
+            .as_str()
+            .chars()
+            .next();
 
         let seconds = match metric {
             None => number,
@@ -355,10 +411,22 @@ mod tests {
     fn size_corect() {
         assert_eq!("11".parse().ok(), Some(FindSize::Equal(11)));
         assert_eq!("11k".parse().ok(), Some(FindSize::Equal(11 * 1024)));
-        assert_eq!("11M".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(2))));
-        assert_eq!("11G".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(3))));
-        assert_eq!("11T".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(4))));
-        assert_eq!("11P".parse().ok(), Some(FindSize::Equal(11 * 1024_i64.pow(5))));
+        assert_eq!(
+            "11M".parse().ok(),
+            Some(FindSize::Equal(11 * 1024_i64.pow(2)))
+        );
+        assert_eq!(
+            "11G".parse().ok(),
+            Some(FindSize::Equal(11 * 1024_i64.pow(3)))
+        );
+        assert_eq!(
+            "11T".parse().ok(),
+            Some(FindSize::Equal(11 * 1024_i64.pow(4)))
+        );
+        assert_eq!(
+            "11P".parse().ok(),
+            Some(FindSize::Equal(11 * 1024_i64.pow(5)))
+        );
         assert_eq!("+11".parse().ok(), Some(FindSize::Bigger(11)));
         assert_eq!("+11k".parse().ok(), Some(FindSize::Bigger(11 * 1024)));
         assert_eq!("-11".parse().ok(), Some(FindSize::Lower(11)));
@@ -378,12 +446,14 @@ mod tests {
         assert_eq!("11m".parse().ok(), Some(FindTime::Upper(11 * 60)));
         assert_eq!("11h".parse().ok(), Some(FindTime::Upper(11 * 3600)));
         assert_eq!("11d".parse().ok(), Some(FindTime::Upper(11 * 3600 * 24)));
-        assert_eq!("11w".parse().ok(), Some(FindTime::Upper(11 * 3600 * 24 * 7)));
+        assert_eq!(
+            "11w".parse().ok(),
+            Some(FindTime::Upper(11 * 3600 * 24 * 7))
+        );
         assert_eq!("+11".parse().ok(), Some(FindTime::Upper(11)));
         assert_eq!("+11m".parse().ok(), Some(FindTime::Upper(11 * 60)));
         assert_eq!("-11m".parse().ok(), Some(FindTime::Lower(11 * 60)));
         assert_eq!("-11".parse().ok(), Some(FindTime::Lower(11)));
-
     }
 
     #[test]
@@ -398,7 +468,10 @@ mod tests {
     fn tag_ok() {
         assert_eq!(
             "tag1:value2".parse().ok(),
-            Some(FindTag { key: "tag1".to_owned(), value: "value2".to_owned() })
+            Some(FindTag {
+                key: "tag1".to_owned(),
+                value: "value2".to_owned()
+            })
         );
     }
 
