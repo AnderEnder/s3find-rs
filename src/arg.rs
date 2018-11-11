@@ -146,7 +146,7 @@ pub enum Cmd {
         destination: String,
     },
 
-    /// Copy matched keys to destination
+    /// Copy matched keys to a s3 destination
     #[structopt(name = "-copy")]
     Copy {
         /// S3 path destination to copy files to
@@ -158,7 +158,7 @@ pub enum Cmd {
         flat: bool,
     },
 
-    /// Move matched keys to destination
+    /// Move matched keys to a s3 destination
     #[structopt(name = "-move")]
     Move {
         /// S3 path destination to copy files to
