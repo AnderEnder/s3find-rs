@@ -27,6 +27,7 @@ pub struct FindCommand {
     pub region: Region,
     pub path: S3path,
     pub filters: FilterList,
+    pub limit: Option<usize>,
     pub command: Option<Cmd>,
 }
 
@@ -131,6 +132,7 @@ impl From<FindOpt> for FindCommand {
             region,
             filters: opts.clone().into(),
             command: opts.cmd.clone(),
+            limit: opts.limit,
         }
     }
 }
@@ -211,6 +213,7 @@ mod tests {
             regex: vec![Regex::from_str("^pre").unwrap()],
             mtime: Vec::new(),
             size: vec![FindSize::Lower(1000)],
+            limit: None,
             cmd: Some(Cmd::Ls),
         }
         .into();
