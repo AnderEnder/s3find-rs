@@ -43,7 +43,7 @@ regex = "1"
 failure = "0.1"
 chrono = "0.4"
 futures = "0.1"
-indicatif = "0.9"
+indicatif = "0.10"
 
 [dependencies.clap]
 version = "2"
