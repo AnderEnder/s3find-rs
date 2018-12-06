@@ -24,6 +24,7 @@ exclude = [
     "ci/*",
 ]
 build = "build.rs"
+edition = "2018"
 
 [[bin]]
 name = "s3find"
