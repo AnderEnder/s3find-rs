@@ -18,7 +18,7 @@ use futures::Future;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use error::*;
+use crate::error::*;
 
 pub fn fprint(bucket: &str, item: &Object) {
     println!(
@@ -147,7 +147,7 @@ pub fn s3_download(
 
         let result = client.get_object(request).sync()?;
 
-        let mut stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
+        let stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
 
         fs::create_dir_all(&dir_path)?;
         let mut output = File::create(&file_path)?;

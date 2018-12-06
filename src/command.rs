@@ -3,10 +3,10 @@ use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag, Tagging};
 
-use arg::*;
-use credential::*;
-use filter::Filter;
-use function::*;
+use crate::arg::*;
+use crate::credential::*;
+use crate::filter::Filter;
+use crate::function::*;
 
 pub struct FilterList(pub Vec<Box<Filter>>);
 

@@ -3,7 +3,7 @@ use glob::MatchOptions;
 use regex::Regex;
 use rusoto_s3::Object;
 
-use arg::*;
+use crate::arg::*;
 
 pub trait Filter {
     fn filter(&self, object: &Object) -> bool;
