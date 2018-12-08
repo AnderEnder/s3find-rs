@@ -324,11 +324,8 @@ pub fn s3_copy(
 
 #[cfg(test)]
 mod tests {
-    extern crate rusoto_mock;
-    extern crate tempfile;
-
-    use self::rusoto_mock::*;
-    use self::tempfile::Builder;
+    use rusoto_mock::*;
+    use tempfile::Builder;
     use super::*;
     use rusoto_core::Region;
     use rusoto_s3::Tag;

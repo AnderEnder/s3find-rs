@@ -8,7 +8,7 @@ use crate::credential::*;
 use crate::filter::Filter;
 use crate::function::*;
 
-pub struct FilterList(pub Vec<Box<Filter>>);
+pub struct FilterList(pub Vec<Box<dyn Filter>>);
 
 impl FilterList {
     pub fn test_match(&self, object: &Object) -> bool {
@@ -137,7 +137,7 @@ impl From<FindOpt> for FindCommand {
 
 impl From<FindOpt> for FilterList {
     fn from(opts: FindOpt) -> FilterList {
-        let mut list: Vec<Box<Filter>> = Vec::new();
+        let mut list: Vec<Box<dyn Filter>> = Vec::new();
 
         for name in &opts.name {
             list.push(Box::new(name.clone()));
