@@ -1,17 +1,7 @@
-extern crate structopt;
-#[macro_use]
-extern crate failure;
-
-extern crate clap;
-extern crate glob;
-extern crate regex;
-extern crate rusoto_core;
-extern crate version_check;
-
-use clap::Shell;
 use std::fs;
 use std::io::{self, Write};
 use std::process::exit;
+use structopt::clap::Shell;
 
 use structopt::StructOpt;
 

@@ -1,9 +1,10 @@
-use failure::Error;
+use failure::*;
 use glob::Pattern;
 use regex::Regex;
 use rusoto_core::Region;
 use std::str::FromStr;
 use structopt::clap::AppSettings;
+use structopt::*;
 
 /// Walk a s3 path hierarchy
 #[derive(StructOpt, Debug, Clone)]
@@ -45,11 +46,7 @@ pub struct FindOpt {
     pub aws_secret_key: Option<String>,
 
     /// The region to use. Default value is us-east-1
-    #[structopt(
-        name = "aws_region",
-        long = "aws-region",
-        default_value = "us-east-1"
-    )]
+    #[structopt(name = "aws_region", long = "aws-region", default_value = "us-east-1")]
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
@@ -57,19 +54,11 @@ pub struct FindOpt {
     pub name: Vec<NameGlob>,
 
     /// Case-insensitive glob pattern for match, can be multiple
-    #[structopt(
-        name = "ipatern",
-        long = "iname",
-        raw(number_of_values = "1")
-    )]
+    #[structopt(name = "ipatern", long = "iname", raw(number_of_values = "1"))]
     pub iname: Vec<InameGlob>,
 
     /// Regex pattern for match, can be multiple
-    #[structopt(
-        name = "rpatern",
-        long = "regex",
-        raw(number_of_values = "1")
-    )]
+    #[structopt(name = "rpatern", long = "regex", raw(number_of_values = "1"))]
     pub regex: Vec<Regex>,
 
     /// Modification time for match

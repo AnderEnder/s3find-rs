@@ -1,3 +1,5 @@
+use failure::*;
+
 #[derive(Fail, Debug)]
 pub enum FunctionError {
     #[fail(display = "Invalid command line value")]
