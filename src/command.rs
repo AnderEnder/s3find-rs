@@ -8,7 +8,7 @@ use crate::credential::*;
 use crate::filter::Filter;
 use crate::function::*;
 
-pub struct FilterList(pub Vec<Box<Filter>>);
+pub struct FilterList(pub Vec<Box<dyn Filter>>);
 
 impl FilterList {
     pub fn test_match(&self, object: &Object) -> bool {
@@ -50,7 +50,8 @@ impl FindCommand {
                         let key = x.key.as_ref().map(|x| x.as_str()).unwrap_or("");
                         let path = format!("s3://{}/{}", &self.path.bucket, key);
                         exec(&p, &path)
-                    }).collect();
+                    })
+                    .collect();
             }
             Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, list)?,
             Some(Cmd::Download {
@@ -136,7 +137,7 @@ impl From<FindOpt> for FindCommand {
 
 impl From<FindOpt> for FilterList {
     fn from(opts: FindOpt) -> FilterList {
-        let mut list: Vec<Box<Filter>> = Vec::new();
+        let mut list: Vec<Box<dyn Filter>> = Vec::new();
 
         for name in &opts.name {
             list.push(Box::new(name.clone()));
@@ -182,7 +183,8 @@ mod tests {
         let tag: Tag = FindTag {
             key: "tag".to_owned(),
             value: "val".to_owned(),
-        }.into();
+        }
+        .into();
 
         assert_eq!(
             tag,
@@ -210,7 +212,8 @@ mod tests {
             mtime: Vec::new(),
             size: vec![FindSize::Lower(1000)],
             cmd: Some(Cmd::Ls),
-        }.into();
+        }
+        .into();
 
         assert_eq!(
             find.path,

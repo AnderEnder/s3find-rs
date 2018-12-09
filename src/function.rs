@@ -79,7 +79,8 @@ pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<()
                 version_id: None,
             }),
             _ => None,
-        }).collect();
+        })
+        .collect();
 
     let request = DeleteObjectsRequest {
         bucket: bucket.to_string(),
@@ -158,7 +159,8 @@ pub fn s3_download(
                 count += buf.len() as u64;
                 pb.set_position(count);
                 Ok(())
-            }).wait();
+            })
+            .wait();
     }
 
     Ok(())
@@ -302,7 +304,8 @@ pub fn s3_copy(
                     version_id: None,
                 }),
                 _ => None,
-            }).collect();
+            })
+            .collect();
 
         let request = DeleteObjectsRequest {
             bucket: bucket.to_string(),
@@ -321,11 +324,8 @@ pub fn s3_copy(
 
 #[cfg(test)]
 mod tests {
-    extern crate rusoto_mock;
-    extern crate tempfile;
-
-    use self::rusoto_mock::*;
-    use self::tempfile::Builder;
+    use rusoto_mock::*;
+    use tempfile::Builder;
     use super::*;
     use rusoto_core::Region;
     use rusoto_s3::Tag;
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn s3_delete_test() {
+    fn smoke_s3_delete() {
         let mock = MockRequestDispatcher::with_status(200).with_body(
             r#"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn s3_download_test() {
+    fn smoke_s3_download() {
         let test_data = "testdata";
         let mock = MockRequestDispatcher::with_status(200).with_body(test_data);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn s3_set_public_test() {
+    fn smoke_s3_set_public() {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn s3_set_tags_test() {
+    fn smoke_s3_set_tags() {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
@@ -560,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn s3_list_tags_test() {
+    fn smoke_s3_list_tags() {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
@@ -600,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn s3_copy_test() {
+    fn smoke_s3_copy() {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
