@@ -52,7 +52,7 @@ default-features = false
 features = [ "suggestions", "color" ]
 
 [dev-dependencies]
-rusoto_mock = "0.29"
+rusoto_mock = "0.30"
 tempfile = "3"
 
 [build-dependencies]
