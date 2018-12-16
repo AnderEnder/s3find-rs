@@ -54,6 +54,7 @@ features = [ "suggestions", "color" ]
 [dev-dependencies]
 rusoto_mock = "0.30"
 tempfile = "3"
+remove_dir_all = "0.5"
 
 [build-dependencies]
 version_check = "0.1"
