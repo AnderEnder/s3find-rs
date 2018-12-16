@@ -330,7 +330,7 @@ mod tests {
     use rusoto_core::Region;
     use rusoto_s3::Tag;
 
-    use std::fs::remove_dir_all;
+    use remove_dir_all::remove_dir_all;
     use std::fs::File;
     use std::io::prelude::*;
 
