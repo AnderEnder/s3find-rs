@@ -2,11 +2,13 @@ sudo: required
 language: rust
 rust:
   - stable
-  - beta
-  - nightly
+#  - beta
+#  - nightly
 os:
+  - windows
   - linux
   - osx
+
 cache: cargo
 matrix:
   allow_failures:
@@ -18,7 +20,7 @@ env:
 script:
   - |
       cargo build --verbose --all
-      cargo test --verbose --all
+      cargo test --no-fail-fast --verbose --all -- --nocapture
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
       export CARGO_TARGET_DIR="$(pwd)/target"
