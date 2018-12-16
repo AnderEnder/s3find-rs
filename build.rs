@@ -3,8 +3,6 @@ use std::io::{self, Write};
 use std::process::exit;
 use structopt::clap::Shell;
 
-use structopt::StructOpt;
-
 include!("src/arg.rs");
 
 fn main() {

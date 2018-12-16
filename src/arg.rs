@@ -4,7 +4,7 @@ use regex::Regex;
 use rusoto_core::Region;
 use std::str::FromStr;
 use structopt::clap::AppSettings;
-use structopt::*;
+use structopt::StructOpt;
 
 /// Walk a s3 path hierarchy
 #[derive(StructOpt, Debug, Clone)]
