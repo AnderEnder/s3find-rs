@@ -18,9 +18,8 @@ env:
   global:
     - RUST_BACKTRACE=1
 script:
-  - |
-      cargo build --verbose --all
-      cargo test --no-fail-fast --verbose --all -- --nocapture
+  - cargo build --verbose --all
+  - cargo test --no-fail-fast --verbose --all -- --nocapture
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
       export CARGO_TARGET_DIR="$(pwd)/target"
@@ -39,7 +38,7 @@ before_deploy:
       cargo package
       cargo publish --token $CARGO_TOKEN
     fi
-  - cargo build --release
+  - travis_wait cargo build --release --verbose
 #  - sudo bash -x ci/openssl.sh linux-x86_64 musl- -static
 #  - CC_x86_64_unknown_linux_musl=musl-gcc OPENSSL_STATIC=yes OPENSSL_LIB_DIR=/openssl/lib OPENSSL_INCLUDE_DIR=/openssl/include cargo build --release
   - tar -C target/release -czf $(pwd)/s3find-$TRAVIS_TAG-x86_64-$TRAVIS_OS_NAME.tar.gz s3find
