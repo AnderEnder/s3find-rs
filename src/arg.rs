@@ -116,6 +116,10 @@ times out."#
     )]
     pub page_size: i64,
 
+    /// Print summary statistic
+    #[structopt(name = "stats", long = "stats")]
+    pub stats: bool,
+
     //  /// Action to be ran with matched list of paths
     #[structopt(subcommand)]
     pub cmd: Option<Cmd>,

@@ -9,6 +9,7 @@ fn main() -> Result<(), Error> {
     let status: Find = FindOpt::from_args().into();
     let mut request = status.list_request();
     let mut count: usize = 0;
+    let mut stats = status.stats();
 
     loop {
         match status.limit {
@@ -30,12 +31,13 @@ fn main() -> Result<(), Error> {
 
                 let slice = match status.limit {
                     Some(limit) if count.saturating_sub(limit) > 0 => {
+                        println!("{},{},{}", len, count, limit);
                         &flist[0..(len - (count - limit))]
                     }
                     _ => &flist,
                 };
 
-                status.exec(slice)?;
+                stats = status.exec(slice, stats)?;
 
                 match output.next_continuation_token {
                     Some(token) => request.continuation_token = Some(token),
@@ -48,6 +50,10 @@ fn main() -> Result<(), Error> {
             }
         }
     }
+    if status.stats {
+        println!("{:#?}", stats.unwrap());
+    }
+
     Ok(())
 }
 
