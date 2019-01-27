@@ -61,7 +61,7 @@ impl FindCommand {
             }) => s3_download(&self.client, &self.path.bucket, &list, d, f.to_owned())?,
             Some(Cmd::Tags { tags: ref t }) => {
                 let tags = Tagging {
-                    tag_set: t.into_iter().map(|x| (*x).clone().into()).collect(),
+                    tag_set: t.iter().map(|x| x.clone().into()).collect(),
                 };
                 s3_set_tags(&self.client, &self.path.bucket, &list, &tags)?
             }
