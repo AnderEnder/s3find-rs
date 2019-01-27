@@ -225,6 +225,7 @@ mod tests {
             limit: None,
             page_size: 1000,
             cmd: Some(Cmd::Ls(FastPrint {})),
+            stats: false,
         }
         .into();
 
