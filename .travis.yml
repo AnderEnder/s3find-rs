@@ -2,43 +2,46 @@ sudo: required
 language: rust
 rust:
   - stable
-#  - beta
-#  - nightly
-os:
-  - windows
-  - linux
-  - osx
-
 cache: cargo
-matrix:
-  allow_failures:
-    - rust: nightly
   fast_finish: true
+
 env:
   global:
     - RUST_BACKTRACE=1
+
+matrix:
+  allow_failures:
+    - os: windows
+  include:
+    - name: windows_x86_64
+      os: windows
+    - name: linux_x86_64
+      os: linux
+      addons:
+        apt:
+          packages:
+            - libssl-dev
+    - name: macosx_x86_64
+      os: osx
+    - name: coverage
+      os: linux
+      sudo: required
+      services:
+        - docker
+      script: |
+        docker run --security-opt seccomp=unconfined -v "$PWD:/volume" xd009642/tarpaulin:latest sh -c "cargo tarpaulin -f -t 5 --out Xml"
+        bash <(curl -s https://codecov.io/bash)
+
 script:
-  - cargo build --verbose --all
-  - cargo test --no-fail-fast --verbose --all -- --nocapture
-  - |
-    if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
-      export CARGO_TARGET_DIR="$(pwd)/target"
-      RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install --force --git https://github.com/AnderEnder/tarpaulin --branch stable-master cargo-tarpaulin
-      unset CARGO_TARGET_DIR
-    fi
-after_success:
-  - |
-    if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
-      cargo tarpaulin --skip-clean -f --out Xml
-      bash <(curl -s https://codecov.io/bash)
-    fi
+  - travis_wait 30 cargo build --verbose
+  - travis_wait 30 cargo test --no-fail-fast --verbose --all -- --nocapture
 before_deploy:
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
       cargo package
       cargo publish --token $CARGO_TOKEN
     fi
-  - travis_wait cargo build --release --verbose
+  - travis_wait 30 cargo build --release --verbose
 #  - sudo bash -x ci/openssl.sh linux-x86_64 musl- -static
 #  - CC_x86_64_unknown_linux_musl=musl-gcc OPENSSL_STATIC=yes OPENSSL_LIB_DIR=/openssl/lib OPENSSL_INCLUDE_DIR=/openssl/include cargo build --release
   - tar -C target/release -czf $(pwd)/s3find-$TRAVIS_TAG-x86_64-$TRAVIS_OS_NAME.tar.gz s3find
