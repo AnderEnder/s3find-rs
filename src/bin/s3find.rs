@@ -29,7 +29,9 @@ fn main() -> Result<(), Error> {
                 count += len;
 
                 let slice = match status.limit {
-                    Some(limit) if (count - limit) > 0 => &flist[0..(len - count + limit)],
+                    Some(limit) if count.saturating_sub(limit) > 0 => {
+                        &flist[0..(len - (count - limit))]
+                    }
                     _ => &flist,
                 };
 
