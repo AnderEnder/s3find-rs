@@ -26,6 +26,7 @@ matrix:
     - name: coverage
       os: linux
       sudo: required
+      cache: false
       services:
         - docker
       script: |
