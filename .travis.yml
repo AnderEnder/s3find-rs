@@ -3,13 +3,13 @@ language: rust
 rust:
   - stable
 cache: cargo
-  fast_finish: true
 
 env:
   global:
     - RUST_BACKTRACE=1
 
 matrix:
+  fast_finish: true
   allow_failures:
     - os: windows
   include:
