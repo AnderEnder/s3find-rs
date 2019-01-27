@@ -12,4 +12,4 @@ task:
   test_script:
     - . $HOME/.cargo/env
     - cargo build --verbose
-    - cargo test -- --nocapture
+    - cargo test --no-fail-fast --verbose --all -- --nocapture

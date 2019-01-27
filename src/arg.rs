@@ -100,6 +100,10 @@ Possible file size units are as follows:
     )]
     pub size: Vec<FindSize>,
 
+    /// Limit result
+    #[structopt(name = "limit", long = "limit")]
+    pub limit: Option<usize>,
+
     //  /// Action to be ran with matched list of paths
     #[structopt(subcommand)]
     pub cmd: Option<Cmd>,
