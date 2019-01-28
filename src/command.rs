@@ -2,6 +2,7 @@ use failure::Error;
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
+use std::fmt;
 
 use crate::arg::*;
 use crate::credential::*;
@@ -180,6 +181,20 @@ impl Default for FindStat {
             max_key: "".to_owned(),
             min_key: "".to_owned(),
         }
+    }
+}
+
+impl fmt::Display for FindStat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f)?;
+        writeln!(f, "Summary")?;
+        writeln!(f, "Count: {}", &self.count)?;
+        writeln!(f, "Size: {}", &self.size)?;
+        writeln!(f, "Max file: {}", &self.max_key)?;
+        writeln!(f, "Max size: {}", &self.max)?;
+        writeln!(f, "Min file: {}", &self.min_key)?;
+        writeln!(f, "Min size: {}", &self.min)?;
+        Ok(())
     }
 }
 

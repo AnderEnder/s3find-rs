@@ -51,7 +51,7 @@ fn main() -> Result<(), Error> {
         }
     }
     if status.stats {
-        println!("{:#?}", stats.unwrap());
+        println!("{}", stats.unwrap());
     }
 
     Ok(())
