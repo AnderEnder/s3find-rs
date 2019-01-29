@@ -32,6 +32,7 @@ impl Cmd {
             Cmd::Public(l) => Box::new(l),
             Cmd::Copy(l) => Box::new(l),
             Cmd::Move(l) => Box::new(l),
+            Cmd::Nothing(l) => Box::new(l),
         }
     }
 }
@@ -463,6 +464,12 @@ impl RunCommand for S3Move {
         };
 
         client.delete_objects(request).sync()?;
+        Ok(())
+    }
+}
+
+impl RunCommand for DoNothing {
+    fn execute(&self, _c: &S3Client, _r: &str, _p: &S3path, _l: &[&Object]) -> Result<(), Error> {
         Ok(())
     }
 }

@@ -1,4 +1,5 @@
 use failure::Error;
+use humansize::{file_size_opts as options, FileSize};
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
@@ -44,7 +45,6 @@ impl Find {
 
         let region = &self.region.name();
         self.command.execute(&self.client, region, &self.path, list)?;
-
         Ok(status)
     }
 
@@ -142,30 +142,33 @@ impl From<FindTag> for Tag {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FindStat {
-    pub count: usize,
-    pub size: i64,
-    pub max: i64,
-    pub min: i64,
+    pub total_files: usize,
+    pub total_space: i64,
+    pub max_size: i64,
+    pub min_size: i64,
     pub max_key: String,
     pub min_key: String,
+    pub average_size: i64,
 }
 
 impl FindStat {
     pub fn add(mut self: FindStat, list: &[&Object]) -> FindStat {
         for x in list {
-            self.count += 1;
+            self.total_files += 1;
             let size = x.size.as_ref().unwrap_or(&0);
-            self.size += size;
+            self.total_space += size;
 
-            if self.max < *size {
-                self.max = *size;
+            if self.max_size < *size {
+                self.max_size = *size;
                 self.max_key = x.key.clone().unwrap_or_default();
             }
 
-            if self.min > *size {
-                self.min = *size;
+            if self.min_size > *size {
+                self.min_size = *size;
                 self.min_key = x.key.clone().unwrap_or_default();
             }
+
+            self.average_size = self.total_space / (self.total_files as i64);
         }
         self
     }
@@ -174,12 +177,13 @@ impl FindStat {
 impl Default for FindStat {
     fn default() -> Self {
         FindStat {
-            count: 0,
-            size: 0,
-            max: 0,
-            min: i64::max_value(),
+            total_files: 0,
+            total_space: 0,
+            max_size: 0,
+            min_size: i64::max_value(),
             max_key: "".to_owned(),
             min_key: "".to_owned(),
+            average_size: 0,
         }
     }
 }
@@ -188,12 +192,41 @@ impl fmt::Display for FindStat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f)?;
         writeln!(f, "Summary")?;
-        writeln!(f, "Count: {}", &self.count)?;
-        writeln!(f, "Size: {}", &self.size)?;
-        writeln!(f, "Max file: {}", &self.max_key)?;
-        writeln!(f, "Max size: {}", &self.max)?;
-        writeln!(f, "Min file: {}", &self.min_key)?;
-        writeln!(f, "Min size: {}", &self.min)?;
+        writeln!(f, "Total files: {}", &self.total_files)?;
+        writeln!(
+            f,
+            "Total space: {}",
+            &self
+                .total_space
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
+        writeln!(f, "Largest file: {}", &self.max_key)?;
+        writeln!(
+            f,
+            "Largest file size: {}",
+            &self
+                .max_size
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
+        writeln!(f, "Smallest file: {}", &self.min_key)?;
+        writeln!(
+            f,
+            "Smallest file size: {}",
+            &self
+                .min_size
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
+        writeln!(
+            f,
+            "Average file size: {}",
+            &self
+                .min_size
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
         Ok(())
     }
 }

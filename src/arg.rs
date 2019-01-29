@@ -166,6 +166,10 @@ pub enum Cmd {
     /// Make the matched keys public available (readonly)
     #[structopt(name = "-public")]
     Public(SetPublic),
+
+    /// Do not do anything with keys, do not print them as well
+    #[structopt(name = "-nothing")]
+    Nothing(DoNothing),
 }
 
 impl Default for Cmd {
@@ -236,6 +240,9 @@ pub struct SetTags {
     #[structopt(name = "key:value", raw(min_values = "1"))]
     pub tags: Vec<FindTag>,
 }
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct DoNothing {}
 
 #[derive(Fail, Debug)]
 pub enum FindError {

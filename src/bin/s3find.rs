@@ -26,12 +26,12 @@ fn main() -> Result<(), Error> {
                     .iter()
                     .filter(|x| status.filters.test_match(x))
                     .collect();
+
                 let len = flist.len();
                 count += len;
 
                 let slice = match status.limit {
                     Some(limit) if count.saturating_sub(limit) > 0 => {
-                        println!("{},{},{}", len, count, limit);
                         &flist[0..(len - (count - limit))]
                     }
                     _ => &flist,
