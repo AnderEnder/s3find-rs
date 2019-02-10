@@ -32,6 +32,7 @@ pub struct Find {
     pub limit: Option<usize>,
     pub page_size: i64,
     pub stats: bool,
+    pub summarize: bool,
     pub command: Box<dyn RunCommand>,
 }
 
@@ -63,7 +64,7 @@ impl Find {
     }
 
     pub fn stats(&self) -> Option<FindStat> {
-        if self.stats {
+        if self.summarize {
             Some(FindStat::default())
         } else {
             None
@@ -88,8 +89,9 @@ impl From<FindOpt> for Find {
             filters: opts.clone().into(),
             command: opts.cmd.unwrap_or_default().downcast(),
             page_size: opts.page_size,
-            stats: opts.stats,
+            summarize: opts.summarize,
             limit: opts.limit,
+            stats: opts.summarize,
         }
     }
 }
@@ -273,8 +275,8 @@ mod tests {
             limit: None,
             page_size: 1000,
             cmd: Some(Cmd::Ls(FastPrint {})),
-            stats: false,
-        }
+            summarize: false,
+            }
         .into();
 
         assert_eq!(
