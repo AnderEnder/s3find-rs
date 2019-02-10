@@ -45,6 +45,9 @@ OPTIONS:
         --iname <ipatern>...
             Case-insensitive glob pattern for match, can be multiple
 
+        --limit <limit>
+            Limit result
+
         --name <npatern>...
             Glob pattern for match, can be multiple
 
@@ -71,13 +74,13 @@ ARGS:
 
 
 SUBCOMMANDS:
-    -copy        Copy matched keys to a S3 destination
+    -copy        Copy matched keys to a s3 destination
     -delete      Delete matched keys
     -download    Download matched keys
     -exec        Exec any shell program with every key
     -ls          Print the list of matched keys
     -lstags      Print the list of matched keys with tags
-    -move        Move matched keys to a S3 destination
+    -move        Move matched keys to a s3 destination
     -print       Extended print with detail information
     -public      Make the matched keys public available (readonly)
     -tags        Set the tags(overwrite) for the matched keys
