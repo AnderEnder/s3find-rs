@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/s3find.svg)](https://crates.io/crates/s3find)
 
 
-Utility to walk a S3 hierarchy. An analog of find for AWS S3.
+A command line utility to walk an Amazon S3 hierarchy. An analog of find for Amazon S3.
 
 ## Usage
 
