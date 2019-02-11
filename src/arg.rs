@@ -6,7 +6,7 @@ use std::str::FromStr;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 
-/// Walk a s3 path hierarchy
+/// Walk an Amazon S3 path hierarchy
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "s3find",
@@ -103,6 +103,18 @@ Possible file size units are as follows:
     /// Limit result
     #[structopt(name = "limit", long = "limit")]
     pub limit: Option<usize>,
+
+    /// The number of results to return in each response to a list operation.
+    #[structopt(
+        name = "number",
+        long = "page-size",
+        default_value = "1000",
+        long_help = r#"The number of results to return in each response to a
+list operation. The default value is 1000 (the maximum
+allowed). Using a lower value may help if an operation
+times out."#
+    )]
+    pub page_size: i64,
 
     //  /// Action to be ran with matched list of paths
     #[structopt(subcommand)]

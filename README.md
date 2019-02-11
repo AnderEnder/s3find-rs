@@ -51,6 +51,11 @@ OPTIONS:
         --name <npatern>...
             Glob pattern for match, can be multiple
 
+        --page-size <number>
+            The number of results to return in each response to a
+            list operation. The default value is 1000 (the maximum
+            allowed). Using a lower value may help if an operation
+            times out. [default: 1000]
         --regex <rpatern>...
             Regex pattern for match, can be multiple
 

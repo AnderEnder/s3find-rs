@@ -28,6 +28,7 @@ pub struct FindCommand {
     pub path: S3path,
     pub filters: FilterList,
     pub limit: Option<usize>,
+    pub page_size: i64,
     pub command: Option<Cmd>,
 }
 
@@ -108,7 +109,7 @@ impl FindCommand {
             delimiter: None,
             encoding_type: None,
             fetch_owner: None,
-            max_keys: Some(10000),
+            max_keys: Some(self.page_size),
             prefix: self.path.prefix.clone(),
             request_payer: None,
             start_after: None,
@@ -132,6 +133,7 @@ impl From<FindOpt> for FindCommand {
             region,
             filters: opts.clone().into(),
             command: opts.cmd.clone(),
+            page_size: opts.page_size,
             limit: opts.limit,
         }
     }
@@ -214,6 +216,7 @@ mod tests {
             mtime: Vec::new(),
             size: vec![FindSize::Lower(1000)],
             limit: None,
+            page_size: 1000,
             cmd: Some(Cmd::Ls),
         }
         .into();
