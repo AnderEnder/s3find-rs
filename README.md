@@ -134,28 +134,36 @@ s3find 's3://example-bucket/example-path' --name '*' -lstags
 
 ```sh
 s3find 's3://example-bucket/example-path' --name '*' -exec 'echo {}'
-
 ```
 
 #### Download
 
 ```sh
 s3find 's3://example-bucket/example-path' --name '*' -download
+```
 
+#### Copy files to another s3 location
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*.dat' -copy -f 's3://example-bucket/example-path2'
+```
+
+#### Move files to another s3 location
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*.dat' -move -f 's3://example-bucket/example-path2'
 ```
 
 #### Set tags
 
 ```sh
 s3find 's3://example-bucket/example-path' --name '*9*' -tags 'key:value' 'env:staging'
-
 ```
 
 #### Make public available
 
 ```sh
 s3find 's3://example-bucket/example-path' --name '*9*' -public
-
 ```
 
 ### Find path by case insensitive glob pattern
@@ -224,6 +232,20 @@ s3find 's3://example-bucket/example-path' --size +10 --size -20 -print
 
 ```sh
 s3find 's3://example-bucket/example-path' --size +10 --name '*file*' -print
+```
+
+### Additional control
+
+#### Select limited number of keys
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*' --limit 10
+```
+
+#### Limit page size of the request
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*' --page-size 100
 ```
 
 ## How to build and install
