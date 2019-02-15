@@ -3,8 +3,8 @@ name = "s3find"
 authors = ["Andrii Radyk <ander.ender@gmail.com>"]
 version = "0.4.1"
 description = """
-walk a s3 path hierarchy.
-s3find is an analog of find for s3.
+A command line utility to walk an Amazon S3 hierarchy.
+s3find is an analog of find for Amazon S3.
 """
 documentation = "https://github.com/AnderEnder/s3find-rs"
 homepage = "https://github.com/AnderEnder/s3find-rs"
