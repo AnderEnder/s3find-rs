@@ -51,7 +51,7 @@ impl Filter for InameGlob {
         let object_key = object.key.as_ref().map(|x| x.as_ref()).unwrap_or_default();
         self.0.matches_with(
             &object_key,
-            &MatchOptions {
+            MatchOptions {
                 case_sensitive: false,
                 require_literal_separator: false,
                 require_literal_leading_dot: false,
