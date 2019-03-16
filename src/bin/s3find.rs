@@ -50,6 +50,7 @@ fn main() -> Result<(), Error> {
             }
         }
     }
+
     if status.summarize {
         println!("{}", stats.unwrap());
     }

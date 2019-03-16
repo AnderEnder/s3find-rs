@@ -194,28 +194,30 @@ impl fmt::Display for FindStat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f)?;
         writeln!(f, "Summary")?;
-        writeln!(f, "Total files: {}", &self.total_files)?;
+        writeln!(f, "{:19} {}", "Total files:", &self.total_files)?;
         writeln!(
             f,
-            "Total space: {}",
+            "Total space:        {}",
             &self
                 .total_space
                 .file_size(options::CONVENTIONAL)
                 .map_err(|_| fmt::Error)?
         )?;
-        writeln!(f, "Largest file: {}", &self.max_key)?;
+        writeln!(f, "{:19} {}", "Largest file:", &self.max_key)?;
         writeln!(
             f,
-            "Largest file size: {}",
+            "{:19} {}",
+            "Largest file size:",
             &self
                 .max_size
                 .file_size(options::CONVENTIONAL)
                 .map_err(|_| fmt::Error)?
         )?;
-        writeln!(f, "Smallest file: {}", &self.min_key)?;
+        writeln!(f, "{:19} {}", "Smallest file:", &self.min_key)?;
         writeln!(
             f,
-            "Smallest file size: {}",
+            "{:19} {}",
+            "Smallest file size:",
             &self
                 .min_size
                 .file_size(options::CONVENTIONAL)
@@ -223,9 +225,10 @@ impl fmt::Display for FindStat {
         )?;
         writeln!(
             f,
-            "Average file size: {}",
+            "{:19} {}",
+            "Average file size:",
             &self
-                .min_size
+                .average_size
                 .file_size(options::CONVENTIONAL)
                 .map_err(|_| fmt::Error)?
         )?;
