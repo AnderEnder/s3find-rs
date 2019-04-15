@@ -5,7 +5,7 @@ use rusoto_credential::{DefaultCredentialsProvider, DefaultCredentialsProviderFu
 
 pub enum CombinedProvider {
     Static(StaticProvider),
-    Simple(DefaultCredentialsProvider),
+    Simple(Box<DefaultCredentialsProvider>),
 }
 
 impl CombinedProvider {
@@ -28,7 +28,7 @@ impl CombinedProvider {
     }
 
     pub fn with_default() -> CombinedProvider {
-        CombinedProvider::Simple(DefaultCredentialsProvider::new().unwrap())
+        CombinedProvider::Simple(Box::new(DefaultCredentialsProvider::new().unwrap()))
     }
 }
 
