@@ -125,75 +125,112 @@ times out."#
 pub enum Cmd {
     /// Exec any shell program with every key
     #[structopt(name = "-exec")]
-    Exec {
-        /// Utility(program) to run
-        #[structopt(name = "utility")]
-        utility: String,
-    },
+    Exec(Exec),
 
     /// Extended print with detail information
     #[structopt(name = "-print")]
-    Print,
+    Print(AdvancedPrint),
 
     /// Delete matched keys
     #[structopt(name = "-delete")]
-    Delete,
+    Delete(MultipleDelete),
 
     /// Download matched keys
     #[structopt(name = "-download")]
-    Download {
-        /// Force download files(overwrite) even if the target files are already present
-        #[structopt(long = "force", short = "f")]
-        force: bool,
-
-        /// Directory destination to download files to
-        #[structopt(name = "destination")]
-        destination: String,
-    },
+    Download(Download),
 
     /// Copy matched keys to a s3 destination
     #[structopt(name = "-copy")]
-    Copy {
-        /// S3 path destination to copy files to
-        #[structopt(name = "destination")]
-        destination: S3path,
-
-        /// Copy keys like files
-        #[structopt(long = "flat", short = "f")]
-        flat: bool,
-    },
+    Copy(S3Copy),
 
     /// Move matched keys to a s3 destination
     #[structopt(name = "-move")]
-    Move {
-        /// S3 path destination to copy files to
-        #[structopt(name = "destination")]
-        destination: S3path,
-
-        /// Copy keys like files
-        #[structopt(long = "flat", short = "f")]
-        flat: bool,
-    },
+    Move(S3Move),
 
     /// Print the list of matched keys
     #[structopt(name = "-ls")]
-    Ls,
+    Ls(FastPrint),
 
     /// Print the list of matched keys with tags
     #[structopt(name = "-lstags")]
-    LsTags,
+    LsTags(ListTags),
 
     /// Set the tags(overwrite) for the matched keys
     #[structopt(name = "-tags")]
-    Tags {
-        /// List of the tags to set
-        #[structopt(name = "key:value", raw(min_values = "1"))]
-        tags: Vec<FindTag>,
-    },
+    Tags(SetTags),
 
     /// Make the matched keys public available (readonly)
     #[structopt(name = "-public")]
-    Public,
+    Public(SetPublic),
+}
+
+impl Default for Cmd {
+    fn default() -> Self {
+        Cmd::Ls(FastPrint {})
+    }
+}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct FastPrint {}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct AdvancedPrint {}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct MultipleDelete {}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct ListTags {}
+
+// region ?
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct SetPublic {}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct Exec {
+    /// Utility(program) to run
+    #[structopt(name = "utility")]
+    pub utility: String,
+}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct Download {
+    /// Force download files(overwrite) even if the target files are already present
+    #[structopt(long = "force", short = "f")]
+    pub force: bool,
+
+    /// Directory destination to download files to
+    #[structopt(name = "destination")]
+    pub destination: String,
+}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct S3Copy {
+    /// S3 path destination to copy files to
+    #[structopt(name = "destination")]
+    pub destination: S3path,
+
+    /// Copy keys like files
+    #[structopt(long = "flat", short = "f")]
+    pub flat: bool,
+}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct S3Move {
+    /// S3 path destination to copy files to
+    #[structopt(name = "destination")]
+    pub destination: S3path,
+
+    /// Copy keys like files
+    #[structopt(long = "flat", short = "f")]
+    pub flat: bool,
+}
+
+#[derive(StructOpt, Debug, PartialEq, Clone)]
+pub struct SetTags {
+    /// List of the tags to set
+    #[structopt(name = "key:value", raw(min_values = "1"))]
+    pub tags: Vec<FindTag>,
 }
 
 #[derive(Fail, Debug)]

@@ -8,9 +8,7 @@ use std::process::ExitStatus;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
-
-use rusoto_core::Region;
+use std::path::{Path, PathBuf};
 
 use failure::Error;
 use futures::stream::Stream;
@@ -18,29 +16,24 @@ use futures::Future;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
+use crate::arg::*;
 use crate::error::*;
 
-pub fn fprint(bucket: &str, item: &Object) {
-    println!(
-        "s3://{}/{}",
-        bucket,
-        item.key.as_ref().unwrap_or(&"".to_string())
-    );
-}
-
-pub fn advanced_print(bucket: &str, item: &Object) {
-    println!(
-        "{} {:?} {} {} s3://{}/{} {}",
-        item.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
-        item.owner.as_ref().map(|x| x.display_name.as_ref()),
-        item.size.as_ref().unwrap_or(&0),
-        item.last_modified.as_ref().unwrap_or(&"NoTime".to_string()),
-        bucket,
-        item.key.as_ref().unwrap_or(&"".to_string()),
-        item.storage_class
-            .as_ref()
-            .unwrap_or(&"NoStorage".to_string()),
-    );
+impl Cmd {
+    pub fn downcast(self) -> Box<dyn RunCommand> {
+        match self {
+            Cmd::Print(l) => Box::new(l),
+            Cmd::Ls(l) => Box::new(l),
+            Cmd::Exec(l) => Box::new(l),
+            Cmd::Delete(l) => Box::new(l),
+            Cmd::Download(l) => Box::new(l),
+            Cmd::Tags(l) => Box::new(l),
+            Cmd::LsTags(l) => Box::new(l),
+            Cmd::Public(l) => Box::new(l),
+            Cmd::Copy(l) => Box::new(l),
+            Cmd::Move(l) => Box::new(l),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -49,253 +42,75 @@ pub struct ExecStatus {
     pub runcommand: String,
 }
 
-pub fn exec(command: &str, key: &str) -> Result<ExecStatus, Error> {
-    let scommand = command.replace("{}", key);
-
-    let mut command_args = scommand.split(' ');
-    let command_name = command_args.next().ok_or(FunctionError::CommandlineParse)?;
-
-    let mut rcommand = Command::new(command_name);
-    for arg in command_args {
-        rcommand.arg(arg);
-    }
-
-    let output = rcommand.output()?;
-    let output_str = String::from_utf8_lossy(&output.stdout).to_string();
-    print!("{}", &output_str);
-
-    Ok(ExecStatus {
-        status: output.status,
-        runcommand: scommand.clone(),
-    })
+pub trait RunCommand {
+    fn execute(&self, client: &S3Client, region: &str, path: &S3path, list: &[&Object]);
 }
 
-pub fn s3_delete(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
-    let key_list: Vec<_> = list
-        .iter()
-        .flat_map(|x| match x.key.as_ref() {
-            Some(key) => Some(ObjectIdentifier {
-                key: key.to_string(),
-                version_id: None,
-            }),
-            _ => None,
-        })
-        .collect();
-
-    let request = DeleteObjectsRequest {
-        bucket: bucket.to_string(),
-        delete: Delete {
-            objects: key_list,
-            quiet: None,
-        },
-        ..Default::default()
-    };
-
-    let result = client.delete_objects(request).sync()?;
-
-    if let Some(deleted_list) = result.deleted {
-        for object in deleted_list {
+impl RunCommand for FastPrint {
+    fn execute(&self, _c: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        list.iter().for_each(|x| {
             println!(
-                "deleted: s3://{}/{}",
-                bucket,
-                object.key.as_ref().unwrap_or(&"".to_string())
-            );
-        }
+                "s3://{}/{}",
+                &path.bucket,
+                x.key.as_ref().unwrap_or(&"".to_string())
+            )
+        });
     }
-
-    Ok(())
 }
 
-pub fn s3_download(
-    client: &S3Client,
-    bucket: &str,
-    list: &[&Object],
-    target: &str,
-    force: bool,
-) -> Result<(), Error> {
-    for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
-        let request = GetObjectRequest {
-            bucket: bucket.to_owned(),
-            key: key.to_owned(),
-            ..Default::default()
-        };
+impl RunCommand for AdvancedPrint {
+    fn execute(&self, _c: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        list.iter().for_each(|x| {
+            println!(
+                "{0} {1:?} {2} {3} s3://{4}/{5} {6}",
+                x.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
+                x.owner.as_ref().map(|x| x.display_name.as_ref()),
+                x.size.as_ref().unwrap_or(&0),
+                x.last_modified.as_ref().unwrap_or(&"NoTime".to_string()),
+                &path.bucket,
+                x.key.as_ref().unwrap_or(&"".to_string()),
+                x.storage_class.as_ref().unwrap_or(&"NoStorage".to_string()),
+            )
+        });
+    }
+}
 
-        let size = (*object
-            .size
-            .as_ref()
-            .ok_or(FunctionError::ObjectFieldError)?) as u64;
-        let file_path = Path::new(target).join(key);
-        let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
+impl Exec {
+    pub fn exec(&self, key: &str) -> Result<ExecStatus, Error> {
+        let scommand = self.utility.replace("{}", key);
 
-        let mut count: u64 = 0;
-        let pb = ProgressBar::new(size);
-        pb.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-            .progress_chars("#>-"));
-        println!(
-            "downloading: s3://{}/{} => {}",
-            bucket,
-            &key,
-            file_path
-                .to_str()
-                .ok_or(FunctionError::FileNameParseError)?
-        );
+        let mut command_args = scommand.split(' ');
+        let command_name = command_args.next().ok_or(FunctionError::CommandlineParse)?;
 
-        if file_path.exists() && !force {
-            return Err(FunctionError::PresentFileError.into());
+        let mut rcommand = Command::new(command_name);
+        for arg in command_args {
+            rcommand.arg(arg);
         }
 
-        let result = client.get_object(request).sync()?;
+        let output = rcommand.output()?;
+        let output_str = String::from_utf8_lossy(&output.stdout).to_string();
+        print!("{}", &output_str);
 
-        let stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
-
-        fs::create_dir_all(&dir_path)?;
-        let mut output = File::create(&file_path)?;
-
-        let _r = stream
-            .for_each(|buf| {
-                output.write_all(&buf)?;
-                count += buf.len() as u64;
-                pb.set_position(count);
-                Ok(())
-            })
-            .wait();
-    }
-
-    Ok(())
-}
-
-pub fn s3_set_tags(
-    client: &S3Client,
-    bucket: &str,
-    list: &[&Object],
-    tags: &Tagging,
-) -> Result<(), Error> {
-    for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
-
-        let request = PutObjectTaggingRequest {
-            bucket: bucket.to_owned(),
-            key: key.to_owned(),
-            tagging: tags.clone(),
-            ..Default::default()
-        };
-
-        client.put_object_tagging(request).sync()?;
-
-        println!("tags are set for: s3://{}/{}", bucket, &key);
-    }
-
-    Ok(())
-}
-
-pub fn s3_list_tags(client: &S3Client, bucket: &str, list: &[&Object]) -> Result<(), Error> {
-    for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
-
-        let request = GetObjectTaggingRequest {
-            bucket: bucket.to_owned(),
-            key: key.to_owned(),
-            ..Default::default()
-        };
-
-        let tag_output = client.get_object_tagging(request).sync()?;
-
-        let tags: String = tag_output
-            .tag_set
-            .into_iter()
-            .map(|x| format!("{}:{}", x.key, x.value))
-            .collect::<Vec<String>>()
-            .join(",");
-
-        println!(
-            "s3://{}/{} {}",
-            bucket,
-            object.key.as_ref().unwrap_or(&"".to_string()),
-            tags,
-        );
-    }
-
-    Ok(())
-}
-
-fn s3_public_url(key: &str, bucket: &str, region: &str) -> String {
-    match region {
-        "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", bucket, key),
-        _ => format!("http://{}.s3-{}.amazonaws.com/{}", bucket, region, key),
+        Ok(ExecStatus {
+            status: output.status,
+            runcommand: scommand.clone(),
+        })
     }
 }
 
-pub fn s3_set_public(
-    client: &S3Client,
-    bucket: &str,
-    list: &[&Object],
-    region: &Region,
-) -> Result<(), Error> {
-    let region_str = region.name();
-    for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
-
-        let request = PutObjectAclRequest {
-            bucket: bucket.to_owned(),
-            key: key.to_owned(),
-            acl: Some("public-read".to_string()),
-            ..Default::default()
-        };
-
-        client.put_object_acl(request).sync()?;
-        let url = s3_public_url(key, bucket, region_str);
-        println!("{} {}", &key, url);
+impl RunCommand for Exec {
+    fn execute(&self, _: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        list.iter().for_each(|x| {
+            let key = x.key.as_ref().map(String::as_str).unwrap_or("");
+            let path = format!("s3://{}/{}", &path.bucket, key);
+            // check result later
+            self.exec(&path);
+        });
     }
-
-    Ok(())
 }
 
-pub fn s3_copy(
-    client: &S3Client,
-    bucket: &str,
-    list: &[&Object],
-    target_bucket: &str,
-    target_path: &str,
-    flat: bool,
-    delete: bool,
-) -> Result<(), Error> {
-    let action = if delete { "moving" } else { "copying" };
-
-    for object in list {
-        let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
-
-        let key2 = if flat {
-            Path::new(key)
-                .file_name()
-                .ok_or(FunctionError::PathConverError)?
-                .to_str()
-                .ok_or(FunctionError::PathConverError)?
-        } else {
-            key
-        };
-
-        let target_key = Path::new(target_path).join(key2);
-        let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
-        let source_path = format!("{}/{}", bucket, key);
-
-        println!(
-            "{}: s3://{} => s3://{}/{}",
-            action, source_path, target_bucket, target_key_str,
-        );
-
-        let request = CopyObjectRequest {
-            bucket: target_bucket.to_owned(),
-            key: target_key_str.to_owned(),
-            copy_source: source_path,
-            ..Default::default()
-        };
-
-        client.copy_object(request).sync()?;
-    }
-
-    if delete {
+impl RunCommand for MultipleDelete {
+    fn execute(&self, client: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
         let key_list: Vec<_> = list
             .iter()
             .flat_map(|x| match x.key.as_ref() {
@@ -308,7 +123,7 @@ pub fn s3_copy(
             .collect();
 
         let request = DeleteObjectsRequest {
-            bucket: bucket.to_string(),
+            bucket: path.bucket.to_string(),
             delete: Delete {
                 objects: key_list,
                 quiet: None,
@@ -316,12 +131,305 @@ pub fn s3_copy(
             ..Default::default()
         };
 
-        let _result = client.delete_objects(request).sync()?;
-    }
+        let result = client.delete_objects(request).sync();
 
-    Ok(())
+        match result {
+            Ok(r) => {
+                if let Some(deleted_list) = r.deleted {
+                    for object in deleted_list {
+                        println!(
+                            "deleted: s3://{}/{}",
+                            &path.bucket,
+                            object.key.as_ref().unwrap_or(&"".to_string())
+                        );
+                    }
+                }
+            }
+            Err(e) => eprintln!("{}", e),
+        }
+    }
 }
 
+impl RunCommand for SetTags {
+    fn execute(&self, client: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        for object in list {
+            let key = object
+                .key
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)
+                .unwrap();
+
+            let tags = Tagging {
+                tag_set: self.tags.iter().map(|x| x.clone().into()).collect(),
+            };
+
+            let request = PutObjectTaggingRequest {
+                bucket: path.bucket.to_owned(),
+                key: key.to_owned(),
+                tagging: tags,
+                ..Default::default()
+            };
+
+            client.put_object_tagging(request).sync().unwrap();
+
+            println!("tags are set for: s3://{}/{}", &path.bucket, &key);
+        }
+    }
+}
+
+impl RunCommand for ListTags {
+    fn execute(&self, client: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        for object in list {
+            let key = object
+                .key
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)
+                .unwrap();
+
+            let request = GetObjectTaggingRequest {
+                bucket: path.bucket.to_string(),
+                key: key.to_owned(),
+                ..Default::default()
+            };
+
+            let tag_output = client.get_object_tagging(request).sync().unwrap();
+
+            let tags: String = tag_output
+                .tag_set
+                .into_iter()
+                .map(|x| format!("{}:{}", x.key, x.value))
+                .collect::<Vec<String>>()
+                .join(",");
+
+            println!(
+                "s3://{}/{} {}",
+                &path.bucket,
+                object.key.as_ref().unwrap_or(&"".to_string()),
+                tags,
+            );
+        }
+    }
+}
+
+impl RunCommand for SetPublic {
+    fn execute(&self, client: &S3Client, region: &str, path: &S3path, list: &[&Object]) {
+        // let region_str = self.0.name();
+        for object in list {
+            let key = object
+                .key
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)
+                .unwrap();
+
+            let request = PutObjectAclRequest {
+                bucket: path.bucket.to_owned(),
+                key: key.to_owned(),
+                acl: Some("public-read".to_string()),
+                ..Default::default()
+            };
+
+            client.put_object_acl(request).sync().unwrap();
+
+            let url = match region {
+                "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", &path.bucket, key),
+                _ => format!(
+                    "http://{}.s3-{}.amazonaws.com/{}",
+                    &path.bucket, region, key
+                ),
+            };
+            println!("{} {}", &key, url);
+        }
+    }
+}
+
+impl RunCommand for Download {
+    fn execute(&self, client: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        for object in list {
+            let key = object
+                .key
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)
+                .unwrap();
+
+            let request = GetObjectRequest {
+                bucket: path.bucket.to_owned(),
+                key: key.to_owned(),
+                ..Default::default()
+            };
+
+            let size = (*object
+                .size
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)
+                .unwrap()) as u64;
+            let file_path = Path::new(&self.destination).join(key);
+            let dir_path = file_path
+                .parent()
+                .ok_or(FunctionError::ParentPathParse)
+                .unwrap();
+
+            let mut count: u64 = 0;
+            let pb = ProgressBar::new(size);
+            pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .progress_chars("#>-"));
+
+            println!(
+                "downloading: s3://{}/{} => {}",
+                &path.bucket,
+                &key,
+                file_path
+                    .to_str()
+                    .ok_or(FunctionError::FileNameParseError)
+                    .unwrap()
+            );
+
+            if file_path.exists() && !self.force {
+                return;
+            }
+
+            let result = client.get_object(request).sync().unwrap();
+
+            let stream = result.body.ok_or(FunctionError::S3FetchBodyError).unwrap();
+
+            fs::create_dir_all(&dir_path).unwrap();
+            let mut output = File::create(&file_path).unwrap();
+
+            let _r = stream
+                .for_each(|buf| {
+                    output.write_all(&buf)?;
+                    count += buf.len() as u64;
+                    pb.set_position(count);
+                    Ok(())
+                })
+                .wait();
+        }
+    }
+}
+
+impl RunCommand for S3Copy {
+    fn execute(&self, client: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        for object in list {
+            let key = object
+                .key
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)
+                .unwrap();
+
+            let key2 = if self.flat {
+                Path::new(key)
+                    .file_name()
+                    .ok_or(FunctionError::PathConverError)
+                    .unwrap()
+                    .to_str()
+                    .ok_or(FunctionError::PathConverError)
+                    .unwrap()
+            } else {
+                key
+            };
+
+            let target_key = if let Some(ref r) = self.destination.prefix {
+                Path::new(r).join(key2)
+            } else {
+                PathBuf::from(key2)
+            };
+
+            let target_key_str = target_key
+                .to_str()
+                .ok_or(FunctionError::PathConverError)
+                .unwrap();
+            let source_path = format!("{0}/{1}", &path.bucket, key);
+
+            println!(
+                "copying: s3://{0} => s3://{1}/{2}",
+                source_path, &self.destination.bucket, target_key_str,
+            );
+
+            let request = CopyObjectRequest {
+                bucket: self.destination.bucket.clone(),
+                key: target_key_str.to_owned(),
+                copy_source: source_path,
+                ..Default::default()
+            };
+
+            client.copy_object(request).sync().unwrap();
+        }
+    }
+}
+
+impl RunCommand for S3Move {
+    fn execute(&self, client: &S3Client, _r: &str, path: &S3path, list: &[&Object]) {
+        for object in list {
+            let key = object
+                .key
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)
+                .unwrap();
+
+            let key2 = if self.flat {
+                Path::new(key)
+                    .file_name()
+                    .ok_or(FunctionError::PathConverError)
+                    .unwrap()
+                    .to_str()
+                    .ok_or(FunctionError::PathConverError)
+                    .unwrap()
+            } else {
+                key
+            };
+
+            let target_key = if let Some(ref r) = self.destination.prefix {
+                Path::new(r).join(key2)
+            } else {
+                PathBuf::from(key2)
+            };
+
+            let target_key_str = target_key
+                .to_str()
+                .ok_or(FunctionError::PathConverError)
+                .unwrap();
+            let source_path = format!("{0}/{1}", &path.bucket, key);
+
+            println!(
+                "moving: s3://{0} => s3://{1}/{2}",
+                source_path, &self.destination.bucket, target_key_str,
+            );
+
+            let request = CopyObjectRequest {
+                bucket: self.destination.bucket.to_owned(),
+                key: target_key_str.to_owned(),
+                copy_source: source_path,
+                ..Default::default()
+            };
+
+            client.copy_object(request).sync().unwrap();
+        }
+
+        let key_list: Vec<_> = list
+            .iter()
+            .flat_map(|x| match x.key.as_ref() {
+                Some(key) => Some(ObjectIdentifier {
+                    key: key.to_string(),
+                    version_id: None,
+                }),
+                _ => None,
+            })
+            .collect();
+
+        let request = DeleteObjectsRequest {
+            bucket: path.bucket.clone(),
+            delete: Delete {
+                objects: key_list,
+                quiet: None,
+            },
+            ..Default::default()
+        };
+
+        let _result = client.delete_objects(request).sync().unwrap();
+    }
+}
+
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,16 +508,5 @@ mod tests {
 
         fprint("bucket", &object);
     }
-
-    #[test]
-    fn s3_public_url_test() {
-        assert_eq!(
-            s3_public_url("key", "bucket", "us-east-1"),
-            "http://bucket.s3.amazonaws.com/key"
-        );
-        assert_eq!(
-            s3_public_url("key", "bucket", "us-west-1"),
-            "http://bucket.s3-us-west-1.amazonaws.com/key"
-        );
-    }
 }
+*/

@@ -1,7 +1,7 @@
 use failure::Error;
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
-use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag, Tagging};
+use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
 
 use crate::arg::*;
 use crate::credential::*;
@@ -22,83 +22,21 @@ impl FilterList {
     }
 }
 
-pub struct FindCommand {
+pub struct Find {
     pub client: S3Client,
     pub region: Region,
     pub path: S3path,
     pub filters: FilterList,
     pub limit: Option<usize>,
     pub page_size: i64,
-    pub command: Option<Cmd>,
+    pub command: Box<dyn RunCommand>,
 }
 
-impl FindCommand {
+impl Find {
     #![allow(unreachable_patterns)]
     pub fn exec(&self, list: &[&Object]) -> Result<(), Error> {
-        match (*self).command {
-            Some(Cmd::Print) => {
-                let _nlist: Vec<_> = list
-                    .iter()
-                    .map(|x| advanced_print(&self.path.bucket, x))
-                    .collect();
-            }
-            Some(Cmd::Ls) => {
-                let _nlist: Vec<_> = list.iter().map(|x| fprint(&self.path.bucket, x)).collect();
-            }
-            Some(Cmd::Exec { utility: ref p }) => {
-                let _nlist: Vec<_> = list
-                    .iter()
-                    .map(|x| {
-                        let key = x.key.as_ref().map(String::as_str).unwrap_or("");
-                        let path = format!("s3://{}/{}", &self.path.bucket, key);
-                        exec(&p, &path)
-                    })
-                    .collect();
-            }
-            Some(Cmd::Delete) => s3_delete(&self.client, &self.path.bucket, list)?,
-            Some(Cmd::Download {
-                destination: ref d,
-                force: ref f,
-            }) => s3_download(&self.client, &self.path.bucket, &list, d, f.to_owned())?,
-            Some(Cmd::Tags { tags: ref t }) => {
-                let tags = Tagging {
-                    tag_set: t.iter().map(|x| x.clone().into()).collect(),
-                };
-                s3_set_tags(&self.client, &self.path.bucket, &list, &tags)?
-            }
-            Some(Cmd::LsTags) => s3_list_tags(&self.client, &self.path.bucket, list)?,
-            Some(Cmd::Public) => {
-                s3_set_public(&self.client, &self.path.bucket, list, &self.region)?
-            }
-            Some(Cmd::Copy {
-                destination: ref d,
-                flat: f,
-            }) => s3_copy(
-                &self.client,
-                &self.path.bucket,
-                &list,
-                &d.bucket,
-                &d.clone().prefix.unwrap_or_default(),
-                f,
-                false,
-            )?,
-            Some(Cmd::Move {
-                destination: ref d,
-                flat: f,
-            }) => s3_copy(
-                &self.client,
-                &self.path.bucket,
-                &list,
-                &d.bucket,
-                &d.clone().prefix.unwrap_or_default(),
-                f,
-                true,
-            )?,
-            Some(_) => println!("Not implemented"),
-            None => {
-                let _nlist: Vec<_> = list.iter().map(|x| fprint(&self.path.bucket, x)).collect();
-            }
-        }
+        let region = &self.region.name();
+        self.command.execute(&self.client, region, &self.path, list);
         Ok(())
     }
 
@@ -117,8 +55,8 @@ impl FindCommand {
     }
 }
 
-impl From<FindOpt> for FindCommand {
-    fn from(opts: FindOpt) -> FindCommand {
+impl From<FindOpt> for Find {
+    fn from(opts: FindOpt) -> Self {
         let region = opts.aws_region.clone();
         let provider =
             CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
@@ -127,12 +65,12 @@ impl From<FindOpt> for FindCommand {
 
         let client = S3Client::new_with(dispatcher, provider, region.clone());
 
-        FindCommand {
+        Find {
             path: opts.path.clone(),
             client,
             region,
             filters: opts.clone().into(),
-            command: opts.cmd.clone(),
+            command: opts.cmd.unwrap_or_default().downcast(),
             page_size: opts.page_size,
             limit: opts.limit,
         }
@@ -140,27 +78,36 @@ impl From<FindOpt> for FindCommand {
 }
 
 impl From<FindOpt> for FilterList {
-    fn from(opts: FindOpt) -> FilterList {
+    fn from(opts: FindOpt) -> Self {
         let mut list: Vec<Box<dyn Filter>> = Vec::new();
 
-        for name in &opts.name {
-            list.push(Box::new(name.clone()));
+        let FindOpt {
+            name,
+            iname,
+            regex,
+            size,
+            mtime,
+            ..
+        } = opts;
+
+        for name in name {
+            list.push(Box::new(name));
         }
 
-        for iname in &opts.iname {
-            list.push(Box::new(iname.clone()));
+        for iname in iname {
+            list.push(Box::new(iname));
         }
 
-        for regex in &opts.regex {
-            list.push(Box::new(regex.clone()));
+        for regex in regex {
+            list.push(Box::new(regex));
         }
 
-        for size in &opts.size {
-            list.push(Box::new(size.clone()));
+        for size in size {
+            list.push(Box::new(size));
         }
 
-        for mtime in &opts.mtime {
-            list.push(Box::new(mtime.clone()));
+        for mtime in mtime {
+            list.push(Box::new(mtime));
         }
 
         FilterList(list)
@@ -168,7 +115,7 @@ impl From<FindOpt> for FilterList {
 }
 
 impl From<FindTag> for Tag {
-    fn from(tag: FindTag) -> Tag {
+    fn from(tag: FindTag) -> Self {
         Tag {
             key: tag.key,
             value: tag.value,
@@ -202,7 +149,7 @@ mod tests {
 
     #[test]
     fn from_findopt_to_findcommand() {
-        let find: FindCommand = FindOpt {
+        let find: Find = FindOpt {
             path: S3path {
                 bucket: "bucket".to_owned(),
                 prefix: Some("prefix".to_owned()),
@@ -217,7 +164,7 @@ mod tests {
             size: vec![FindSize::Lower(1000)],
             limit: None,
             page_size: 1000,
-            cmd: Some(Cmd::Ls),
+            cmd: Some(Cmd::Ls(FastPrint {})),
         }
         .into();
 
@@ -229,7 +176,6 @@ mod tests {
             }
         );
         assert_eq!(find.region, Region::UsEast1);
-        assert_eq!(find.command, Some(Cmd::Ls));
 
         let object_ok = Object {
             key: Some("pref".to_owned()),

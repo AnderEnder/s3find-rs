@@ -6,7 +6,7 @@ use s3find::arg::*;
 use s3find::command::*;
 
 fn main() -> Result<(), Error> {
-    let status: FindCommand = FindOpt::from_args().into();
+    let status: Find = FindOpt::from_args().into();
     let mut request = status.list_request();
     let mut count: usize = 0;
 
