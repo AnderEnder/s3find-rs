@@ -31,7 +31,7 @@ matrix:
         - docker
       script:
         - cargo clean
-        - docker run --security-opt seccomp=unconfined -v "$PWD:/volume" xd009642/tarpaulin:develop sh -c "cargo tarpaulin -v -f -t10 --out Xml"
+        - docker run --security-opt seccomp=unconfined -v "$PWD:/volume" xd009642/tarpaulin sh -c "cargo tarpaulin -v -f --out Xml"
         - bash <(curl -s https://codecov.io/bash)
       before_deploy:
       deploy:
