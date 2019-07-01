@@ -35,7 +35,7 @@ travis-ci = { repository = "AnderEnder/s3find-rs"}
 codecov = { repository = "AnderEnder/s3find-rs" }
 
 [dependencies]
-rusoto_credential = "0.39"
+rusoto_credential = "0.40"
 structopt = "0.2"
 glob = "0.3"
 regex = "1"
@@ -50,12 +50,12 @@ default-features = false
 features = [ "suggestions", "color" ]
 
 [dependencies.rusoto_core]
-version = "0.39"
+version = "0.40"
 default-features = false
 features = [ "rustls" ]
 
 [dependencies.rusoto_s3]
-version = "0.39"
+version = "0.40"
 default-features = false
 features = [ "rustls" ]
 
@@ -72,7 +72,7 @@ regex = "1"
 failure = "0.1"
 
 [build-dependencies.rusoto_core]
-version = "0.39"
+version = "0.40"
 default-features = false
 features = [ "rustls" ]
 
