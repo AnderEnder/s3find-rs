@@ -36,8 +36,7 @@ impl Find {
     #![allow(unreachable_patterns)]
     pub fn exec(&self, list: &[&Object]) -> Result<(), Error> {
         let region = &self.region.name();
-        self.command.execute(&self.client, region, &self.path, list);
-        Ok(())
+        self.command.execute(&self.client, region, &self.path, list)
     }
 
     pub fn list_request(&self) -> ListObjectsV2Request {
