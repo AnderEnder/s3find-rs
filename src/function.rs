@@ -336,7 +336,7 @@ impl RunCommand for Download {
             fs::create_dir_all(&dir_path)?;
             let mut output = File::create(&file_path)?;
 
-            let _r = stream
+            stream
                 .for_each(|buf| {
                     output.write_all(&buf)?;
                     count += buf.len() as u64;
