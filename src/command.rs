@@ -46,7 +46,8 @@ impl Find {
         };
 
         let region = &self.region.name();
-        self.command.execute(&self.client, region, &self.path, list)?;
+        self.command
+            .execute(&self.client, region, &self.path, list)?;
         Ok(status)
     }
 
@@ -283,7 +284,7 @@ mod tests {
             page_size: 1000,
             cmd: Some(Cmd::Ls(FastPrint {})),
             summarize: false,
-            }
+        }
         .into();
 
         assert_eq!(
