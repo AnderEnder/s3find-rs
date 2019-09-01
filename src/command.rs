@@ -1,7 +1,10 @@
 use failure::Error;
+use humansize::{file_size_opts as options, FileSize};
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
+use std::fmt;
+use std::ops::Add;
 
 use crate::arg::*;
 use crate::credential::*;
@@ -29,14 +32,23 @@ pub struct Find {
     pub filters: FilterList,
     pub limit: Option<usize>,
     pub page_size: i64,
+    pub stats: bool,
+    pub summarize: bool,
     pub command: Box<dyn RunCommand>,
 }
 
 impl Find {
     #![allow(unreachable_patterns)]
-    pub fn exec(&self, list: &[&Object]) -> Result<(), Error> {
+    pub fn exec(&self, list: &[&Object], acc: Option<FindStat>) -> Result<Option<FindStat>, Error> {
+        let status = match acc {
+            Some(stat) => Some(stat + list),
+            None => None,
+        };
+
         let region = &self.region.name();
-        self.command.execute(&self.client, region, &self.path, list)
+        self.command
+            .execute(&self.client, region, &self.path, list)?;
+        Ok(status)
     }
 
     pub fn list_request(&self) -> ListObjectsV2Request {
@@ -50,6 +62,14 @@ impl Find {
             prefix: self.path.prefix.clone(),
             request_payer: None,
             start_after: None,
+        }
+    }
+
+    pub fn stats(&self) -> Option<FindStat> {
+        if self.summarize {
+            Some(FindStat::default())
+        } else {
+            None
         }
     }
 }
@@ -71,7 +91,9 @@ impl From<FindOpt> for Find {
             filters: opts.clone().into(),
             command: opts.cmd.unwrap_or_default().downcast(),
             page_size: opts.page_size,
+            summarize: opts.summarize,
             limit: opts.limit,
+            stats: opts.summarize,
         }
     }
 }
@@ -122,6 +144,103 @@ impl From<FindTag> for Tag {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindStat {
+    pub total_files: usize,
+    pub total_space: i64,
+    pub max_size: i64,
+    pub min_size: i64,
+    pub max_key: String,
+    pub min_key: String,
+    pub average_size: i64,
+}
+
+impl Add<&[&Object]> for FindStat {
+    type Output = FindStat;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    fn add(mut self: FindStat, list: &[&Object]) -> FindStat {
+        for x in list {
+            self.total_files += 1;
+            let size = x.size.as_ref().unwrap_or(&0);
+            self.total_space += size;
+
+            if self.max_size < *size {
+                self.max_size = *size;
+                self.max_key = x.key.clone().unwrap_or_default();
+            }
+
+            if self.min_size > *size {
+                self.min_size = *size;
+                self.min_key = x.key.clone().unwrap_or_default();
+            }
+
+            self.average_size = self.total_space / (self.total_files as i64);
+        }
+        self
+    }
+}
+
+impl Default for FindStat {
+    fn default() -> Self {
+        FindStat {
+            total_files: 0,
+            total_space: 0,
+            max_size: 0,
+            min_size: i64::max_value(),
+            max_key: "".to_owned(),
+            min_key: "".to_owned(),
+            average_size: 0,
+        }
+    }
+}
+
+impl fmt::Display for FindStat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f)?;
+        writeln!(f, "Summary")?;
+        writeln!(f, "{:19} {}", "Total files:", &self.total_files)?;
+        writeln!(
+            f,
+            "Total space:        {}",
+            &self
+                .total_space
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
+        writeln!(f, "{:19} {}", "Largest file:", &self.max_key)?;
+        writeln!(
+            f,
+            "{:19} {}",
+            "Largest file size:",
+            &self
+                .max_size
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
+        writeln!(f, "{:19} {}", "Smallest file:", &self.min_key)?;
+        writeln!(
+            f,
+            "{:19} {}",
+            "Smallest file size:",
+            &self
+                .min_size
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
+        writeln!(
+            f,
+            "{:19} {}",
+            "Average file size:",
+            &self
+                .average_size
+                .file_size(options::CONVENTIONAL)
+                .map_err(|_| fmt::Error)?
+        )?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +283,7 @@ mod tests {
             limit: None,
             page_size: 1000,
             cmd: Some(Cmd::Ls(FastPrint {})),
+            summarize: false,
         }
         .into();
 
