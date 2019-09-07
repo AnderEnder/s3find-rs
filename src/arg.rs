@@ -10,9 +10,7 @@ use structopt::StructOpt;
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "s3find",
-    raw(
-        global_settings = "&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]"
-    ),
+	global_settings(&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]),
     after_help = r#"
 The authorization flow is the following chain:
   * use credentials from arguments provided by users
@@ -26,14 +24,14 @@ The authorization flow is the following chain:
 )]
 pub struct FindOpt {
     /// S3 path to walk through. It should be s3://bucket/path
-    #[structopt(name = "path")] //, raw(index = r#"1"#))]
+    #[structopt(name = "path")]
     pub path: S3path,
 
     /// AWS access key. Unrequired.
     #[structopt(
         name = "aws_access_key",
         long = "aws-access-key",
-        raw(requires_all = r#"&["aws_secret_key"]"#)
+        requires_all = &["aws_secret_key"]
     )]
     pub aws_access_key: Option<String>,
 
@@ -41,7 +39,7 @@ pub struct FindOpt {
     #[structopt(
         name = "aws_secret_key",
         long = "aws-secret-key",
-        raw(requires_all = r#"&["aws_access_key"]"#)
+        requires_all = &["aws_access_key"]
     )]
     pub aws_secret_key: Option<String>,
 
@@ -50,22 +48,23 @@ pub struct FindOpt {
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
-    #[structopt(name = "npatern", long = "name", raw(number_of_values = "1"))]
+    #[structopt(name = "npatern", long = "name", number_of_values = 1)]
     pub name: Vec<NameGlob>,
 
     /// Case-insensitive glob pattern for match, can be multiple
-    #[structopt(name = "ipatern", long = "iname", raw(number_of_values = "1"))]
+    #[structopt(name = "ipatern", long = "iname", number_of_values = 1)]
     pub iname: Vec<InameGlob>,
 
     /// Regex pattern for match, can be multiple
-    #[structopt(name = "rpatern", long = "regex", raw(number_of_values = "1"))]
+    #[structopt(name = "rpatern", long = "regex", number_of_values = 1)]
     pub regex: Vec<Regex>,
 
     /// Modification time for match
     #[structopt(
         name = "time",
         long = "mtime",
-        raw(number_of_values = "1", allow_hyphen_values = "true"),
+        number_of_values = 1,
+        allow_hyphen_values = true,
         long_help = r#"Modification time for match, a time period:
     +5d - for period from now-5d to now
     -5d - for period  before now-5d
@@ -85,7 +84,8 @@ Can be multiple, but should be overlaping"#
     #[structopt(
         name = "bytes_size",
         long = "size",
-        raw(number_of_values = "1", allow_hyphen_values = "true"),
+        number_of_values = 1,
+        allow_hyphen_values = true,
         long_help = r#"File size for match:
     5k - exact match 5k,
     +5k - bigger than 5k,
@@ -128,47 +128,47 @@ times out."#
 #[derive(StructOpt, Debug, PartialEq, Clone)]
 pub enum Cmd {
     /// Exec any shell program with every key
-    #[structopt(name = "-exec")]
+    #[structopt(name = "exec")]
     Exec(Exec),
 
     /// Extended print with detail information
-    #[structopt(name = "-print")]
+    #[structopt(name = "print")]
     Print(AdvancedPrint),
 
     /// Delete matched keys
-    #[structopt(name = "-delete")]
+    #[structopt(name = "delete")]
     Delete(MultipleDelete),
 
     /// Download matched keys
-    #[structopt(name = "-download")]
+    #[structopt(name = "download")]
     Download(Download),
 
     /// Copy matched keys to a s3 destination
-    #[structopt(name = "-copy")]
+    #[structopt(name = "copy")]
     Copy(S3Copy),
 
     /// Move matched keys to a s3 destination
-    #[structopt(name = "-move")]
+    #[structopt(name = "move")]
     Move(S3Move),
 
     /// Print the list of matched keys
-    #[structopt(name = "-ls")]
+    #[structopt(name = "ls")]
     Ls(FastPrint),
 
     /// Print the list of matched keys with tags
-    #[structopt(name = "-lstags")]
+    #[structopt(name = "lstags")]
     LsTags(ListTags),
 
     /// Set the tags(overwrite) for the matched keys
-    #[structopt(name = "-tags")]
+    #[structopt(name = "tags")]
     Tags(SetTags),
 
     /// Make the matched keys public available (readonly)
-    #[structopt(name = "-public")]
+    #[structopt(name = "public")]
     Public(SetPublic),
 
     /// Do not do anything with keys, do not print them as well
-    #[structopt(name = "-nothing")]
+    #[structopt(name = "nothing")]
     Nothing(DoNothing),
 }
 
@@ -237,7 +237,7 @@ pub struct S3Move {
 #[derive(StructOpt, Debug, PartialEq, Clone)]
 pub struct SetTags {
     /// List of the tags to set
-    #[structopt(name = "key:value", raw(min_values = "1"))]
+    #[structopt(name = "key:value", min_values = 1)]
     pub tags: Vec<FindTag>,
 }
 

@@ -10,27 +10,30 @@ A command line utility to walk an Amazon S3 hierarchy. An analog of find for Ama
 
 ```sh
 USAGE:
-    s3find [OPTIONS] <path> [SUBCOMMAND]
+    s3find [FLAGS] [OPTIONS] <path> [SUBCOMMAND]
 
 FLAGS:
     -h, --help
             Prints help information
+
+        --summarize
+            Print summary statistic
 
     -V, --version
             Prints version information
 
 
 OPTIONS:
-        --aws-access-key <aws_access_key>
+        --aws-access-key <aws-access-key>
             AWS access key. Unrequired.
 
-        --aws-region <aws_region>
+        --aws-region <aws-region>
             The region to use. Default value is us-east-1 [default: us-east-1]
 
-        --aws-secret-key <aws_secret_key>
+        --aws-secret-key <aws-secret-key>
             AWS secret key. Unrequired
 
-        --size <bytes_size>...
+        --size <bytes-size>...
             File size for match:
                 5k - exact match 5k,
                 +5k - bigger than 5k,
@@ -79,17 +82,18 @@ ARGS:
 
 
 SUBCOMMANDS:
-    -copy        Copy matched keys to a s3 destination
-    -delete      Delete matched keys
-    -download    Download matched keys
-    -exec        Exec any shell program with every key
-    -ls          Print the list of matched keys
-    -lstags      Print the list of matched keys with tags
-    -move        Move matched keys to a s3 destination
-    -print       Extended print with detail information
-    -public      Make the matched keys public available (readonly)
-    -tags        Set the tags(overwrite) for the matched keys
-    help         Prints this message or the help of the given subcommand(s)
+    copy        Copy matched keys to a s3 destination
+    delete      Delete matched keys
+    download    Download matched keys
+    exec        Exec any shell program with every key
+    help        Prints this message or the help of the given subcommand(s)
+    ls          Print the list of matched keys
+    lstags      Print the list of matched keys with tags
+    move        Move matched keys to a s3 destination
+    nothing     Do not do anything with keys, do not print them as well
+    print       Extended print with detail information
+    public      Make the matched keys public available (readonly)
+    tags        Set the tags(overwrite) for the matched keys
 
 
 The authorization flow is the following chain:
