@@ -113,73 +113,73 @@ The authorization flow is the following chain:
 #### Print
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' -print
+s3find 's3://example-bucket/example-path' --name '*' print
 ```
 
 #### Delete
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' -delete
+s3find 's3://example-bucket/example-path' --name '*' delete
 ```
 
 #### List
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' -ls
+s3find 's3://example-bucket/example-path' --name '*' ls
 ```
 
 #### List keys with tags
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' -lstags
+s3find 's3://example-bucket/example-path' --name '*' lstags
 ```
 
 #### Exec
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' -exec 'echo {}'
+s3find 's3://example-bucket/example-path' --name '*' exec 'echo {}'
 ```
 
 #### Download
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' -download
+s3find 's3://example-bucket/example-path' --name '*' download
 ```
 
 #### Copy files to another s3 location
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*.dat' -copy -f 's3://example-bucket/example-path2'
+s3find 's3://example-bucket/example-path' --name '*.dat' copy -f 's3://example-bucket/example-path2'
 ```
 
 #### Move files to another s3 location
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*.dat' -move -f 's3://example-bucket/example-path2'
+s3find 's3://example-bucket/example-path' --name '*.dat' move -f 's3://example-bucket/example-path2'
 ```
 
 #### Set tags
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*9*' -tags 'key:value' 'env:staging'
+s3find 's3://example-bucket/example-path' --name '*9*' tags 'key:value' 'env:staging'
 ```
 
 #### Make public available
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*9*' -public
+s3find 's3://example-bucket/example-path' --name '*9*' public
 ```
 
 ### Find path by case insensitive glob pattern
 
 ```sh
-s3find 's3://example-bucket/example-path' --iname '*s*' -ls
+s3find 's3://example-bucket/example-path' --iname '*s*' ls
 ```
 
 ### Find path by regex pattern
 
 ```sh
-s3find 's3://example-bucket/example-path' --regex '1$' -print
+s3find 's3://example-bucket/example-path' --regex '1$' print
 ```
 
 ### Find path by size
@@ -187,19 +187,19 @@ s3find 's3://example-bucket/example-path' --regex '1$' -print
 #### Exact match
 
 ```sh
-s3find 's3://example-bucket/example-path' --size 0 -print
+s3find 's3://example-bucket/example-path' --size 0 print
 ```
 
 #### Larger
 
 ```sh
-s3find 's3://example-bucket/example-path' --size +10M -print
+s3find 's3://example-bucket/example-path' --size +10M print
 ```
 
 #### Smaller
 
 ```sh
-s3find 's3://example-bucket/example-path' --size -10k -print
+s3find 's3://example-bucket/example-path' --size -10k print
 ```
 
 ### Find path by time
@@ -207,19 +207,19 @@ s3find 's3://example-bucket/example-path' --size -10k -print
 #### Files modified since last 10 seconds
 
 ```sh
-s3find 's3://example-bucket/example-path' --time 10 -print
+s3find 's3://example-bucket/example-path' --time 10 print
 ```
 
 #### Files modified for the period before last 10 minutes
 
 ```sh
-s3find 's3://example-bucket/example-path' --time +10m -print
+s3find 's3://example-bucket/example-path' --time +10m print
 ```
 
 #### Files modified since last 10 hours
 
 ```sh
-s3find 's3://example-bucket/example-path' --time -10h -print
+s3find 's3://example-bucket/example-path' --time -10h print
 ```
 
 ### Multiple filters
@@ -229,13 +229,13 @@ s3find 's3://example-bucket/example-path' --time -10h -print
 Files with size between 10 and 20 bytes
 
 ```sh
-s3find 's3://example-bucket/example-path' --size +10 --size -20 -print
+s3find 's3://example-bucket/example-path' --size +10 --size -20 print
 ```
 
 #### Different filters
 
 ```sh
-s3find 's3://example-bucket/example-path' --size +10 --name '*file*' -print
+s3find 's3://example-bucket/example-path' --size +10 --name '*file*' print
 ```
 
 ### Additional control
