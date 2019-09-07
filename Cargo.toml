@@ -36,7 +36,7 @@ codecov = { repository = "AnderEnder/s3find-rs" }
 
 [dependencies]
 rusoto_credential = "0.40"
-structopt = "0.2"
+structopt = "0.3"
 glob = "0.3"
 regex = "1"
 failure = "0.1"
