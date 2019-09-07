@@ -128,47 +128,47 @@ times out."#
 #[derive(StructOpt, Debug, PartialEq, Clone)]
 pub enum Cmd {
     /// Exec any shell program with every key
-    #[structopt(name = "-exec")]
+    #[structopt(name = "exec")]
     Exec(Exec),
 
     /// Extended print with detail information
-    #[structopt(name = "-print")]
+    #[structopt(name = "print")]
     Print(AdvancedPrint),
 
     /// Delete matched keys
-    #[structopt(name = "-delete")]
+    #[structopt(name = "delete")]
     Delete(MultipleDelete),
 
     /// Download matched keys
-    #[structopt(name = "-download")]
+    #[structopt(name = "download")]
     Download(Download),
 
     /// Copy matched keys to a s3 destination
-    #[structopt(name = "-copy")]
+    #[structopt(name = "copy")]
     Copy(S3Copy),
 
     /// Move matched keys to a s3 destination
-    #[structopt(name = "-move")]
+    #[structopt(name = "move")]
     Move(S3Move),
 
     /// Print the list of matched keys
-    #[structopt(name = "-ls")]
+    #[structopt(name = "ls")]
     Ls(FastPrint),
 
     /// Print the list of matched keys with tags
-    #[structopt(name = "-lstags")]
+    #[structopt(name = "lstags")]
     LsTags(ListTags),
 
     /// Set the tags(overwrite) for the matched keys
-    #[structopt(name = "-tags")]
+    #[structopt(name = "tags")]
     Tags(SetTags),
 
     /// Make the matched keys public available (readonly)
-    #[structopt(name = "-public")]
+    #[structopt(name = "public")]
     Public(SetPublic),
 
     /// Do not do anything with keys, do not print them as well
-    #[structopt(name = "-nothing")]
+    #[structopt(name = "nothing")]
     Nothing(DoNothing),
 }
 
