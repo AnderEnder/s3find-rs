@@ -29,22 +29,22 @@ pub struct FindOpt {
 
     /// AWS access key. Unrequired.
     #[structopt(
-        name = "aws_access_key",
+        name = "aws-access-key",
         long = "aws-access-key",
-        requires_all = &["aws_secret_key"]
+        requires_all = &["aws-secret-key"]
     )]
     pub aws_access_key: Option<String>,
 
     /// AWS secret key. Unrequired
     #[structopt(
-        name = "aws_secret_key",
+        name = "aws-secret-key",
         long = "aws-secret-key",
-        requires_all = &["aws_access_key"]
+        requires_all = &["aws-access-key"]
     )]
     pub aws_secret_key: Option<String>,
 
     /// The region to use. Default value is us-east-1
-    #[structopt(name = "aws_region", long = "aws-region", default_value = "us-east-1")]
+    #[structopt(name = "aws-region", long = "aws-region", default_value = "us-east-1")]
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
@@ -82,7 +82,7 @@ Can be multiple, but should be overlaping"#
 
     /// File size for match
     #[structopt(
-        name = "bytes_size",
+        name = "bytes-size",
         long = "size",
         number_of_values = 1,
         allow_hyphen_values = true,
