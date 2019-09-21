@@ -1,0 +1,16 @@
+name: Rust
+
+on: [push]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: Run static build
+      run: |
+        docker run --rm -t \
+          -v "$(pwd)":/volume \
+          clux/muslrust cargo build --release
+        sudo strip target/x86_64-unknown-linux-musl/release/s3find || true
+        sudo gzip target/x86_64-unknown-linux-musl/release/s3find || true
