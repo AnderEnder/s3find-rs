@@ -1,5 +1,5 @@
 # s3find
-[![build status](https://travis-ci.org/AnderEnder/s3find-rs.svg?branch=master)](https://travis-ci.org/AnderEnder/s3find-rs)
+[![build status](https://github.com/AnderEnder/s3find-rs/workflows/Rust/badge.svg)](https://github.com/AnderEnder/s3find-rs/actions)
 [![codecov](https://codecov.io/gh/AnderEnder/s3find-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/AnderEnder/s3find-rs)
 [![Crates.io](https://img.shields.io/crates/v/s3find.svg)](https://crates.io/crates/s3find)
 
