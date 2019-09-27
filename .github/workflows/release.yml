@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: static build release
+        run: |
+          docker run --rm -t \
+            -v "$(pwd)":/volume \
+            clux/muslrust cargo build --release
+      - name: archive
+        run: |
+          sudo strip target/x86_64-unknown-linux-musl/release/s3find
+          sudo tar -C target/x86_64-unknown-linux-musl/release -czf  $(pwd)/s3find-x86_64-linux.tar.gz s3find
+      - name: publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: s3find-x86_64-linux.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-osx:
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: build release
+        run: cargo build --release --verbose
+      - name: archive
+        run: tar -C target/release -czf $(pwd)/s3find-x86_64-osx.tar.gz s3find
+      - name: publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: s3find-x86_64-osx.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: build release
+        run: cargo build --release --verbose
+      - name: archive
+        run: tar -C target/release -czf $(pwd)/s3find-x86_64-windows.tar.gz s3find.exe
+        shell: bash
+      - name: publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: s3find-x86_64-windows.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
