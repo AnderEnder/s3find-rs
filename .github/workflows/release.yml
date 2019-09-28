@@ -6,6 +6,15 @@ on:
       - 'v*.*.*'
 
 jobs:
+  release-crates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: publish package to crates
+        run: |
+          cargo package
+          cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
+
   release-linux:
     runs-on: ubuntu-latest
     steps:
