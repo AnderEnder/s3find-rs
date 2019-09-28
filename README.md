@@ -1,5 +1,6 @@
 # s3find
 [![build status](https://github.com/AnderEnder/s3find-rs/workflows/Rust/badge.svg)](https://github.com/AnderEnder/s3find-rs/actions)
+[![freebsd build status](https://api.cirrus-ci.com/github/AnderEnder/s3find-rs.svg)](https://cirrus-ci.com/github/AnderEnder/s3find-rs/>)
 [![codecov](https://codecov.io/gh/AnderEnder/s3find-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/AnderEnder/s3find-rs)
 [![Crates.io](https://img.shields.io/crates/v/s3find.svg)](https://crates.io/crates/s3find)
 
