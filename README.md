@@ -8,6 +8,23 @@
 
 A command line utility to walk an Amazon S3 hierarchy. An analog of find for Amazon S3.
 
+## Distribution
+
+### Release page distributions
+
+Github Release page provides binaries for:
+
+* Windows
+* Linux
+* macOS
+
+### Docker
+
+Docker image on docker hub:
+
+* develop: `anderender/s3find:latest`
+* release: `anderender/s3find:<version>`
+
 ## Usage
 
 ```sh
