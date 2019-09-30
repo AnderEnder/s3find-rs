@@ -1,9 +1,9 @@
-name: Clippy
+name: Code check
 
 on: [ pull_request ]
 
 jobs:
-  build:
+  clippy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
@@ -13,3 +13,9 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all --all-features
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: Run fmt check
+        run: cargo fmt --all -- --check
