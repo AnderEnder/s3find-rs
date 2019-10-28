@@ -30,8 +30,8 @@ jobs:
           --security-opt seccomp=unconfined \
           -v "$(pwd):/volume" \
           xd009642/tarpaulin:latest \
-          sh -c "cargo tarpaulin --all -f -t 5 --out Xml -v -- --test-threads=1" || true
+          cargo tarpaulin -f -t 5 --out Xml -v -- --test-threads=1 || true
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v1.0.2
+      uses: codecov/codecov-action@v1.0.3
       with:
         token: ${{secrets.CODECOV_TOKEN}}
