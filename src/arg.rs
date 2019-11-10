@@ -35,7 +35,7 @@ pub struct FindOpt {
     )]
     pub aws_access_key: Option<String>,
 
-    /// AWS secret key. Unrequired
+    /// AWS secret key from AWS credential pair. Required only for the credential based authentication.
     #[structopt(
         name = "aws-secret-key",
         long = "aws-secret-key",
@@ -269,7 +269,7 @@ pub struct S3path {
 impl FromStr for S3path {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<S3path, Error> {
+    fn from_str(s: &str) -> Result<Self, Error> {
         let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#)?;
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
@@ -293,7 +293,7 @@ pub enum FindSize {
 impl FromStr for FindSize {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<FindSize, Error> {
+    fn from_str(s: &str) -> Result<Self, Error> {
         let re = Regex::new(r"([+-]?)(\d*)([kMGTP]?)$")?;
         let m = re.captures(s).ok_or(FindError::SizeParse)?;
 
@@ -339,7 +339,7 @@ pub enum FindTime {
 impl FromStr for FindTime {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<FindTime, Error> {
+    fn from_str(s: &str) -> Result<Self, Error> {
         let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)$")?;
         let m = re.captures(s).ok_or(FindError::TimeParse)?;
 
@@ -384,7 +384,7 @@ pub struct InameGlob(pub Pattern);
 impl FromStr for InameGlob {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<InameGlob, Error> {
+    fn from_str(s: &str) -> Result<Self, Error> {
         let pattern = Pattern::from_str(s)?;
         Ok(InameGlob(pattern))
     }
@@ -399,7 +399,7 @@ pub struct FindTag {
 impl FromStr for FindTag {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<FindTag, Error> {
+    fn from_str(s: &str) -> Result<Self, Error> {
         let re = Regex::new(r"(\w+):(\w+)$")?;
         let m = re.captures(s).ok_or(FindError::TagParseError)?;
 

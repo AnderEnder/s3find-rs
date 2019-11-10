@@ -2,12 +2,12 @@ use failure::Error;
 use humansize::{file_size_opts as options, FileSize};
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
+use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
 use std::fmt;
 use std::ops::Add;
 
 use crate::arg::*;
-use crate::credential::*;
 use crate::filter::Filter;
 use crate::function::*;
 
@@ -76,24 +76,52 @@ impl Find {
 
 impl From<FindOpt> for Find {
     fn from(opts: FindOpt) -> Self {
-        let region = opts.aws_region.clone();
-        let provider =
-            CombinedProvider::new(opts.aws_access_key.clone(), opts.aws_secret_key.clone());
+        let filters = opts.clone().into();
 
-        let dispatcher = HttpClient::new().unwrap();
+        let FindOpt {
+            aws_access_key,
+            aws_secret_key,
+            aws_region,
+            path,
+            cmd,
+            page_size,
+            summarize,
+            limit,
+            ..
+        } = opts;
 
-        let client = S3Client::new_with(dispatcher, provider, region.clone());
+        let region = aws_region.clone();
+        let client = get_client(aws_access_key, aws_secret_key, aws_region);
+        let command = cmd.unwrap_or_default().downcast();
 
         Find {
-            path: opts.path.clone(),
             client,
+            filters,
             region,
-            filters: opts.clone().into(),
-            command: opts.cmd.unwrap_or_default().downcast(),
-            page_size: opts.page_size,
-            summarize: opts.summarize,
-            limit: opts.limit,
-            stats: opts.summarize,
+            path,
+            command,
+            page_size,
+            summarize,
+            limit,
+            stats: summarize,
+        }
+    }
+}
+
+fn get_client(
+    aws_access_key: Option<String>,
+    aws_secret_key: Option<String>,
+    region: Region,
+) -> S3Client {
+    let dispatcher = HttpClient::new().unwrap();
+    match (aws_access_key, aws_secret_key) {
+        (Some(aws_access_key), Some(aws_secret_key)) => {
+            let provider = StaticProvider::new(aws_access_key, aws_secret_key, None, None);
+            S3Client::new_with(dispatcher, provider, region)
+        }
+        _ => {
+            let provider = DefaultCredentialsProvider::new().unwrap();
+            S3Client::new_with(dispatcher, provider, region)
         }
     }
 }
@@ -159,7 +187,7 @@ impl Add<&[&Object]> for FindStat {
     type Output = FindStat;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add(mut self: FindStat, list: &[&Object]) -> FindStat {
+    fn add(mut self: FindStat, list: &[&Object]) -> Self {
         for x in list {
             self.total_files += 1;
             let size = x.size.as_ref().unwrap_or(&0);
