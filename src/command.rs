@@ -176,8 +176,8 @@ impl From<FindTag> for Tag {
 pub struct FindStat {
     pub total_files: usize,
     pub total_space: i64,
-    pub max_size: i64,
-    pub min_size: i64,
+    pub max_size: Option<i64>,
+    pub min_size: Option<i64>,
     pub max_key: String,
     pub min_key: String,
     pub average_size: i64,
@@ -193,14 +193,28 @@ impl Add<&[&Object]> for FindStat {
             let size = x.size.as_ref().unwrap_or(&0);
             self.total_space += size;
 
-            if self.max_size < *size {
-                self.max_size = *size;
-                self.max_key = x.key.clone().unwrap_or_default();
+            match self.max_size {
+                None => {
+                    self.max_size = Some(*size);
+                    self.max_key = x.key.clone().unwrap_or_default();
+                }
+                Some(max_size) if max_size <= *size => {
+                    self.max_size = Some(*size);
+                    self.max_key = x.key.clone().unwrap_or_default();
+                }
+                _ => {}
             }
 
-            if self.min_size > *size {
-                self.min_size = *size;
-                self.min_key = x.key.clone().unwrap_or_default();
+            match self.min_size {
+                None => {
+                    self.min_size = Some(*size);
+                    self.min_key = x.key.clone().unwrap_or_default();
+                }
+                Some(min_size) if min_size > *size => {
+                    self.min_size = Some(*size);
+                    self.min_key = x.key.clone().unwrap_or_default();
+                }
+                _ => {}
             }
 
             self.average_size = self.total_space / (self.total_files as i64);
@@ -214,8 +228,8 @@ impl Default for FindStat {
         FindStat {
             total_files: 0,
             total_space: 0,
-            max_size: 0,
-            min_size: i64::max_value(),
+            max_size: None,
+            min_size: None,
             max_key: "".to_owned(),
             min_key: "".to_owned(),
             average_size: 0,
@@ -243,6 +257,7 @@ impl fmt::Display for FindStat {
             "Largest file size:",
             &self
                 .max_size
+                .unwrap_or_default()
                 .file_size(options::CONVENTIONAL)
                 .map_err(|_| fmt::Error)?
         )?;
@@ -253,6 +268,7 @@ impl fmt::Display for FindStat {
             "Smallest file size:",
             &self
                 .min_size
+                .unwrap_or_default()
                 .file_size(options::CONVENTIONAL)
                 .map_err(|_| fmt::Error)?
         )?;
