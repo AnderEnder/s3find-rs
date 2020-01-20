@@ -3,6 +3,7 @@ use humansize::{file_size_opts as options, FileSize};
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
 use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
+use rusoto_s3::*;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
 use std::fmt;
 use std::ops::Add;
@@ -51,10 +52,45 @@ impl Find {
         Ok(status)
     }
 
-    pub fn list_request(&self) -> ListObjectsV2Request {
-        ListObjectsV2Request {
+    pub fn stats(&self) -> Option<FindStat> {
+        if self.summarize {
+            Some(FindStat::default())
+        } else {
+            None
+        }
+    }
+
+    pub fn iter(&self) -> FindIter {
+        FindIter {
+            client: self.client.clone(),
+            path: self.path.clone(),
+            token: None,
+            page_size: self.page_size,
+            initial: true,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct FindIter {
+    pub client: S3Client,
+    pub path: S3path,
+    pub token: Option<String>,
+    pub page_size: i64,
+    pub initial: bool,
+}
+
+impl Iterator for FindIter {
+    type Item = Result<Vec<Object>, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.initial && self.token == None {
+            return None;
+        }
+
+        let request = ListObjectsV2Request {
             bucket: self.path.bucket.clone(),
-            continuation_token: None,
+            continuation_token: self.token.clone(),
             delimiter: None,
             encoding_type: None,
             fetch_owner: None,
@@ -62,15 +98,20 @@ impl Find {
             prefix: self.path.prefix.clone(),
             request_payer: None,
             start_after: None,
-        }
-    }
+        };
 
-    pub fn stats(&self) -> Option<FindStat> {
-        if self.summarize {
-            Some(FindStat::default())
-        } else {
-            None
-        }
+        self.initial = false;
+        self.token = None;
+
+        self.client
+            .list_objects_v2(request)
+            .sync()
+            .map_err(|e| e.into())
+            .map(|x| {
+                self.token = x.next_continuation_token;
+                x.contents
+            })
+            .transpose()
     }
 }
 
