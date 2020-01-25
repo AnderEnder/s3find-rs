@@ -22,33 +22,29 @@ fn list_filter_limit_execute(
     limit: usize,
     find: &Find,
 ) -> Result<Option<FindStat>, Error> {
-    let result = iterator
-        .collect::<Result<Vec<Vec<Object>>, Error>>()?
-        .iter()
+    iterator
+        .map(|x| x.unwrap())
         .flatten()
         .filter(|x| find.filters.test_match(x))
         .take(limit)
         .chunks(CHUNK)
         .into_iter()
-        .fold(find.stats(), |acc, x| {
-            find.exec(&x.collect::<Vec<_>>(), acc).unwrap()
-        });
-    Ok(result)
+        .try_fold(find.stats(), |acc, x| {
+            find.exec(&x.collect::<Vec<Object>>(), acc)
+        })
 }
 
 fn list_filter_unlimited_execute(
     iterator: FindIter,
     find: &Find,
 ) -> Result<Option<FindStat>, Error> {
-    let result = iterator
-        .collect::<Result<Vec<Vec<Object>>, Error>>()?
-        .iter()
+    iterator
+        .map(|x| x.unwrap())
         .flatten()
         .filter(|x| find.filters.test_match(x))
         .chunks(CHUNK)
         .into_iter()
-        .fold(find.stats(), |acc, x| {
-            find.exec(&x.collect::<Vec<_>>(), acc).unwrap()
-        });
-    Ok(result)
+        .try_fold(find.stats(), |acc, x| {
+            find.exec(&x.collect::<Vec<Object>>(), acc)
+        })
 }
