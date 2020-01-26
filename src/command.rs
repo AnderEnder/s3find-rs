@@ -40,7 +40,7 @@ pub struct Find {
 
 impl Find {
     #![allow(unreachable_patterns)]
-    pub fn exec(&self, list: &[Object], acc: Option<FindStat>) -> Result<Option<FindStat>, Error> {
+    pub fn exec(&self, acc: Option<FindStat>, list: &[Object]) -> Result<Option<FindStat>, Error> {
         let status = match acc {
             Some(stat) => Some(stat + list),
             None => None,

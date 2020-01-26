@@ -2,49 +2,65 @@ use failure::Error;
 use itertools::Itertools;
 use rusoto_s3::Object;
 
-use crate::command::{FilterList, Find, FindIter, FindStat};
+use crate::command::{FindIter, FindStat};
 
 const CHUNK: usize = 1000;
 
-pub fn list_filter_execute(
+pub fn list_filter_execute<P, F>(
     iterator: FindIter,
     limit: Option<usize>,
-    find: &Find,
-) -> Result<Option<FindStat>, Error> {
+    stats: Option<FindStat>,
+    p: P,
+    f: F,
+) -> Result<Option<FindStat>, Error>
+where
+    P: Fn(&Object) -> bool,
+    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+{
     match limit {
-        Some(limit) => list_filter_limit_execute(iterator, limit, find),
-        None => list_filter_unlimited_execute(iterator, find),
+        Some(limit) => list_filter_limit_execute(iterator, limit, stats, p, f),
+        None => list_filter_unlimited_execute(iterator, stats, p, f),
     }
 }
 
-fn list_filter_limit_execute(
+#[inline]
+fn list_filter_limit_execute<P, F>(
     iterator: FindIter,
     limit: usize,
-    find: &Find,
-) -> Result<Option<FindStat>, Error> {
+    stats: Option<FindStat>,
+    p: P,
+    f: F,
+) -> Result<Option<FindStat>, Error>
+where
+    P: Fn(&Object) -> bool,
+    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+{
     iterator
         .map(|x| x.unwrap())
         .flatten()
-        .filter(|x| find.filters.test_match(x))
+        .filter(p)
         .take(limit)
         .chunks(CHUNK)
         .into_iter()
-        .try_fold(find.stats(), |acc, x| {
-            find.exec(&x.collect::<Vec<Object>>(), acc)
-        })
+        .try_fold(stats, |acc, x| f(acc, &x.collect::<Vec<Object>>()))
 }
 
-fn list_filter_unlimited_execute(
+#[inline]
+fn list_filter_unlimited_execute<P, F>(
     iterator: FindIter,
-    find: &Find,
-) -> Result<Option<FindStat>, Error> {
+    stats: Option<FindStat>,
+    p: P,
+    f: F,
+) -> Result<Option<FindStat>, Error>
+where
+    P: Fn(&Object) -> bool,
+    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+{
     iterator
         .map(|x| x.unwrap())
         .flatten()
-        .filter(|x| find.filters.test_match(x))
+        .filter(p)
         .chunks(CHUNK)
         .into_iter()
-        .try_fold(find.stats(), |acc, x| {
-            find.exec(&x.collect::<Vec<Object>>(), acc)
-        })
+        .try_fold(stats, |acc, x| f(acc, &x.collect::<Vec<Object>>()))
 }
