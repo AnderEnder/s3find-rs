@@ -40,7 +40,7 @@ pub struct Find {
 
 impl Find {
     #![allow(unreachable_patterns)]
-    pub fn exec(&self, list: &[&Object], acc: Option<FindStat>) -> Result<Option<FindStat>, Error> {
+    pub fn exec(&self, acc: Option<FindStat>, list: &[Object]) -> Result<Option<FindStat>, Error> {
         let status = match acc {
             Some(stat) => Some(stat + list),
             None => None,
@@ -224,11 +224,11 @@ pub struct FindStat {
     pub average_size: i64,
 }
 
-impl Add<&[&Object]> for FindStat {
+impl Add<&[Object]> for FindStat {
     type Output = FindStat;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add(mut self: FindStat, list: &[&Object]) -> Self {
+    fn add(mut self: FindStat, list: &[Object]) -> Self {
         for x in list {
             self.total_files += 1;
             let size = x.size.as_ref().unwrap_or(&0);

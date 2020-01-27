@@ -11,7 +11,7 @@ fn main() {
         exit(1);
     }
 
-    let var = std::env::var_os("SHELL_COMPLETIONS_DIR").or(std::env::var_os("OUT_DIR"));
+    let var = std::env::var_os("SHELL_COMPLETIONS_DIR").or_else(|| std::env::var_os("OUT_DIR"));
     let outdir = match var {
         None => return,
         Some(outdir) => outdir,

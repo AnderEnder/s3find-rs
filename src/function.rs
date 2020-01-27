@@ -49,7 +49,7 @@ pub trait RunCommand {
         client: &S3Client,
         region: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error>;
 }
 
@@ -59,7 +59,7 @@ impl RunCommand for FastPrint {
         _c: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         for x in list {
             println!(
@@ -78,7 +78,7 @@ impl RunCommand for AdvancedPrint {
         _c: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         for x in list {
             println!(
@@ -120,13 +120,7 @@ impl Exec {
 }
 
 impl RunCommand for Exec {
-    fn execute(
-        &self,
-        _: &S3Client,
-        _r: &str,
-        path: &S3path,
-        list: &[&Object],
-    ) -> Result<(), Error> {
+    fn execute(&self, _: &S3Client, _r: &str, path: &S3path, list: &[Object]) -> Result<(), Error> {
         for x in list {
             let key = x.key.as_ref().map(String::as_str).unwrap_or("");
             let path = format!("s3://{}/{}", &path.bucket, key);
@@ -142,7 +136,7 @@ impl RunCommand for MultipleDelete {
         client: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         let key_list: Vec<_> = list
             .iter()
@@ -190,7 +184,7 @@ impl RunCommand for SetTags {
         client: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
@@ -220,7 +214,7 @@ impl RunCommand for ListTags {
         client: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
@@ -257,7 +251,7 @@ impl RunCommand for SetPublic {
         client: &S3Client,
         region: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         // let region_str = self.0.name();
         for object in list {
@@ -291,7 +285,7 @@ impl RunCommand for Download {
         client: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
@@ -356,7 +350,7 @@ impl RunCommand for S3Copy {
         client: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
@@ -404,7 +398,7 @@ impl RunCommand for S3Move {
         client: &S3Client,
         _r: &str,
         path: &S3path,
-        list: &[&Object],
+        list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
@@ -469,7 +463,7 @@ impl RunCommand for S3Move {
 }
 
 impl RunCommand for DoNothing {
-    fn execute(&self, _c: &S3Client, _r: &str, _p: &S3path, _l: &[&Object]) -> Result<(), Error> {
+    fn execute(&self, _c: &S3Client, _r: &str, _p: &S3path, _l: &[Object]) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -498,7 +492,7 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[&object])
+        cmd.execute(&client, region, &path, &[object])
     }
 
     #[test]
@@ -520,6 +514,6 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[&object])
+        cmd.execute(&client, region, &path, &[object])
     }
 }
