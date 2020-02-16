@@ -1,9 +1,12 @@
+use futures::future;
+use futures::stream::StreamExt;
 use rusoto_s3::{
     CopyObjectRequest, Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest,
     Object, ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3Client, Tagging, S3,
 };
 use std::process::Command;
 use std::process::ExitStatus;
+use tokio::runtime::Runtime;
 
 use std::fs;
 use std::fs::File;
@@ -11,8 +14,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use failure::Error;
-use futures::stream::Stream;
-use futures::Future;
+// use futures::stream::Stream;
+// use futures::Future;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -158,7 +161,8 @@ impl RunCommand for MultipleDelete {
             ..Default::default()
         };
 
-        let result = client.delete_objects(request).sync();
+        let mut rt = Runtime::new().unwrap();
+        let result = rt.block_on(client.delete_objects(request));
 
         match result {
             Ok(r) => {
@@ -200,7 +204,8 @@ impl RunCommand for SetTags {
                 ..Default::default()
             };
 
-            client.put_object_tagging(request).sync()?;
+            let mut rt = Runtime::new().unwrap();
+            rt.block_on(client.put_object_tagging(request))?;
 
             println!("tags are set for: s3://{}/{}", &path.bucket, &key);
         }
@@ -225,7 +230,8 @@ impl RunCommand for ListTags {
                 ..Default::default()
             };
 
-            let tag_output = client.get_object_tagging(request).sync()?;
+            let mut rt = Runtime::new().unwrap();
+            let tag_output = rt.block_on(client.get_object_tagging(request))?;
 
             let tags: String = tag_output
                 .tag_set
@@ -264,7 +270,8 @@ impl RunCommand for SetPublic {
                 ..Default::default()
             };
 
-            client.put_object_acl(request).sync()?;
+            let mut rt = Runtime::new().unwrap();
+            rt.block_on(client.put_object_acl(request))?;
 
             let url = match region {
                 "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", &path.bucket, key),
@@ -324,21 +331,21 @@ impl RunCommand for Download {
                 return Ok(());
             }
 
-            let result = client.get_object(request).sync()?;
+            let mut rt = Runtime::new().unwrap();
+            let result = rt.block_on(client.get_object(request))?;
 
             let stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
 
             fs::create_dir_all(&dir_path)?;
             let mut output = File::create(&file_path)?;
 
-            stream
-                .for_each(|buf| {
-                    output.write_all(&buf)?;
-                    count += buf.len() as u64;
-                    pb.set_position(count);
-                    Ok(())
-                })
-                .wait()?;
+            rt.block_on(stream.for_each(|buf| {
+                let b = buf.unwrap();
+                output.write_all(&b).unwrap();
+                count += b.len() as u64;
+                pb.set_position(count);
+                future::ready(())
+            }));
         }
         Ok(())
     }
@@ -386,7 +393,8 @@ impl RunCommand for S3Copy {
                 ..Default::default()
             };
 
-            client.copy_object(request).sync()?;
+            let mut rt = Runtime::new().unwrap();
+            rt.block_on(client.copy_object(request))?;
         }
         Ok(())
     }
@@ -434,7 +442,8 @@ impl RunCommand for S3Move {
                 ..Default::default()
             };
 
-            client.copy_object(request).sync()?;
+            let mut rt = Runtime::new().unwrap();
+            rt.block_on(client.copy_object(request))?;
         }
 
         let key_list: Vec<_> = list
@@ -457,7 +466,8 @@ impl RunCommand for S3Move {
             ..Default::default()
         };
 
-        client.delete_objects(request).sync()?;
+        let mut rt = Runtime::new().unwrap();
+        rt.block_on(client.delete_objects(request))?;
         Ok(())
     }
 }

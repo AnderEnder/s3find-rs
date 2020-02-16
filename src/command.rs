@@ -7,6 +7,7 @@ use rusoto_s3::*;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
 use std::fmt;
 use std::ops::Add;
+use tokio::runtime::Runtime;
 
 use crate::arg::*;
 use crate::filter::Filter;
@@ -103,9 +104,9 @@ impl Iterator for FindIter {
         self.initial = false;
         self.token = None;
 
-        self.client
-            .list_objects_v2(request)
-            .sync()
+        let mut rt = Runtime::new().unwrap();
+
+        rt.block_on(self.client.list_objects_v2(request))
             .map_err(|e| e.into())
             .map(|x| {
                 self.token = x.next_continuation_token;
