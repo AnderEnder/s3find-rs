@@ -14,8 +14,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use failure::Error;
-// use futures::stream::Stream;
-// use futures::Future;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
