@@ -123,7 +123,7 @@ impl Exec {
 impl RunCommand for Exec {
     fn execute(&self, _: &S3Client, _r: &str, path: &S3path, list: &[Object]) -> Result<(), Error> {
         for x in list {
-            let key = x.key.as_ref().map(String::as_str).unwrap_or("");
+            let key = x.key.as_deref().unwrap_or("");
             let path = format!("s3://{}/{}", &path.bucket, key);
             self.exec(&path)?;
         }
