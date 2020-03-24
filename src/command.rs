@@ -48,8 +48,8 @@ impl Find {
         };
 
         let region = &self.region.name();
-        self.command
-            .execute(&self.client, region, &self.path, list)?;
+        let mut rt = Runtime::new().unwrap();
+        rt.block_on(self.command.execute(&self.client, region, &self.path, list))?;
         Ok(status)
     }
 

@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures::future;
 use futures::stream::StreamExt;
 use rusoto_s3::{
@@ -44,8 +45,9 @@ pub struct ExecStatus {
     pub runcommand: String,
 }
 
+#[async_trait]
 pub trait RunCommand {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         region: &str,
@@ -54,8 +56,9 @@ pub trait RunCommand {
     ) -> Result<(), Error>;
 }
 
+#[async_trait]
 impl RunCommand for FastPrint {
-    fn execute(
+    async fn execute(
         &self,
         _c: &S3Client,
         _r: &str,
@@ -73,8 +76,9 @@ impl RunCommand for FastPrint {
     }
 }
 
+#[async_trait]
 impl RunCommand for AdvancedPrint {
-    fn execute(
+    async fn execute(
         &self,
         _c: &S3Client,
         _r: &str,
@@ -120,8 +124,15 @@ impl Exec {
     }
 }
 
+#[async_trait]
 impl RunCommand for Exec {
-    fn execute(&self, _: &S3Client, _r: &str, path: &S3path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        _: &S3Client,
+        _r: &str,
+        path: &S3path,
+        list: &[Object],
+    ) -> Result<(), Error> {
         for x in list {
             let key = x.key.as_deref().unwrap_or("");
             let path = format!("s3://{}/{}", &path.bucket, key);
@@ -131,8 +142,9 @@ impl RunCommand for Exec {
     }
 }
 
+#[async_trait]
 impl RunCommand for MultipleDelete {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -159,8 +171,7 @@ impl RunCommand for MultipleDelete {
             ..Default::default()
         };
 
-        let mut rt = Runtime::new().unwrap();
-        let result = rt.block_on(client.delete_objects(request));
+        let result = client.delete_objects(request).await;
 
         match result {
             Ok(r) => {
@@ -180,8 +191,9 @@ impl RunCommand for MultipleDelete {
     }
 }
 
+#[async_trait]
 impl RunCommand for SetTags {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -202,17 +214,16 @@ impl RunCommand for SetTags {
                 ..Default::default()
             };
 
-            let mut rt = Runtime::new().unwrap();
-            rt.block_on(client.put_object_tagging(request))?;
-
+            client.put_object_tagging(request).await?;
             println!("tags are set for: s3://{}/{}", &path.bucket, &key);
         }
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for ListTags {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -228,8 +239,7 @@ impl RunCommand for ListTags {
                 ..Default::default()
             };
 
-            let mut rt = Runtime::new().unwrap();
-            let tag_output = rt.block_on(client.get_object_tagging(request))?;
+            let tag_output = client.get_object_tagging(request).await?;
 
             let tags: String = tag_output
                 .tag_set
@@ -249,8 +259,9 @@ impl RunCommand for ListTags {
     }
 }
 
+#[async_trait]
 impl RunCommand for SetPublic {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         region: &str,
@@ -268,8 +279,7 @@ impl RunCommand for SetPublic {
                 ..Default::default()
             };
 
-            let mut rt = Runtime::new().unwrap();
-            rt.block_on(client.put_object_acl(request))?;
+            client.put_object_acl(request).await?;
 
             let url = match region {
                 "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", &path.bucket, key),
@@ -284,8 +294,9 @@ impl RunCommand for SetPublic {
     }
 }
 
+#[async_trait]
 impl RunCommand for Download {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -329,28 +340,32 @@ impl RunCommand for Download {
                 return Ok(());
             }
 
-            let mut rt = Runtime::new().unwrap();
-            let result = rt.block_on(client.get_object(request))?;
-
-            let stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
+            let stream = client
+                .get_object(request)
+                .await?
+                .body
+                .ok_or(FunctionError::S3FetchBodyError)?;
 
             fs::create_dir_all(&dir_path)?;
             let mut output = File::create(&file_path)?;
 
-            rt.block_on(stream.for_each(|buf| {
-                let b = buf.unwrap();
-                output.write_all(&b).unwrap();
-                count += b.len() as u64;
-                pb.set_position(count);
-                future::ready(())
-            }));
+            stream
+                .for_each(|buf| {
+                    let b = buf.unwrap();
+                    output.write_all(&b).unwrap();
+                    count += b.len() as u64;
+                    pb.set_position(count);
+                    future::ready(())
+                })
+                .await;
         }
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for S3Copy {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -391,15 +406,15 @@ impl RunCommand for S3Copy {
                 ..Default::default()
             };
 
-            let mut rt = Runtime::new().unwrap();
-            rt.block_on(client.copy_object(request))?;
+            client.copy_object(request).await?;
         }
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for S3Move {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -440,8 +455,7 @@ impl RunCommand for S3Move {
                 ..Default::default()
             };
 
-            let mut rt = Runtime::new().unwrap();
-            rt.block_on(client.copy_object(request))?;
+            client.copy_object(request).await?;
         }
 
         let key_list: Vec<_> = list
@@ -464,14 +478,20 @@ impl RunCommand for S3Move {
             ..Default::default()
         };
 
-        let mut rt = Runtime::new().unwrap();
-        rt.block_on(client.delete_objects(request))?;
+        client.delete_objects(request).await?;
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for DoNothing {
-    fn execute(&self, _c: &S3Client, _r: &str, _p: &S3path, _l: &[Object]) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        _c: &S3Client,
+        _r: &str,
+        _p: &S3path,
+        _l: &[Object],
+    ) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -481,8 +501,8 @@ mod tests {
     use super::*;
     use rusoto_core::Region;
 
-    #[test]
-    fn advanced_print_test() -> Result<(), Error> {
+    #[tokio::test]
+    async fn advanced_print_test() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -500,11 +520,11 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[object])
+        cmd.execute(&client, region, &path, &[object]).await
     }
 
-    #[test]
-    fn fastprint_test() -> Result<(), Error> {
+    #[tokio::test]
+    async fn fastprint_test() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -522,6 +542,6 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[object])
+        cmd.execute(&client, region, &path, &[object]).await
     }
 }
