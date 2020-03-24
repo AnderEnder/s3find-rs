@@ -7,7 +7,6 @@ use rusoto_s3::{
 };
 use std::process::Command;
 use std::process::ExitStatus;
-use tokio::runtime::Runtime;
 
 use std::fs;
 use std::fs::File;

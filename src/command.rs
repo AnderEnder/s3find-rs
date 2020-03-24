@@ -41,14 +41,18 @@ pub struct Find {
 
 impl Find {
     #![allow(unreachable_patterns)]
-    pub fn exec(&self, acc: Option<FindStat>, list: &[Object]) -> Result<Option<FindStat>, Error> {
+    pub fn exec(
+        &self,
+        acc: Option<FindStat>,
+        list: &[Object],
+        mut rt: Runtime,
+    ) -> Result<Option<FindStat>, Error> {
         let status = match acc {
             Some(stat) => Some(stat + list),
             None => None,
         };
 
         let region = &self.region.name();
-        let mut rt = Runtime::new().unwrap();
         rt.block_on(self.command.execute(&self.client, region, &self.path, list))?;
         Ok(status)
     }
@@ -61,24 +65,25 @@ impl Find {
         }
     }
 
-    pub fn iter(&self) -> FindIter {
+    pub fn iter(&self, runtime: Runtime) -> FindIter {
         FindIter {
             client: self.client.clone(),
             path: self.path.clone(),
             token: None,
             page_size: self.page_size,
             initial: true,
+            runtime,
         }
     }
 }
 
-#[derive(Clone)]
 pub struct FindIter {
     pub client: S3Client,
     pub path: S3path,
     pub token: Option<String>,
     pub page_size: i64,
     pub initial: bool,
+    pub runtime: Runtime,
 }
 
 impl Iterator for FindIter {
@@ -104,9 +109,8 @@ impl Iterator for FindIter {
         self.initial = false;
         self.token = None;
 
-        let mut rt = Runtime::new().unwrap();
-
-        rt.block_on(self.client.list_objects_v2(request))
+        self.runtime
+            .block_on(self.client.list_objects_v2(request))
             .map_err(|e| e.into())
             .map(|x| {
                 self.token = x.next_continuation_token;
