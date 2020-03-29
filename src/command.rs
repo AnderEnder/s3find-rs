@@ -45,7 +45,7 @@ impl Find {
         &self,
         acc: Option<FindStat>,
         list: &[Object],
-        mut rt: Runtime,
+        rt: &mut Runtime,
     ) -> Result<Option<FindStat>, Error> {
         let status = match acc {
             Some(stat) => Some(stat + list),

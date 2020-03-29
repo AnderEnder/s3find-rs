@@ -11,11 +11,11 @@ pub fn list_filter_execute<P, F>(
     limit: Option<usize>,
     stats: Option<FindStat>,
     p: P,
-    f: F,
+    f: &mut F,
 ) -> Result<Option<FindStat>, Error>
 where
     P: Fn(&Object) -> bool,
-    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+    F: FnMut(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
 {
     match limit {
         Some(limit) => list_filter_limit_execute(iterator, limit, stats, p, f),
@@ -29,11 +29,11 @@ fn list_filter_limit_execute<P, F>(
     limit: usize,
     stats: Option<FindStat>,
     p: P,
-    f: F,
+    f: &mut F,
 ) -> Result<Option<FindStat>, Error>
 where
     P: Fn(&Object) -> bool,
-    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+    F: FnMut(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
 {
     iterator
         .map(|x| x.unwrap())
@@ -50,11 +50,11 @@ fn list_filter_unlimited_execute<P, F>(
     iterator: FindIter,
     stats: Option<FindStat>,
     p: P,
-    f: F,
+    f: &mut F,
 ) -> Result<Option<FindStat>, Error>
 where
     P: Fn(&Object) -> bool,
-    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+    F: FnMut(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
 {
     iterator
         .map(|x| x.unwrap())
