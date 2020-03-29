@@ -1,23 +1,22 @@
 use failure::Error;
 use structopt::StructOpt;
-use tokio::runtime::Runtime;
 
 use s3find::arg::*;
 use s3find::command::*;
-use s3find::run::list_filter_execute;
+use s3find::run::*;
 
-fn main() -> Result<(), Error> {
+#[tokio::main]
+async fn main() -> Result<(), Error> {
     let status: Find = FindOpt::from_args().into();
-    let rt = Runtime::new()?;
-    let mut rt2 = Runtime::new()?;
 
-    let stats = list_filter_execute(
-        status.iter(rt),
+    let stats = list_filter_execute_stream(
+        status.into_stream().stream(),
         status.limit,
         status.stats(),
         |x| status.filters.test_match(x),
-        &mut |acc, x| status.exec(acc, x, &mut rt2),
-    )?;
+        &mut |acc, x| status.exec(acc, &x),
+    )
+    .await;
 
     if status.summarize {
         println!("{}", stats.unwrap());
@@ -25,6 +24,3 @@ fn main() -> Result<(), Error> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {}

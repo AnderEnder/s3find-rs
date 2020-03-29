@@ -70,7 +70,7 @@ where
 }
 
 pub async fn list_filter_execute_stream<P, F, Fut, Fut2>(
-    iterator: impl Stream<Item = Result<impl Stream<Item = Object>, Error>>,
+    iterator: impl Stream<Item = Vec<Object>>,
     limit: Option<usize>,
     stats: Option<FindStat>,
     p: P,
@@ -90,7 +90,7 @@ where
 
 #[inline]
 async fn list_filter_limit_execute_stream<P, F, Fut, Fut2>(
-    iterator: impl Stream<Item = Result<impl Stream<Item = Object>, Error>>,
+    iterator: impl Stream<Item = Vec<Object>>,
     limit: usize,
     stats: Option<FindStat>,
     p: P,
@@ -103,7 +103,7 @@ where
     Fut2: Future<Output = Option<FindStat>>,
 {
     iterator
-        .map(|x| x.unwrap())
+        .map(|x| futures::stream::iter(x.into_iter()))
         .flatten()
         .filter(p)
         .take(limit)
@@ -114,7 +114,7 @@ where
 
 #[inline]
 async fn list_filter_unlimited_execute_stream<P, F, Fut, Fut2>(
-    iterator: impl Stream<Item = Result<impl Stream<Item = Object>, Error>>,
+    iterator: impl Stream<Item = Vec<Object>>,
     stats: Option<FindStat>,
     p: P,
     f: &mut F,
@@ -126,7 +126,7 @@ where
     Fut2: Future<Output = Option<FindStat>>,
 {
     iterator
-        .map(|x| x.unwrap())
+        .map(|x| futures::stream::iter(x.into_iter()))
         .flatten()
         .filter(p)
         .chunks(CHUNK)
