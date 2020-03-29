@@ -1,4 +1,5 @@
 use failure::Error;
+use futures::Stream;
 use humansize::{file_size_opts as options, FileSize};
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
@@ -74,6 +75,61 @@ impl Find {
             initial: true,
             runtime,
         }
+    }
+
+    pub fn into_stream(&self) -> FindStream {
+        FindStream {
+            client: self.client.clone(),
+            path: self.path.clone(),
+            token: None,
+            page_size: self.page_size,
+            initial: true,
+        }
+    }
+}
+
+pub struct FindStream {
+    pub client: S3Client,
+    pub path: S3path,
+    pub token: Option<String>,
+    pub page_size: i64,
+    pub initial: bool,
+}
+
+impl FindStream {
+    async fn list(mut self) -> Option<(Vec<Object>, Self)> {
+        if !self.initial && self.token == None {
+            return None;
+        }
+
+        let request = ListObjectsV2Request {
+            bucket: self.path.bucket.clone(),
+            continuation_token: self.token.clone(),
+            delimiter: None,
+            encoding_type: None,
+            fetch_owner: None,
+            max_keys: Some(self.page_size),
+            prefix: self.path.prefix.clone(),
+            request_payer: None,
+            start_after: None,
+        };
+
+        self.initial = false;
+        self.token = None;
+
+        let (token, objects) = self
+            .client
+            .list_objects_v2(request)
+            .await
+            .map(|x| (x.next_continuation_token, x.contents))
+            .unwrap();
+
+        self.token = token;
+        objects.map(|x| (x, self))
+    }
+
+    fn stream(self) -> impl Stream<Item = Vec<Object>> {
+        futures::stream::unfold(self, |s| async { s.list().await })
     }
 }
 
