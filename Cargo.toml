@@ -52,7 +52,7 @@ default-features = false
 features = [ "suggestions", "color" ]
 
 [dependencies.rusoto_core]
-version = "0.42"
+version = "0.43"
 default-features = false
 features = [ "rustls" ]
 
@@ -74,7 +74,7 @@ regex = "1"
 failure = "0.1"
 
 [build-dependencies.rusoto_core]
-version = "0.42"
+version = "0.43"
 default-features = false
 features = [ "rustls" ]
 
