@@ -14,12 +14,13 @@ use crate::arg::*;
 use crate::filter::Filter;
 use crate::function::*;
 
+#[derive(Clone)]
 pub struct FilterList(pub Vec<Box<dyn Filter>>);
 
 impl FilterList {
-    pub async fn test_match(&self, object: &Object) -> bool {
+    pub async fn test_match(&self, object: Object) -> bool {
         for item in &self.0 {
-            if !item.filter(object) {
+            if !item.filter(&object) {
                 return false;
             }
         }
@@ -28,6 +29,7 @@ impl FilterList {
     }
 }
 
+#[derive(Clone)]
 pub struct Find {
     pub client: S3Client,
     pub region: Region,
@@ -42,15 +44,15 @@ pub struct Find {
 
 impl Find {
     #![allow(unreachable_patterns)]
-    pub async fn exec(&self, acc: Option<FindStat>, list: &[Object]) -> Option<FindStat> {
+    pub async fn exec(&self, acc: Option<FindStat>, list: Vec<Object>) -> Option<FindStat> {
         let status = match acc {
-            Some(stat) => Some(stat + list),
+            Some(stat) => Some(stat + &list),
             None => None,
         };
 
         let region = &self.region.name();
         self.command
-            .execute(&self.client, region, &self.path, list)
+            .execute(&self.client, region, &self.path, &list)
             .await
             .unwrap();
         status

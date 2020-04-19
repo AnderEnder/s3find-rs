@@ -13,8 +13,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use dyn_clone::DynClone;
 use failure::Error;
-
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::arg::*;
@@ -45,7 +45,8 @@ pub struct ExecStatus {
 }
 
 #[async_trait]
-pub trait RunCommand {
+
+pub trait RunCommand: DynClone {
     async fn execute(
         &self,
         client: &S3Client,
@@ -54,6 +55,8 @@ pub trait RunCommand {
         list: &[Object],
     ) -> Result<(), Error>;
 }
+
+dyn_clone::clone_trait_object!(RunCommand);
 
 #[async_trait]
 impl RunCommand for FastPrint {
