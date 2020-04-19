@@ -1,4 +1,4 @@
-use failure::Error;
+use futures::Stream;
 use humansize::{file_size_opts as options, FileSize};
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
@@ -7,17 +7,19 @@ use rusoto_s3::*;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
 use std::fmt;
 use std::ops::Add;
+use tokio::runtime::Runtime;
 
 use crate::arg::*;
 use crate::filter::Filter;
 use crate::function::*;
 
+#[derive(Clone)]
 pub struct FilterList(pub Vec<Box<dyn Filter>>);
 
 impl FilterList {
-    pub fn test_match(&self, object: &Object) -> bool {
+    pub async fn test_match(&self, object: Object) -> bool {
         for item in &self.0 {
-            if !item.filter(object) {
+            if !item.filter(&object) {
                 return false;
             }
         }
@@ -26,6 +28,7 @@ impl FilterList {
     }
 }
 
+#[derive(Clone)]
 pub struct Find {
     pub client: S3Client,
     pub region: Region,
@@ -40,16 +43,18 @@ pub struct Find {
 
 impl Find {
     #![allow(unreachable_patterns)]
-    pub fn exec(&self, acc: Option<FindStat>, list: &[Object]) -> Result<Option<FindStat>, Error> {
+    pub async fn exec(&self, acc: Option<FindStat>, list: Vec<Object>) -> Option<FindStat> {
         let status = match acc {
-            Some(stat) => Some(stat + list),
+            Some(stat) => Some(stat + &list),
             None => None,
         };
 
         let region = &self.region.name();
         self.command
-            .execute(&self.client, region, &self.path, list)?;
-        Ok(status)
+            .execute(&self.client, region, &self.path, &list)
+            .await
+            .unwrap();
+        status
     }
 
     pub fn stats(&self) -> Option<FindStat> {
@@ -60,8 +65,8 @@ impl Find {
         }
     }
 
-    pub fn iter(&self) -> FindIter {
-        FindIter {
+    pub fn into_stream(&self) -> FindStream {
+        FindStream {
             client: self.client.clone(),
             path: self.path.clone(),
             token: None,
@@ -71,8 +76,7 @@ impl Find {
     }
 }
 
-#[derive(Clone)]
-pub struct FindIter {
+pub struct FindStream {
     pub client: S3Client,
     pub path: S3path,
     pub token: Option<String>,
@@ -80,10 +84,8 @@ pub struct FindIter {
     pub initial: bool,
 }
 
-impl Iterator for FindIter {
-    type Item = Result<Vec<Object>, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl FindStream {
+    async fn list(mut self) -> Option<(Vec<Object>, Self)> {
         if !self.initial && self.token == None {
             return None;
         }
@@ -103,16 +105,29 @@ impl Iterator for FindIter {
         self.initial = false;
         self.token = None;
 
-        self.client
+        let (token, objects) = self
+            .client
             .list_objects_v2(request)
-            .sync()
-            .map_err(|e| e.into())
-            .map(|x| {
-                self.token = x.next_continuation_token;
-                x.contents
-            })
-            .transpose()
+            .await
+            .map(|x| (x.next_continuation_token, x.contents))
+            .unwrap();
+
+        self.token = token;
+        objects.map(|x| (x, self))
     }
+
+    pub fn stream(self) -> impl Stream<Item = Vec<Object>> {
+        futures::stream::unfold(self, |s| async { s.list().await })
+    }
+}
+
+pub struct FindIter {
+    pub client: S3Client,
+    pub path: S3path,
+    pub token: Option<String>,
+    pub page_size: i64,
+    pub initial: bool,
+    pub runtime: Runtime,
 }
 
 impl From<FindOpt> for Find {
@@ -329,6 +344,7 @@ impl fmt::Display for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use failure::Error;
     use regex::Regex;
     use std::str::FromStr;
 
@@ -350,8 +366,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn from_findopt_to_findcommand() {
+    #[tokio::test]
+    async fn from_findopt_to_findcommand() {
         let find: Find = FindOpt {
             path: S3path {
                 bucket: "bucket".to_owned(),
@@ -386,13 +402,13 @@ mod tests {
             size: Some(10),
             ..Default::default()
         };
-        assert!(find.filters.test_match(&object_ok));
+        assert!(find.filters.test_match(object_ok).await);
 
         let object_fail = Object {
             key: Some("Refer".to_owned()),
             size: Some(10),
             ..Default::default()
         };
-        assert!(!find.filters.test_match(&object_fail));
+        assert!(!find.filters.test_match(object_fail).await);
     }
 }

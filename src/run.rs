@@ -1,66 +1,74 @@
-use failure::Error;
-use itertools::Itertools;
+use futures::stream::Stream;
+use futures::stream::StreamExt;
+use futures::Future;
+
 use rusoto_s3::Object;
 
-use crate::command::{FindIter, FindStat};
+use crate::command::FindStat;
 
 const CHUNK: usize = 1000;
 
-pub fn list_filter_execute<P, F>(
-    iterator: FindIter,
+pub async fn list_filter_execute<P, F, Fut, Fut2>(
+    iterator: impl Stream<Item = Vec<Object>>,
     limit: Option<usize>,
     stats: Option<FindStat>,
     p: P,
-    f: F,
-) -> Result<Option<FindStat>, Error>
+    f: &mut F,
+) -> Option<FindStat>
 where
-    P: Fn(&Object) -> bool,
-    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+    P: FnMut(&Object) -> Fut,
+    Fut: Future<Output = bool>,
+    F: FnMut(Option<FindStat>, Vec<Object>) -> Fut2,
+    Fut2: Future<Output = Option<FindStat>>,
 {
     match limit {
-        Some(limit) => list_filter_limit_execute(iterator, limit, stats, p, f),
-        None => list_filter_unlimited_execute(iterator, stats, p, f),
+        Some(limit) => list_filter_limit_execute(iterator, limit, stats, p, f).await,
+        None => list_filter_unlimited_execute(iterator, stats, p, f).await,
     }
 }
 
 #[inline]
-fn list_filter_limit_execute<P, F>(
-    iterator: FindIter,
+async fn list_filter_limit_execute<P, F, Fut, Fut2>(
+    iterator: impl Stream<Item = Vec<Object>>,
     limit: usize,
     stats: Option<FindStat>,
     p: P,
-    f: F,
-) -> Result<Option<FindStat>, Error>
+    f: &mut F,
+) -> Option<FindStat>
 where
-    P: Fn(&Object) -> bool,
-    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+    P: FnMut(&Object) -> Fut,
+    Fut: Future<Output = bool>,
+    F: FnMut(Option<FindStat>, Vec<Object>) -> Fut2,
+    Fut2: Future<Output = Option<FindStat>>,
 {
     iterator
-        .map(|x| x.unwrap())
+        .map(|x| futures::stream::iter(x.into_iter()))
         .flatten()
         .filter(p)
         .take(limit)
         .chunks(CHUNK)
-        .into_iter()
-        .try_fold(stats, |acc, x| f(acc, &x.collect::<Vec<Object>>()))
+        .fold(stats, f)
+        .await
 }
 
 #[inline]
-fn list_filter_unlimited_execute<P, F>(
-    iterator: FindIter,
+async fn list_filter_unlimited_execute<P, F, Fut, Fut2>(
+    iterator: impl Stream<Item = Vec<Object>>,
     stats: Option<FindStat>,
     p: P,
-    f: F,
-) -> Result<Option<FindStat>, Error>
+    f: &mut F,
+) -> Option<FindStat>
 where
-    P: Fn(&Object) -> bool,
-    F: Fn(Option<FindStat>, &[Object]) -> Result<Option<FindStat>, Error>,
+    P: FnMut(&Object) -> Fut,
+    Fut: Future<Output = bool>,
+    F: FnMut(Option<FindStat>, Vec<Object>) -> Fut2,
+    Fut2: Future<Output = Option<FindStat>>,
 {
     iterator
-        .map(|x| x.unwrap())
+        .map(|x| futures::stream::iter(x.into_iter()))
         .flatten()
         .filter(p)
         .chunks(CHUNK)
-        .into_iter()
-        .try_fold(stats, |acc, x| f(acc, &x.collect::<Vec<Object>>()))
+        .fold(stats, f)
+        .await
 }

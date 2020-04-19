@@ -1,4 +1,5 @@
 use chrono::prelude::*;
+use dyn_clone::DynClone;
 use glob::MatchOptions;
 use regex::Regex;
 use rusoto_s3::Object;
@@ -6,9 +7,11 @@ use std::convert::AsRef;
 
 use crate::arg::*;
 
-pub trait Filter {
+pub trait Filter: DynClone {
     fn filter(&self, object: &Object) -> bool;
 }
+
+dyn_clone::clone_trait_object!(Filter);
 
 impl Filter for FindSize {
     fn filter(&self, object: &Object) -> bool {

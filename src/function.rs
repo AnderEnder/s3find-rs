@@ -1,3 +1,6 @@
+use async_trait::async_trait;
+use futures::future;
+use futures::stream::StreamExt;
 use rusoto_s3::{
     CopyObjectRequest, Delete, DeleteObjectsRequest, GetObjectRequest, GetObjectTaggingRequest,
     Object, ObjectIdentifier, PutObjectAclRequest, PutObjectTaggingRequest, S3Client, Tagging, S3,
@@ -10,10 +13,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use dyn_clone::DynClone;
 use failure::Error;
-use futures::stream::Stream;
-use futures::Future;
-
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::arg::*;
@@ -43,8 +44,10 @@ pub struct ExecStatus {
     pub runcommand: String,
 }
 
-pub trait RunCommand {
-    fn execute(
+#[async_trait]
+
+pub trait RunCommand: DynClone {
+    async fn execute(
         &self,
         client: &S3Client,
         region: &str,
@@ -53,8 +56,11 @@ pub trait RunCommand {
     ) -> Result<(), Error>;
 }
 
+dyn_clone::clone_trait_object!(RunCommand);
+
+#[async_trait]
 impl RunCommand for FastPrint {
-    fn execute(
+    async fn execute(
         &self,
         _c: &S3Client,
         _r: &str,
@@ -72,8 +78,9 @@ impl RunCommand for FastPrint {
     }
 }
 
+#[async_trait]
 impl RunCommand for AdvancedPrint {
-    fn execute(
+    async fn execute(
         &self,
         _c: &S3Client,
         _r: &str,
@@ -119,10 +126,17 @@ impl Exec {
     }
 }
 
+#[async_trait]
 impl RunCommand for Exec {
-    fn execute(&self, _: &S3Client, _r: &str, path: &S3path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        _: &S3Client,
+        _r: &str,
+        path: &S3path,
+        list: &[Object],
+    ) -> Result<(), Error> {
         for x in list {
-            let key = x.key.as_ref().map(String::as_str).unwrap_or("");
+            let key = x.key.as_deref().unwrap_or("");
             let path = format!("s3://{}/{}", &path.bucket, key);
             self.exec(&path)?;
         }
@@ -130,8 +144,9 @@ impl RunCommand for Exec {
     }
 }
 
+#[async_trait]
 impl RunCommand for MultipleDelete {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -158,7 +173,7 @@ impl RunCommand for MultipleDelete {
             ..Default::default()
         };
 
-        let result = client.delete_objects(request).sync();
+        let result = client.delete_objects(request).await;
 
         match result {
             Ok(r) => {
@@ -178,8 +193,9 @@ impl RunCommand for MultipleDelete {
     }
 }
 
+#[async_trait]
 impl RunCommand for SetTags {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -200,16 +216,16 @@ impl RunCommand for SetTags {
                 ..Default::default()
             };
 
-            client.put_object_tagging(request).sync()?;
-
+            client.put_object_tagging(request).await?;
             println!("tags are set for: s3://{}/{}", &path.bucket, &key);
         }
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for ListTags {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -225,7 +241,7 @@ impl RunCommand for ListTags {
                 ..Default::default()
             };
 
-            let tag_output = client.get_object_tagging(request).sync()?;
+            let tag_output = client.get_object_tagging(request).await?;
 
             let tags: String = tag_output
                 .tag_set
@@ -245,15 +261,15 @@ impl RunCommand for ListTags {
     }
 }
 
+#[async_trait]
 impl RunCommand for SetPublic {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         region: &str,
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
-        // let region_str = self.0.name();
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
@@ -264,7 +280,7 @@ impl RunCommand for SetPublic {
                 ..Default::default()
             };
 
-            client.put_object_acl(request).sync()?;
+            client.put_object_acl(request).await?;
 
             let url = match region {
                 "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", &path.bucket, key),
@@ -279,8 +295,9 @@ impl RunCommand for SetPublic {
     }
 }
 
+#[async_trait]
 impl RunCommand for Download {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -324,28 +341,32 @@ impl RunCommand for Download {
                 return Ok(());
             }
 
-            let result = client.get_object(request).sync()?;
-
-            let stream = result.body.ok_or(FunctionError::S3FetchBodyError)?;
+            let stream = client
+                .get_object(request)
+                .await?
+                .body
+                .ok_or(FunctionError::S3FetchBodyError)?;
 
             fs::create_dir_all(&dir_path)?;
             let mut output = File::create(&file_path)?;
 
             stream
                 .for_each(|buf| {
-                    output.write_all(&buf)?;
-                    count += buf.len() as u64;
+                    let b = buf.unwrap();
+                    output.write_all(&b).unwrap();
+                    count += b.len() as u64;
                     pb.set_position(count);
-                    Ok(())
+                    future::ready(())
                 })
-                .wait()?;
+                .await;
         }
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for S3Copy {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -386,14 +407,15 @@ impl RunCommand for S3Copy {
                 ..Default::default()
             };
 
-            client.copy_object(request).sync()?;
+            client.copy_object(request).await?;
         }
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for S3Move {
-    fn execute(
+    async fn execute(
         &self,
         client: &S3Client,
         _r: &str,
@@ -434,7 +456,7 @@ impl RunCommand for S3Move {
                 ..Default::default()
             };
 
-            client.copy_object(request).sync()?;
+            client.copy_object(request).await?;
         }
 
         let key_list: Vec<_> = list
@@ -457,13 +479,20 @@ impl RunCommand for S3Move {
             ..Default::default()
         };
 
-        client.delete_objects(request).sync()?;
+        client.delete_objects(request).await?;
         Ok(())
     }
 }
 
+#[async_trait]
 impl RunCommand for DoNothing {
-    fn execute(&self, _c: &S3Client, _r: &str, _p: &S3path, _l: &[Object]) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        _c: &S3Client,
+        _r: &str,
+        _p: &S3path,
+        _l: &[Object],
+    ) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -473,8 +502,8 @@ mod tests {
     use super::*;
     use rusoto_core::Region;
 
-    #[test]
-    fn advanced_print_test() -> Result<(), Error> {
+    #[tokio::test]
+    async fn advanced_print_test() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -492,11 +521,11 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[object])
+        cmd.execute(&client, region, &path, &[object]).await
     }
 
-    #[test]
-    fn fastprint_test() -> Result<(), Error> {
+    #[tokio::test]
+    async fn fastprint_test() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -514,6 +543,6 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[object])
+        cmd.execute(&client, region, &path, &[object]).await
     }
 }

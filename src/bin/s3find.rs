@@ -3,18 +3,21 @@ use structopt::StructOpt;
 
 use s3find::arg::*;
 use s3find::command::*;
-use s3find::run::list_filter_execute;
+use s3find::run::*;
 
-fn main() -> Result<(), Error> {
+#[tokio::main]
+async fn main() -> Result<(), Error> {
     let status: Find = FindOpt::from_args().into();
+    let filters = status.filters.clone();
 
     let stats = list_filter_execute(
-        status.iter(),
+        status.into_stream().stream(),
         status.limit,
         status.stats(),
-        |x| status.filters.test_match(x),
-        |acc, x| status.exec(acc, x),
-    )?;
+        |x| filters.test_match(x.clone()),
+        &mut |acc, x| status.exec(acc, x),
+    )
+    .await;
 
     if status.summarize {
         println!("{}", stats.unwrap());
@@ -22,6 +25,3 @@ fn main() -> Result<(), Error> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {}
