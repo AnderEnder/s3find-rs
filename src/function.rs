@@ -270,7 +270,6 @@ impl RunCommand for SetPublic {
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
-        // let region_str = self.0.name();
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 

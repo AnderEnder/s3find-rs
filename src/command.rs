@@ -411,8 +411,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn from_findopt_to_findcommand() {
+    #[tokio::test]
+    async fn from_findopt_to_findcommand() {
         let find: Find = FindOpt {
             path: S3path {
                 bucket: "bucket".to_owned(),
@@ -442,18 +442,18 @@ mod tests {
         );
         assert_eq!(find.region, Region::UsEast1);
 
-        // let object_ok = Object {
-        //     key: Some("pref".to_owned()),
-        //     size: Some(10),
-        //     ..Default::default()
-        // };
-        // assert!(find.filters.test_match(&object_ok));
+        let object_ok = Object {
+            key: Some("pref".to_owned()),
+            size: Some(10),
+            ..Default::default()
+        };
+        assert!(find.filters.test_match(object_ok).await);
 
-        // let object_fail = Object {
-        //     key: Some("Refer".to_owned()),
-        //     size: Some(10),
-        //     ..Default::default()
-        // };
-        // assert!(!find.filters.test_match(&object_fail));
+        let object_fail = Object {
+            key: Some("Refer".to_owned()),
+            size: Some(10),
+            ..Default::default()
+        };
+        assert!(!find.filters.test_match(object_fail).await);
     }
 }
