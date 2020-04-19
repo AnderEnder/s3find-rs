@@ -1,4 +1,3 @@
-use failure::Error;
 use futures::Stream;
 use humansize::{file_size_opts as options, FileSize};
 use rusoto_core::request::HttpClient;
@@ -66,17 +65,6 @@ impl Find {
         }
     }
 
-    pub fn iter(&self, runtime: Runtime) -> FindIter {
-        FindIter {
-            client: self.client.clone(),
-            path: self.path.clone(),
-            token: None,
-            page_size: self.page_size,
-            initial: true,
-            runtime,
-        }
-    }
-
     pub fn into_stream(&self) -> FindStream {
         FindStream {
             client: self.client.clone(),
@@ -140,40 +128,6 @@ pub struct FindIter {
     pub page_size: i64,
     pub initial: bool,
     pub runtime: Runtime,
-}
-
-impl Iterator for FindIter {
-    type Item = Result<Vec<Object>, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if !self.initial && self.token == None {
-            return None;
-        }
-
-        let request = ListObjectsV2Request {
-            bucket: self.path.bucket.clone(),
-            continuation_token: self.token.clone(),
-            delimiter: None,
-            encoding_type: None,
-            fetch_owner: None,
-            max_keys: Some(self.page_size),
-            prefix: self.path.prefix.clone(),
-            request_payer: None,
-            start_after: None,
-        };
-
-        self.initial = false;
-        self.token = None;
-
-        self.runtime
-            .block_on(self.client.list_objects_v2(request))
-            .map_err(|e| e.into())
-            .map(|x| {
-                self.token = x.next_continuation_token;
-                x.contents
-            })
-            .transpose()
-    }
 }
 
 impl From<FindOpt> for Find {
@@ -390,6 +344,7 @@ impl fmt::Display for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use failure::Error;
     use regex::Regex;
     use std::str::FromStr;
 

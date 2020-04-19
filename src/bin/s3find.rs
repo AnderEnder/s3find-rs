@@ -10,7 +10,7 @@ async fn main() -> Result<(), Error> {
     let status: Find = FindOpt::from_args().into();
     let filters = status.filters.clone();
 
-    let stats = list_filter_execute_stream(
+    let stats = list_filter_execute(
         status.into_stream().stream(),
         status.limit,
         status.stats(),
