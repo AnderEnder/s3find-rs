@@ -13,8 +13,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use anyhow::Error;
 use dyn_clone::DynClone;
-use failure::Error;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::arg::*;

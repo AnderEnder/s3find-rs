@@ -1,4 +1,4 @@
-use failure::Error;
+use anyhow::Error;
 use structopt::StructOpt;
 
 use s3find::arg::*;

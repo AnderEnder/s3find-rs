@@ -1,10 +1,10 @@
-use failure::*;
 use glob::Pattern;
 use regex::Regex;
 use rusoto_core::Region;
 use std::str::FromStr;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
+use thiserror::Error;
 
 /// Walk an Amazon S3 path hierarchy
 #[derive(StructOpt, Debug, Clone)]
@@ -244,19 +244,19 @@ pub struct SetTags {
 #[derive(StructOpt, Debug, PartialEq, Clone)]
 pub struct DoNothing {}
 
-#[derive(Fail, Debug)]
+#[derive(Error, Debug)]
 pub enum FindError {
-    #[fail(display = "Invalid s3 path")]
+    #[error("Invalid s3 path")]
     S3Parse,
-    #[fail(display = "Invalid size parameter")]
+    #[error("Invalid size parameter")]
     SizeParse,
-    #[fail(display = "Invalid mtime parameter")]
+    #[error("Invalid mtime parameter")]
     TimeParse,
-    #[fail(display = "Cannot parse tag")]
+    #[error("Cannot parse tag")]
     TagParseError,
-    #[fail(display = "Cannot parse tag key")]
+    #[error("Cannot parse tag key")]
     TagKeyParseError,
-    #[fail(display = "Cannot parse tag value")]
+    #[error("Cannot parse tag value")]
     TagValueParseError,
 }
 
@@ -267,9 +267,9 @@ pub struct S3path {
 }
 
 impl FromStr for S3path {
-    type Err = Error;
+    type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
         let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#)?;
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
@@ -291,9 +291,9 @@ pub enum FindSize {
 }
 
 impl FromStr for FindSize {
-    type Err = Error;
+    type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
         let re = Regex::new(r"([+-]?)(\d*)([kMGTP]?)$")?;
         let m = re.captures(s).ok_or(FindError::SizeParse)?;
 
@@ -337,9 +337,9 @@ pub enum FindTime {
 }
 
 impl FromStr for FindTime {
-    type Err = Error;
+    type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
         let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)$")?;
         let m = re.captures(s).ok_or(FindError::TimeParse)?;
 
@@ -382,9 +382,9 @@ pub type NameGlob = Pattern;
 pub struct InameGlob(pub Pattern);
 
 impl FromStr for InameGlob {
-    type Err = Error;
+    type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
         let pattern = Pattern::from_str(s)?;
         Ok(InameGlob(pattern))
     }
@@ -397,9 +397,9 @@ pub struct FindTag {
 }
 
 impl FromStr for FindTag {
-    type Err = Error;
+    type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
         let re = Regex::new(r"(\w+):(\w+)$")?;
         let m = re.captures(s).ok_or(FindError::TagParseError)?;
 
