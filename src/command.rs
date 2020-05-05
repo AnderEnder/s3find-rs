@@ -344,7 +344,8 @@ impl fmt::Display for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use failure::Error;
+    use anyhow::Error;
+
     use regex::Regex;
     use std::str::FromStr;
 
