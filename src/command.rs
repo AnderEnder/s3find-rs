@@ -195,24 +195,24 @@ impl From<FindOpt> for FilterList {
             ..
         } = opts;
 
-        for name in name {
-            list.push(Box::new(name));
+        for filter in name {
+            list.push(Box::new(filter));
         }
 
-        for iname in iname {
-            list.push(Box::new(iname));
+        for filter in iname {
+            list.push(Box::new(filter));
         }
 
-        for regex in regex {
-            list.push(Box::new(regex));
+        for filter in regex {
+            list.push(Box::new(filter));
         }
 
-        for size in size {
-            list.push(Box::new(size));
+        for filter in size {
+            list.push(Box::new(filter));
         }
 
-        for mtime in mtime {
-            list.push(Box::new(mtime));
+        for filter in mtime {
+            list.push(Box::new(filter));
         }
 
         FilterList(list)
