@@ -380,7 +380,7 @@ mod tests {
             name: vec![NameGlob::from_str("*ref*").unwrap()],
             iname: vec![InameGlob::from_str("Pre*").unwrap()],
             regex: vec![Regex::from_str("^pre").unwrap()],
-            mtime: Vec::new(),
+            mtime: vec![FindTime::Lower(10)],
             size: vec![FindSize::Lower(1000)],
             limit: None,
             page_size: 1000,

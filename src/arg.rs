@@ -66,8 +66,8 @@ pub struct FindOpt {
         number_of_values = 1,
         allow_hyphen_values = true,
         long_help = r#"Modification time for match, a time period:
-    +5d - for period from now-5d to now
-    -5d - for period  before now-5d
+    -5d - for period from now-5d to now
+    +5d - for period before now-5d
 
 Possible time units are as follows:
     s - seconds
@@ -330,9 +330,12 @@ impl FromStr for FindSize {
     }
 }
 
+// Filter time range: 0__<time>__<now>
 #[derive(Debug, Clone, PartialEq)]
 pub enum FindTime {
+    // time range <time>__<now>
     Upper(i64),
+    // time range 0__<time>
     Lower(i64),
 }
 
@@ -368,9 +371,9 @@ impl FromStr for FindTime {
         };
 
         match sign {
-            Some('+') => Ok(FindTime::Upper(seconds)),
-            Some('-') => Ok(FindTime::Lower(seconds)),
-            None => Ok(FindTime::Upper(seconds)),
+            Some('-') => Ok(FindTime::Upper(seconds)),
+            Some('+') => Ok(FindTime::Lower(seconds)),
+            None => Ok(FindTime::Lower(seconds)),
             Some(_) => Err(FindError::TimeParse.into()),
         }
     }
@@ -494,19 +497,19 @@ mod tests {
 
     #[test]
     fn time_corect() {
-        assert_eq!("11".parse().ok(), Some(FindTime::Upper(11)));
-        assert_eq!("11s".parse().ok(), Some(FindTime::Upper(11)));
-        assert_eq!("11m".parse().ok(), Some(FindTime::Upper(11 * 60)));
-        assert_eq!("11h".parse().ok(), Some(FindTime::Upper(11 * 3600)));
-        assert_eq!("11d".parse().ok(), Some(FindTime::Upper(11 * 3600 * 24)));
+        assert_eq!("11".parse().ok(), Some(FindTime::Lower(11)));
+        assert_eq!("11s".parse().ok(), Some(FindTime::Lower(11)));
+        assert_eq!("11m".parse().ok(), Some(FindTime::Lower(11 * 60)));
+        assert_eq!("11h".parse().ok(), Some(FindTime::Lower(11 * 3600)));
+        assert_eq!("11d".parse().ok(), Some(FindTime::Lower(11 * 3600 * 24)));
         assert_eq!(
             "11w".parse().ok(),
-            Some(FindTime::Upper(11 * 3600 * 24 * 7))
+            Some(FindTime::Lower(11 * 3600 * 24 * 7))
         );
-        assert_eq!("+11".parse().ok(), Some(FindTime::Upper(11)));
-        assert_eq!("+11m".parse().ok(), Some(FindTime::Upper(11 * 60)));
-        assert_eq!("-11m".parse().ok(), Some(FindTime::Lower(11 * 60)));
-        assert_eq!("-11".parse().ok(), Some(FindTime::Lower(11)));
+        assert_eq!("+11".parse().ok(), Some(FindTime::Lower(11)));
+        assert_eq!("+11m".parse().ok(), Some(FindTime::Lower(11 * 60)));
+        assert_eq!("-11m".parse().ok(), Some(FindTime::Upper(11 * 60)));
+        assert_eq!("-11".parse().ok(), Some(FindTime::Upper(11)));
     }
 
     #[test]
