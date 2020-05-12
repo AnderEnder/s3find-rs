@@ -29,16 +29,16 @@ impl Filter for FindTime {
         let last_modified_time = match object.last_modified.as_ref() {
             Some(object_time) => match object_time.parse::<DateTime<Utc>>() {
                 Ok(mtime) => mtime.timestamp(),
-                _ => return false,
+                Err(_) => return false,
             },
-            _ => return false,
+            None => 0,
         };
 
         let now = Utc::now().timestamp();
 
         match *self {
-            FindTime::Upper(seconds) => (now - last_modified_time) >= seconds,
-            FindTime::Lower(seconds) => (now - last_modified_time) <= seconds,
+            FindTime::Lower(seconds) => (now - last_modified_time) >= seconds,
+            FindTime::Upper(seconds) => (now - last_modified_time) <= seconds,
         }
     }
 }
@@ -102,11 +102,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(FindTime::Upper(10).filter(&object));
-        assert!(FindTime::Lower(4000).filter(&object));
+        assert!(FindTime::Lower(10).filter(&object));
+        assert!(FindTime::Upper(4000).filter(&object));
 
-        assert!(!FindTime::Upper(4000).filter(&object));
-        assert!(!FindTime::Lower(10).filter(&object));
+        assert!(!FindTime::Lower(4000).filter(&object));
+        assert!(!FindTime::Upper(10).filter(&object));
     }
 
     #[test]

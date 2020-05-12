@@ -83,8 +83,8 @@ OPTIONS:
 
         --mtime <time>...
             Modification time for match, a time period:
-                +5d - for period from now-5d to now
-                -5d - for period  before now-5d
+                -5d - for period from now-5d to now
+                +5d - for period before now-5d
 
             Possible time units are as follows:
                 s - seconds
@@ -223,22 +223,22 @@ s3find 's3://example-bucket/example-path' --size -10k print
 
 ### Find path by time
 
-#### Files modified since last 10 seconds
+#### Files modified for the period before last 10 seconds
 
 ```sh
-s3find 's3://example-bucket/example-path' --time 10 print
+s3find 's3://example-bucket/example-path' --mtime 10 print
 ```
 
 #### Files modified for the period before last 10 minutes
 
 ```sh
-s3find 's3://example-bucket/example-path' --time +10m print
+s3find 's3://example-bucket/example-path' --mtime +10m print
 ```
 
 #### Files modified since last 10 hours
 
 ```sh
-s3find 's3://example-bucket/example-path' --time -10h print
+s3find 's3://example-bucket/example-path' --mtime -10h print
 ```
 
 ### Multiple filters
