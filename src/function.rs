@@ -501,9 +501,10 @@ impl RunCommand for DoNothing {
 mod tests {
     use super::*;
     use rusoto_core::Region;
+    use rusoto_mock::*;
 
     #[tokio::test]
-    async fn advanced_print_test() -> Result<(), Error> {
+    async fn test_advanced_print() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -525,7 +526,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fastprint_test() -> Result<(), Error> {
+    async fn test_fastprint() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -544,5 +545,55 @@ mod tests {
         };
 
         cmd.execute(&client, region, &path, &[object]).await
+    }
+
+    #[tokio::test]
+    async fn smoke_donothing() -> Result<(), Error> {
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        let cmd = DoNothing {};
+        let region = "us-east-1";
+        let client = S3Client::new(Region::UsEast1);
+        let path = S3path {
+            bucket: "test".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, region, &path, &[object]).await
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_copy() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("key".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        let copy = S3Copy {
+            destination: ("s3://test/1").parse()?,
+            flat: false,
+        };
+
+        let copy_path = "s3://test/1".parse()?;
+
+        let res = copy
+            .execute(&client, "us-east-1", &copy_path, &[object])
+            .await;
+        assert!(res.is_ok());
+        Ok(())
     }
 }
