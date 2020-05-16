@@ -138,24 +138,24 @@ impl RunCommand for AdvancedPrint {
 }
 
 impl Exec {
-    pub fn exec(&self, key: &str) -> Result<ExecStatus, Error> {
-        let scommand = self.utility.replace("{}", key);
+    pub fn exec<I: std::io::Write>(&self, io: &mut I, key: &str) -> Result<ExecStatus, Error> {
+        let command_str = self.utility.replace("{}", key);
 
-        let mut command_args = scommand.split(' ');
+        let mut command_args = command_str.split(' ');
         let command_name = command_args.next().ok_or(FunctionError::CommandlineParse)?;
 
-        let mut rcommand = Command::new(command_name);
+        let mut command = Command::new(command_name);
         for arg in command_args {
-            rcommand.arg(arg);
+            command.arg(arg);
         }
 
-        let output = rcommand.output()?;
-        let output_str = String::from_utf8_lossy(&output.stdout).to_string();
-        print!("{}", &output_str);
+        let output = command.output()?;
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        writeln!(io, "{}", &output_str)?;
 
         Ok(ExecStatus {
             status: output.status,
-            runcommand: scommand.clone(),
+            runcommand: command_str.clone(),
         })
     }
 }
@@ -169,10 +169,11 @@ impl RunCommand for Exec {
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
+        let mut stdout = std::io::stdout();
         for x in list {
             let key = x.key.as_deref().unwrap_or("");
             let path = format!("s3://{}/{}", &path.bucket, key);
-            self.exec(&path)?;
+            self.exec(&mut stdout, &path)?;
         }
         Ok(())
     }
@@ -560,21 +561,12 @@ mod tests {
 
         let out = std::str::from_utf8(&buf)?;
 
-        assert!(
-            out.contains("9d48114aa7c18f9d68aa20086dbb7756"),
-            format!("Out: {}", out)
-        );
-        assert!(out.contains("None"), format!("Out: {}", out));
-        assert!(out.contains("4997288"), format!("Out: {}", out));
-        assert!(
-            out.contains("2017-07-19T19:04:17.000Z"),
-            format!("Out: {}", out)
-        );
-        assert!(
-            out.contains("s3://test/somepath/otherpath"),
-            format!("Out: {}", out)
-        );
-        assert!(out.contains("STANDARD"), format!("Out: {}", out));
+        assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
+        assert!(out.contains("None"));
+        assert!(out.contains("4997288"));
+        assert!(out.contains("2017-07-19T19:04:17.000Z"));
+        assert!(out.contains("s3://test/somepath/otherpath"));
+        assert!(out.contains("STANDARD"));
         Ok(())
     }
 
@@ -597,10 +589,23 @@ mod tests {
 
         let out = std::str::from_utf8(&buf)?;
 
-        assert!(
-            out.contains("s3://test/somepath/otherpath"),
-            format!("Out: {}", out)
-        );
+        assert!(out.contains("s3://test/somepath/otherpath"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_exec() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = Exec {
+            utility: "echo test {}".to_owned(),
+        };
+
+        let path = "s3://test/somepath/otherpath";
+        cmd.exec(&mut buf, path)?;
+        let out = std::str::from_utf8(&buf)?;
+
+        assert!(out.contains("test"));
+        assert!(out.contains("s3://test/somepath/otherpath"));
         Ok(())
     }
 
@@ -647,8 +652,6 @@ mod tests {
         };
 
         cmd.execute(&client, region, &path, &[object]).await?;
-
-        //assert!(out.contains("s3://test/somepath/otherpath"));
         Ok(())
     }
 
@@ -742,10 +745,10 @@ mod tests {
             },
         ];
 
-        let set = SetPublic {};
+        let cmd = SetPublic {};
         let path = "s3://testbucket".parse()?;
 
-        let res = set.execute(&client, "us-east-1", &path, objects).await;
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
         assert!(res.is_ok());
 
         Ok(())
