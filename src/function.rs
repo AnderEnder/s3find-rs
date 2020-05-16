@@ -678,6 +678,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn smoke_exec() -> Result<(), Error> {
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        let cmd = Exec {
+            utility: "echo {}".to_owned(),
+        };
+        let region = "us-east-1";
+        let client = S3Client::new(Region::UsEast1);
+        let path = S3path {
+            bucket: "test".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, region, &path, &[object]).await
+    }
+
+    #[tokio::test]
     async fn smoke_s3_delete() -> Result<(), Error> {
         let mock = MockRequestDispatcher::with_status(200).with_body(
             r#"
