@@ -500,8 +500,12 @@ impl RunCommand for DoNothing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use remove_dir_all::remove_dir_all;
     use rusoto_core::Region;
     use rusoto_mock::*;
+    use std::fs::File;
+    use std::io::prelude::*;
+    use tempfile::Builder;
 
     #[tokio::test]
     async fn test_advanced_print() -> Result<(), Error> {
@@ -570,6 +574,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn smoke_s3_delete() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200).with_body(
+            r#"
+<?xml version="1.0" encoding="UTF8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/20060301/">
+  <Deleted>
+    <Key>sample1.txt</Key>
+  </Deleted>
+  <Deleted>
+    <Key>sample2.txt</Key>
+  </Deleted>
+</DeleteResult>"#,
+        );
+
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let delete = MultipleDelete {};
+        let path = "s3://testbucket".parse()?;
+
+        let res = delete.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn smoke_s3_set_public() -> Result<(), Error> {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
@@ -596,9 +644,55 @@ mod tests {
         let set = SetPublic {};
         let path = "s3://testbucket".parse()?;
 
-        let res = set.execute(&client, "us-east1", &path, objects).await;
+        let res = set.execute(&client, "us-east-1", &path, objects).await;
         assert!(res.is_ok());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_download() -> Result<(), Error> {
+        let test_data = "testdata";
+        let mock = MockRequestDispatcher::with_status(200).with_body(test_data);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+        let filename = "sample1.txt";
+
+        let objects = &[Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some(filename.to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        }];
+
+        let target = Builder::new()
+            .prefix("s3_download")
+            .tempdir()
+            .unwrap()
+            .path()
+            .to_path_buf();
+
+        let download = Download {
+            destination: target.to_str().unwrap().to_owned(),
+            force: false,
+        };
+
+        let path = "s3://testbucket".parse()?;
+
+        let res = download.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+
+        let file = target.join(&filename);
+
+        let mut f = File::open(file).expect("file not found");
+        let mut contents = String::new();
+        f.read_to_string(&mut contents)
+            .expect("something went wrong reading the file");
+
+        assert_eq!(contents, test_data);
+
+        remove_dir_all(&target).unwrap();
         Ok(())
     }
 
