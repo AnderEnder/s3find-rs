@@ -58,6 +58,23 @@ pub trait RunCommand: DynClone {
 
 dyn_clone::clone_trait_object!(RunCommand);
 
+impl FastPrint {
+    #[inline]
+    fn print_object<I: Write>(
+        &self,
+        io: &mut I,
+        bucket: &str,
+        object: &Object,
+    ) -> std::io::Result<()> {
+        writeln!(
+            io,
+            "s3://{}/{}",
+            bucket,
+            object.key.as_ref().unwrap_or(&"".to_string())
+        )
+    }
+}
+
 #[async_trait]
 impl RunCommand for FastPrint {
     async fn execute(
@@ -67,14 +84,39 @@ impl RunCommand for FastPrint {
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
+        let mut stdout = std::io::stdout();
         for x in list {
-            println!(
-                "s3://{}/{}",
-                &path.bucket,
-                x.key.as_ref().unwrap_or(&"".to_string())
-            );
+            self.print_object(&mut stdout, &path.bucket, x)?
         }
         Ok(())
+    }
+}
+
+impl AdvancedPrint {
+    #[inline]
+    fn print_object<I: Write>(
+        &self,
+        io: &mut I,
+        bucket: &str,
+        object: &Object,
+    ) -> std::io::Result<()> {
+        writeln!(
+            io,
+            "{0} {1:?} {2} {3} s3://{4}/{5} {6}",
+            object.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
+            object.owner.as_ref().map(|x| x.display_name.as_ref()),
+            object.size.as_ref().unwrap_or(&0),
+            object
+                .last_modified
+                .as_ref()
+                .unwrap_or(&"NoTime".to_string()),
+            bucket,
+            object.key.as_ref().unwrap_or(&"".to_string()),
+            object
+                .storage_class
+                .as_ref()
+                .unwrap_or(&"NoStorage".to_string()),
+        )
     }
 }
 
@@ -87,41 +129,34 @@ impl RunCommand for AdvancedPrint {
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
+        let mut stdout = std::io::stdout();
         for x in list {
-            println!(
-                "{0} {1:?} {2} {3} s3://{4}/{5} {6}",
-                x.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
-                x.owner.as_ref().map(|x| x.display_name.as_ref()),
-                x.size.as_ref().unwrap_or(&0),
-                x.last_modified.as_ref().unwrap_or(&"NoTime".to_string()),
-                &path.bucket,
-                x.key.as_ref().unwrap_or(&"".to_string()),
-                x.storage_class.as_ref().unwrap_or(&"NoStorage".to_string()),
-            );
+            self.print_object(&mut stdout, &path.bucket, x)?
         }
         Ok(())
     }
 }
 
 impl Exec {
-    pub fn exec(&self, key: &str) -> Result<ExecStatus, Error> {
-        let scommand = self.utility.replace("{}", key);
+    #[inline]
+    fn exec<I: Write>(&self, io: &mut I, key: &str) -> Result<ExecStatus, Error> {
+        let command_str = self.utility.replace("{}", key);
 
-        let mut command_args = scommand.split(' ');
+        let mut command_args = command_str.split(' ');
         let command_name = command_args.next().ok_or(FunctionError::CommandlineParse)?;
 
-        let mut rcommand = Command::new(command_name);
+        let mut command = Command::new(command_name);
         for arg in command_args {
-            rcommand.arg(arg);
+            command.arg(arg);
         }
 
-        let output = rcommand.output()?;
-        let output_str = String::from_utf8_lossy(&output.stdout).to_string();
-        print!("{}", &output_str);
+        let output = command.output()?;
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        writeln!(io, "{}", &output_str)?;
 
         Ok(ExecStatus {
             status: output.status,
-            runcommand: scommand.clone(),
+            runcommand: command_str.clone(),
         })
     }
 }
@@ -135,10 +170,11 @@ impl RunCommand for Exec {
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
+        let mut stdout = std::io::stdout();
         for x in list {
             let key = x.key.as_deref().unwrap_or("");
             let path = format!("s3://{}/{}", &path.bucket, key);
-            self.exec(&path)?;
+            self.exec(&mut stdout, &path)?;
         }
         Ok(())
     }
@@ -500,10 +536,80 @@ impl RunCommand for DoNothing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use remove_dir_all::remove_dir_all;
     use rusoto_core::Region;
+    use rusoto_mock::*;
+    use std::fs::File;
+    use std::io::prelude::*;
+    use tempfile::Builder;
+
+    #[test]
+    fn test_advanced_print_object() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = AdvancedPrint {};
+        let bucket = "test";
+
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        cmd.print_object(&mut buf, bucket, &object)?;
+        let out = std::str::from_utf8(&buf)?;
+
+        assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
+        assert!(out.contains("None"));
+        assert!(out.contains("4997288"));
+        assert!(out.contains("2017-07-19T19:04:17.000Z"));
+        assert!(out.contains("s3://test/somepath/otherpath"));
+        assert!(out.contains("STANDARD"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fast_print_object() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = FastPrint {};
+        let bucket = "test";
+
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        cmd.print_object(&mut buf, bucket, &object)?;
+        let out = std::str::from_utf8(&buf)?;
+
+        assert!(out.contains("s3://test/somepath/otherpath"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_exec() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = Exec {
+            utility: "echo test {}".to_owned(),
+        };
+
+        let path = "s3://test/somepath/otherpath";
+        cmd.exec(&mut buf, path)?;
+        let out = std::str::from_utf8(&buf)?;
+
+        assert!(out.contains("test"));
+        assert!(out.contains("s3://test/somepath/otherpath"));
+        Ok(())
+    }
 
     #[tokio::test]
-    async fn advanced_print_test() -> Result<(), Error> {
+    async fn test_advanced_print() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -521,11 +627,12 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[object]).await
+        cmd.execute(&client, region, &path, &[object]).await?;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn fastprint_test() -> Result<(), Error> {
+    async fn test_fastprint() -> Result<(), Error> {
         let object = Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("somepath/otherpath".to_string()),
@@ -543,6 +650,308 @@ mod tests {
             prefix: None,
         };
 
+        cmd.execute(&client, region, &path, &[object]).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_donothing() -> Result<(), Error> {
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        let cmd = DoNothing {};
+        let region = "us-east-1";
+        let client = S3Client::new(Region::UsEast1);
+        let path = S3path {
+            bucket: "test".to_owned(),
+            prefix: None,
+        };
+
         cmd.execute(&client, region, &path, &[object]).await
+    }
+
+    #[tokio::test]
+    async fn smoke_exec() -> Result<(), Error> {
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        let cmd = Exec {
+            utility: "echo {}".to_owned(),
+        };
+        let region = "us-east-1";
+        let client = S3Client::new(Region::UsEast1);
+        let path = S3path {
+            bucket: "test".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, region, &path, &[object]).await
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_delete() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200).with_body(
+            r#"
+<?xml version="1.0" encoding="UTF8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/20060301/">
+  <Deleted>
+    <Key>sample1.txt</Key>
+  </Deleted>
+  <Deleted>
+    <Key>sample2.txt</Key>
+  </Deleted>
+</DeleteResult>"#,
+        );
+
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let cmd = MultipleDelete {};
+        let path = "s3://testbucket".parse()?;
+
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_set_public() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let cmd = SetPublic {};
+        let path = "s3://testbucket".parse()?;
+
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_download() -> Result<(), Error> {
+        let test_data = "testdata";
+        let mock = MockRequestDispatcher::with_status(200).with_body(test_data);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+        let filename = "sample1.txt";
+
+        let objects = &[Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some(filename.to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        }];
+
+        let target = Builder::new()
+            .prefix("s3_download")
+            .tempdir()
+            .unwrap()
+            .path()
+            .to_path_buf();
+
+        let cmd = Download {
+            destination: target.to_str().unwrap().to_owned(),
+            force: false,
+        };
+
+        let path = "s3://testbucket".parse()?;
+
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+
+        let file = target.join(&filename);
+
+        let mut f = File::open(file).expect("file not found");
+        let mut contents = String::new();
+        f.read_to_string(&mut contents)
+            .expect("something went wrong reading the file");
+
+        assert_eq!(contents, test_data);
+
+        remove_dir_all(&target).unwrap();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_set_tags() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let tags = vec![
+            FindTag {
+                key: "testkey1".to_owned(),
+                value: "testvalue1".to_owned(),
+            },
+            FindTag {
+                key: "testkey2".to_owned(),
+                value: "testvalue2".to_owned(),
+            },
+        ];
+
+        let cmd = SetTags { tags };
+        let path = "s3://testbucket".parse()?;
+
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_list_tags() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let cmd = ListTags {};
+        let path = "s3://testbucket".parse()?;
+
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_copy() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("key".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        let cmd = S3Copy {
+            destination: ("s3://test/1").parse()?,
+            flat: false,
+        };
+
+        let copy_path = "s3://test/1".parse()?;
+
+        let res = cmd
+            .execute(&client, "us-east-1", &copy_path, &[object])
+            .await;
+        assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_move() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("key".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4997288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        let cmd = S3Move {
+            destination: ("s3://test/1").parse()?,
+            flat: false,
+        };
+
+        let copy_path = "s3://test/1".parse()?;
+
+        let res = cmd
+            .execute(&client, "us-east-1", &copy_path, &[object])
+            .await;
+        assert!(res.is_ok());
+        Ok(())
     }
 }

@@ -69,6 +69,11 @@ features = [ "rustls" ]
 tempfile = "3"
 remove_dir_all = "0.5"
 
+[dev-dependencies.rusoto_mock]
+version = "0.43"
+default-features = false
+features = [ "rustls" ]
+
 [build-dependencies]
 version_check = "0.9"
 structopt = "0.3"
