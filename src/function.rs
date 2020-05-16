@@ -60,7 +60,7 @@ dyn_clone::clone_trait_object!(RunCommand);
 
 impl FastPrint {
     #[inline]
-    pub fn print_object<I: std::io::Write>(
+    fn print_object<I: Write>(
         &self,
         io: &mut I,
         bucket: &str,
@@ -94,7 +94,7 @@ impl RunCommand for FastPrint {
 
 impl AdvancedPrint {
     #[inline]
-    pub fn print_object<I: std::io::Write>(
+    fn print_object<I: Write>(
         &self,
         io: &mut I,
         bucket: &str,
@@ -138,7 +138,8 @@ impl RunCommand for AdvancedPrint {
 }
 
 impl Exec {
-    pub fn exec<I: std::io::Write>(&self, io: &mut I, key: &str) -> Result<ExecStatus, Error> {
+    #[inline]
+    fn exec<I: Write>(&self, io: &mut I, key: &str) -> Result<ExecStatus, Error> {
         let command_str = self.utility.replace("{}", key);
 
         let mut command_args = command_str.split(' ');
@@ -558,7 +559,6 @@ mod tests {
         };
 
         cmd.print_object(&mut buf, bucket, &object)?;
-
         let out = std::str::from_utf8(&buf)?;
 
         assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
@@ -586,7 +586,6 @@ mod tests {
         };
 
         cmd.print_object(&mut buf, bucket, &object)?;
-
         let out = std::str::from_utf8(&buf)?;
 
         assert!(out.contains("s3://test/somepath/otherpath"));
