@@ -570,6 +570,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn smoke_s3_set_public() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let set = SetPublic {};
+        let path = "s3://testbucket".parse()?;
+
+        let res = set.execute(&client, "us-east1", &path, objects).await;
+        assert!(res.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_set_tags() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let tags = vec![
+            FindTag {
+                key: "testkey1".to_owned(),
+                value: "testvalue1".to_owned(),
+            },
+            FindTag {
+                key: "testkey2".to_owned(),
+                value: "testvalue2".to_owned(),
+            },
+        ];
+
+        let set_tags = SetTags { tags };
+        let path = "s3://testbucket".parse()?;
+
+        let res = set_tags.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_s3_list_tags() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let objects = &[
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(4997288),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let list = ListTags {};
+        let path = "s3://testbucket".parse()?;
+
+        let res = list.execute(&client, "us-east-1", &path, objects).await;
+        assert!(res.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn smoke_s3_copy() -> Result<(), Error> {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
