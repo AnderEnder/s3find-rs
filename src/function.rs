@@ -58,6 +58,23 @@ pub trait RunCommand: DynClone {
 
 dyn_clone::clone_trait_object!(RunCommand);
 
+impl FastPrint {
+    #[inline]
+    pub fn print_object<I: std::io::Write>(
+        &self,
+        io: &mut I,
+        bucket: &str,
+        object: &Object,
+    ) -> std::io::Result<()> {
+        writeln!(
+            io,
+            "s3://{}/{}",
+            bucket,
+            object.key.as_ref().unwrap_or(&"".to_string())
+        )
+    }
+}
+
 #[async_trait]
 impl RunCommand for FastPrint {
     async fn execute(
@@ -67,14 +84,39 @@ impl RunCommand for FastPrint {
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
+        let mut stdout = std::io::stdout();
         for x in list {
-            println!(
-                "s3://{}/{}",
-                &path.bucket,
-                x.key.as_ref().unwrap_or(&"".to_string())
-            );
+            self.print_object(&mut stdout, &path.bucket, x)?
         }
         Ok(())
+    }
+}
+
+impl AdvancedPrint {
+    #[inline]
+    pub fn print_object<I: std::io::Write>(
+        &self,
+        io: &mut I,
+        bucket: &str,
+        object: &Object,
+    ) -> std::io::Result<()> {
+        writeln!(
+            io,
+            "{0} {1:?} {2} {3} s3://{4}/{5} {6}",
+            object.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
+            object.owner.as_ref().map(|x| x.display_name.as_ref()),
+            object.size.as_ref().unwrap_or(&0),
+            object
+                .last_modified
+                .as_ref()
+                .unwrap_or(&"NoTime".to_string()),
+            bucket,
+            object.key.as_ref().unwrap_or(&"".to_string()),
+            object
+                .storage_class
+                .as_ref()
+                .unwrap_or(&"NoStorage".to_string()),
+        )
     }
 }
 
@@ -87,17 +129,9 @@ impl RunCommand for AdvancedPrint {
         path: &S3path,
         list: &[Object],
     ) -> Result<(), Error> {
+        let mut stdout = std::io::stdout();
         for x in list {
-            println!(
-                "{0} {1:?} {2} {3} s3://{4}/{5} {6}",
-                x.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
-                x.owner.as_ref().map(|x| x.display_name.as_ref()),
-                x.size.as_ref().unwrap_or(&0),
-                x.last_modified.as_ref().unwrap_or(&"NoTime".to_string()),
-                &path.bucket,
-                x.key.as_ref().unwrap_or(&"".to_string()),
-                x.storage_class.as_ref().unwrap_or(&"NoStorage".to_string()),
-            );
+            self.print_object(&mut stdout, &path.bucket, x)?
         }
         Ok(())
     }
@@ -507,6 +541,69 @@ mod tests {
     use std::io::prelude::*;
     use tempfile::Builder;
 
+    #[test]
+    fn test_advanced_print_object() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = AdvancedPrint {};
+        let bucket = "test";
+
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        cmd.print_object(&mut buf, bucket, &object)?;
+
+        let out = std::str::from_utf8(&buf)?;
+
+        assert!(
+            out.contains("9d48114aa7c18f9d68aa20086dbb7756"),
+            format!("Out: {}", out)
+        );
+        assert!(out.contains("None"), format!("Out: {}", out));
+        assert!(out.contains("4997288"), format!("Out: {}", out));
+        assert!(
+            out.contains("2017-07-19T19:04:17.000Z"),
+            format!("Out: {}", out)
+        );
+        assert!(
+            out.contains("s3://test/somepath/otherpath"),
+            format!("Out: {}", out)
+        );
+        assert!(out.contains("STANDARD"), format!("Out: {}", out));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fast_print_object() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = FastPrint {};
+        let bucket = "test";
+
+        let object = Object {
+            e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+            key: Some("somepath/otherpath".to_string()),
+            last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+            owner: None,
+            size: Some(4_997_288),
+            storage_class: Some("STANDARD".to_string()),
+        };
+
+        cmd.print_object(&mut buf, bucket, &object)?;
+
+        let out = std::str::from_utf8(&buf)?;
+
+        assert!(
+            out.contains("s3://test/somepath/otherpath"),
+            format!("Out: {}", out)
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_advanced_print() -> Result<(), Error> {
         let object = Object {
@@ -526,7 +623,8 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[object]).await
+        cmd.execute(&client, region, &path, &[object]).await?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -548,7 +646,10 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, region, &path, &[object]).await
+        cmd.execute(&client, region, &path, &[object]).await?;
+
+        //assert!(out.contains("s3://test/somepath/otherpath"));
+        Ok(())
     }
 
     #[tokio::test]
@@ -609,10 +710,10 @@ mod tests {
             },
         ];
 
-        let delete = MultipleDelete {};
+        let cmd = MultipleDelete {};
         let path = "s3://testbucket".parse()?;
 
-        let res = delete.execute(&client, "us-east-1", &path, objects).await;
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
         assert!(res.is_ok());
         Ok(())
     }
@@ -673,14 +774,14 @@ mod tests {
             .path()
             .to_path_buf();
 
-        let download = Download {
+        let cmd = Download {
             destination: target.to_str().unwrap().to_owned(),
             force: false,
         };
 
         let path = "s3://testbucket".parse()?;
 
-        let res = download.execute(&client, "us-east-1", &path, objects).await;
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
         assert!(res.is_ok());
 
         let file = target.join(&filename);
@@ -731,10 +832,10 @@ mod tests {
             },
         ];
 
-        let set_tags = SetTags { tags };
+        let cmd = SetTags { tags };
         let path = "s3://testbucket".parse()?;
 
-        let res = set_tags.execute(&client, "us-east-1", &path, objects).await;
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
         assert!(res.is_ok());
         Ok(())
     }
@@ -763,10 +864,10 @@ mod tests {
             },
         ];
 
-        let list = ListTags {};
+        let cmd = ListTags {};
         let path = "s3://testbucket".parse()?;
 
-        let res = list.execute(&client, "us-east-1", &path, objects).await;
+        let res = cmd.execute(&client, "us-east-1", &path, objects).await;
         assert!(res.is_ok());
 
         Ok(())
@@ -786,14 +887,14 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         };
 
-        let copy = S3Copy {
+        let cmd = S3Copy {
             destination: ("s3://test/1").parse()?,
             flat: false,
         };
 
         let copy_path = "s3://test/1".parse()?;
 
-        let res = copy
+        let res = cmd
             .execute(&client, "us-east-1", &copy_path, &[object])
             .await;
         assert!(res.is_ok());
