@@ -25,7 +25,7 @@ The authorization flow is the following chain:
 pub struct FindOpt {
     /// S3 path to walk through. It should be s3://bucket/path
     #[structopt(name = "path")]
-    pub path: S3path,
+    pub path: S3Path,
 
     /// AWS access key. Unrequired.
     #[structopt(
@@ -216,7 +216,7 @@ pub struct Download {
 pub struct S3Copy {
     /// S3 path destination to copy files to
     #[structopt(name = "destination")]
-    pub destination: S3path,
+    pub destination: S3Path,
 
     /// Copy keys like files
     #[structopt(long = "flat", short = "f")]
@@ -227,7 +227,7 @@ pub struct S3Copy {
 pub struct S3Move {
     /// S3 path destination to copy files to
     #[structopt(name = "destination")]
-    pub destination: S3path,
+    pub destination: S3Path,
 
     /// Copy keys like files
     #[structopt(long = "flat", short = "f")]
@@ -261,12 +261,12 @@ pub enum FindError {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct S3path {
+pub struct S3Path {
     pub bucket: String,
     pub prefix: Option<String>,
 }
 
-impl FromStr for S3path {
+impl FromStr for S3Path {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
@@ -279,7 +279,7 @@ impl FromStr for S3path {
             .ok_or(FindError::S3Parse)?;
         let prefix = captures.get(3).map(|x| x.as_str().to_owned());
 
-        Ok(S3path { bucket, prefix })
+        Ok(S3Path { bucket, prefix })
     }
 }
 
@@ -424,7 +424,7 @@ mod tests {
     fn s3path_correct() {
         assert_eq!(
             "s3://testbucket/".parse().ok(),
-            Some(S3path {
+            Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: Some("".to_owned()),
             })
@@ -432,7 +432,7 @@ mod tests {
 
         assert_eq!(
             "s3://testbucket/path".parse().ok(),
-            Some(S3path {
+            Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: Some("path".to_owned())
             })
@@ -440,7 +440,7 @@ mod tests {
 
         assert_eq!(
             "s3://testbucket/multi/path".parse().ok(),
-            Some(S3path {
+            Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: Some("multi/path".to_owned())
             })
@@ -448,7 +448,7 @@ mod tests {
 
         assert_eq!(
             "s3://testbucket".parse().ok(),
-            Some(S3path {
+            Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: None
             })
@@ -457,10 +457,10 @@ mod tests {
 
     #[test]
     fn s3path_incorrect() {
-        assert!("testbucket".parse::<S3path>().is_err());
-        assert!("s3://".parse::<S3path>().is_err());
-        assert!("s3:/testbucket".parse::<S3path>().is_err());
-        assert!("://testbucket".parse::<S3path>().is_err());
+        assert!("testbucket".parse::<S3Path>().is_err());
+        assert!("s3://".parse::<S3Path>().is_err());
+        assert!("s3:/testbucket".parse::<S3Path>().is_err());
+        assert!("://testbucket".parse::<S3Path>().is_err());
     }
 
     #[test]
