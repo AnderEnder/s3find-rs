@@ -51,7 +51,7 @@ pub trait RunCommand: DynClone {
         &self,
         client: &S3Client,
         region: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error>;
 }
@@ -81,7 +81,7 @@ impl RunCommand for FastPrint {
         &self,
         _c: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
@@ -126,7 +126,7 @@ impl RunCommand for AdvancedPrint {
         &self,
         _c: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
@@ -167,7 +167,7 @@ impl RunCommand for Exec {
         &self,
         _: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
@@ -186,7 +186,7 @@ impl RunCommand for MultipleDelete {
         &self,
         client: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         let key_list: Vec<_> = list
@@ -235,7 +235,7 @@ impl RunCommand for SetTags {
         &self,
         client: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
@@ -265,7 +265,7 @@ impl RunCommand for ListTags {
         &self,
         client: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
@@ -303,7 +303,7 @@ impl RunCommand for SetPublic {
         &self,
         client: &S3Client,
         region: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
@@ -337,7 +337,7 @@ impl RunCommand for Download {
         &self,
         client: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
@@ -406,7 +406,7 @@ impl RunCommand for S3Copy {
         &self,
         client: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
@@ -455,7 +455,7 @@ impl RunCommand for S3Move {
         &self,
         client: &S3Client,
         _r: &str,
-        path: &S3path,
+        path: &S3Path,
         list: &[Object],
     ) -> Result<(), Error> {
         for object in list {
@@ -526,7 +526,7 @@ impl RunCommand for DoNothing {
         &self,
         _c: &S3Client,
         _r: &str,
-        _p: &S3path,
+        _p: &S3Path,
         _l: &[Object],
     ) -> Result<(), Error> {
         Ok(())
@@ -622,7 +622,7 @@ mod tests {
         let cmd = AdvancedPrint {};
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
-        let path = S3path {
+        let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
         };
@@ -645,7 +645,7 @@ mod tests {
         let cmd = FastPrint {};
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
-        let path = S3path {
+        let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
         };
@@ -668,7 +668,7 @@ mod tests {
         let cmd = DoNothing {};
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
-        let path = S3path {
+        let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
         };
@@ -692,7 +692,7 @@ mod tests {
         };
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
-        let path = S3path {
+        let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
         };

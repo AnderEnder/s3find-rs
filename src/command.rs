@@ -7,7 +7,6 @@ use rusoto_s3::*;
 use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
 use std::fmt;
 use std::ops::Add;
-use tokio::runtime::Runtime;
 
 use crate::arg::*;
 use crate::filter::Filter;
@@ -32,7 +31,7 @@ impl FilterList {
 pub struct Find {
     pub client: S3Client,
     pub region: Region,
-    pub path: S3path,
+    pub path: S3Path,
     pub filters: FilterList,
     pub limit: Option<usize>,
     pub page_size: i64,
@@ -78,7 +77,7 @@ impl Find {
 
 pub struct FindStream {
     pub client: S3Client,
-    pub path: S3path,
+    pub path: S3Path,
     pub token: Option<String>,
     pub page_size: i64,
     pub initial: bool,
@@ -119,15 +118,6 @@ impl FindStream {
     pub fn stream(self) -> impl Stream<Item = Vec<Object>> {
         futures::stream::unfold(self, |s| async { s.list().await })
     }
-}
-
-pub struct FindIter {
-    pub client: S3Client,
-    pub path: S3path,
-    pub token: Option<String>,
-    pub page_size: i64,
-    pub initial: bool,
-    pub runtime: Runtime,
 }
 
 impl From<FindOpt> for Find {
@@ -345,8 +335,8 @@ impl fmt::Display for FindStat {
 mod tests {
     use super::*;
     use anyhow::Error;
-
     use regex::Regex;
+    use rusoto_mock::*;
     use std::str::FromStr;
 
     #[test]
@@ -370,7 +360,7 @@ mod tests {
     #[tokio::test]
     async fn from_findopt_to_findcommand() {
         let find: Find = FindOpt {
-            path: S3path {
+            path: S3Path {
                 bucket: "bucket".to_owned(),
                 prefix: Some("prefix".to_owned()),
             },
@@ -391,7 +381,7 @@ mod tests {
 
         assert_eq!(
             find.path,
-            S3path {
+            S3Path {
                 bucket: "bucket".to_owned(),
                 prefix: Some("prefix".to_owned()),
             }
@@ -411,5 +401,109 @@ mod tests {
             ..Default::default()
         };
         assert!(!find.filters.test_match(object_fail).await);
+    }
+
+    #[test]
+    fn filestat_add() -> Result<(), Error> {
+        let objects = [
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(10),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(20),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample3.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:15.000Z".to_string()),
+                owner: None,
+                size: Some(30),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let stat = FindStat::default() + &objects;
+
+        let expected = FindStat {
+            total_files: 3,
+            total_space: 60,
+            max_size: Some(30),
+            min_size: Some(10),
+            max_key: "sample3.txt".to_owned(),
+            min_key: "sample1.txt".to_owned(),
+            average_size: 20,
+        };
+
+        assert_eq!(stat, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn findstream_list() -> Result<(), Error> {
+        let mock = MockRequestDispatcher::with_status(200).with_body(
+            r#"
+            <?xml version="1.0" encoding="UTF-8"?>
+            <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+              <Name>test</Name>
+              <Prefix></Prefix>
+              <Marker></Marker>
+              <MaxKeys>1</MaxKeys>
+              <IsTruncated>false</IsTruncated>
+              <Contents>
+                <Key>key1</Key>
+                <LastModified>2013-01-10T21:45:09.000Z</LastModified>
+                <ETag>&quot;1d921b22129502cbbe5cbaf2c8bac682&quot;</ETag>
+                <Size>10000</Size>
+                <Owner>
+                  <ID>1936a5d8a2b189cda450d1d1d514f3861b3adc2df515</ID>
+                  <DisplayName>aws</DisplayName>
+                </Owner>
+                <StorageClass>STANDARD</StorageClass>
+              </Contents>
+              <Contents>
+                <Key>key2</Key>
+                <LastModified>2013-01-10T22:45:09.000Z</LastModified>
+                <ETag>&quot;1d921b22129502cbbe5cbaf2c8bac682&quot;</ETag>
+                <Size>1234</Size>
+                <Owner>
+                  <ID>1936a5d8a2b189cda450d1d1d514f3861b3adc2df515</ID>
+                  <DisplayName>aws</DisplayName>
+                </Owner>
+                <StorageClass>STANDARD</StorageClass>
+              </Contents>
+            </ListBucketResult>"#,
+        );
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+        let path = S3Path {
+            bucket: "test".to_owned(),
+            prefix: None,
+        };
+
+        let command = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1,
+            initial: true,
+        };
+
+        let (objects, command2) = command.list().await.unwrap();
+        assert_eq!(command2.token, None);
+        assert_eq!(command2.initial, false);
+        assert_eq!(objects[0].key, Some("key1".to_owned()));
+        assert_eq!(objects[1].key, Some("key2".to_owned()));
+
+        Ok(())
     }
 }
