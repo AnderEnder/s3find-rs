@@ -19,7 +19,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::arg::*;
 use crate::error::*;
-use crate::utils::S3Key;
+use crate::utils::combine_keys;
 
 impl Cmd {
     pub fn downcast(self) -> Box<dyn RunCommand> {
@@ -399,20 +399,6 @@ impl RunCommand for Download {
                 .await;
         }
         Ok(())
-    }
-}
-
-fn combine_keys(flat: bool, source: &str, destination: &Option<String>) -> String {
-    let key = if flat {
-        source.to_owned().key_name()
-    } else {
-        source.to_owned()
-    };
-
-    if let Some(ref destination) = destination {
-        destination.to_owned().join_key(&key)
-    } else {
-        key
     }
 }
 
@@ -965,27 +951,5 @@ mod tests {
             &generate_s3_url("eu-west-1", "test-bucket", "somepath/somekey"),
             "https://test-bucket.s3-eu-west-1.amazonaws.com/somepath/somekey",
         );
-    }
-
-    #[test]
-    fn test_combine_keys() {
-        assert_eq!(
-            &combine_keys(false, "path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/path",
-        );
-        assert_eq!(
-            &combine_keys(true, "path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/path",
-        );
-        assert_eq!(
-            &combine_keys(false, "some/path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/some/path",
-        );
-        assert_eq!(
-            &combine_keys(true, "some/path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/path",
-        );
-        assert_eq!(&combine_keys(false, "some/path", &None), "some/path",);
-        assert_eq!(&combine_keys(true, "some/path", &None), "path",);
     }
 }
