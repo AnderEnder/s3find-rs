@@ -19,6 +19,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::arg::*;
 use crate::error::*;
+use crate::utils::S3Key;
 
 impl Cmd {
     pub fn downcast(self) -> Box<dyn RunCommand> {
@@ -45,7 +46,6 @@ pub struct ExecStatus {
 }
 
 #[async_trait]
-
 pub trait RunCommand: DynClone {
     async fn execute(
         &self,
@@ -402,29 +402,17 @@ impl RunCommand for Download {
     }
 }
 
-fn combine_keys(
-    flat: bool,
-    source: &str,
-    destination: &Option<String>,
-) -> Result<String, FunctionError> {
+fn combine_keys(flat: bool, source: &str, destination: &Option<String>) -> String {
     let key = if flat {
-        Path::new(source)
-            .file_name()
-            .ok_or(FunctionError::PathConverError)?
-            .to_str()
-            .ok_or(FunctionError::PathConverError)?
+        source.to_owned().key_name()
     } else {
-        source
+        source.to_owned()
     };
 
     if let Some(ref destination) = destination {
-        Path::new(destination)
-            .join(key)
-            .to_str()
-            .map(|x| x.to_owned())
-            .ok_or(FunctionError::PathConverError)
+        destination.to_owned().join_key(&key)
     } else {
-        Ok(key.to_owned())
+        key
     }
 }
 
@@ -440,7 +428,7 @@ impl RunCommand for S3Copy {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-            let target = combine_keys(self.flat, key, &self.destination.prefix)?;
+            let target = combine_keys(self.flat, key, &self.destination.prefix);
             let source_path = format!("{0}/{1}", &path.bucket, key);
 
             println!(
@@ -473,7 +461,7 @@ impl RunCommand for S3Move {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-            let target = combine_keys(self.flat, key, &self.destination.prefix)?;
+            let target = combine_keys(self.flat, key, &self.destination.prefix);
             let source_path = format!("{0}/{1}", &path.bucket, key);
 
             println!(
@@ -982,25 +970,22 @@ mod tests {
     #[test]
     fn test_combine_keys() {
         assert_eq!(
-            &combine_keys(false, "path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            &combine_keys(false, "path", &Some("somepath/anotherpath".to_owned())),
             "somepath/anotherpath/path",
         );
         assert_eq!(
-            &combine_keys(true, "path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            &combine_keys(true, "path", &Some("somepath/anotherpath".to_owned())),
             "somepath/anotherpath/path",
         );
         assert_eq!(
-            &combine_keys(false, "some/path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            &combine_keys(false, "some/path", &Some("somepath/anotherpath".to_owned())),
             "somepath/anotherpath/some/path",
         );
         assert_eq!(
-            &combine_keys(true, "some/path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            &combine_keys(true, "some/path", &Some("somepath/anotherpath".to_owned())),
             "somepath/anotherpath/path",
         );
-        assert_eq!(
-            &combine_keys(false, "some/path", &None).unwrap(),
-            "some/path",
-        );
-        assert_eq!(&combine_keys(true, "some/path", &None).unwrap(), "path",);
+        assert_eq!(&combine_keys(false, "some/path", &None), "some/path",);
+        assert_eq!(&combine_keys(true, "some/path", &None), "path",);
     }
 }
