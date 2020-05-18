@@ -906,14 +906,14 @@ mod tests {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
-        let object = Object {
+        let object = [Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-            key: Some("key".to_string()),
+            key: Some("path/key".to_string()),
             last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
             owner: None,
             size: Some(4997288),
             storage_class: Some("STANDARD".to_string()),
-        };
+        }];
 
         let cmd = S3Copy {
             destination: ("s3://test/1").parse()?,
@@ -922,8 +922,16 @@ mod tests {
 
         let copy_path = "s3://test/1".parse()?;
 
-        let res = cmd
-            .execute(&client, "us-east-1", &copy_path, &[object])
+        let res = cmd.execute(&client, "us-east-1", &copy_path, &object).await;
+        assert!(res.is_ok());
+
+        let cmd_flat = S3Copy {
+            destination: ("s3://test/1").parse()?,
+            flat: true,
+        };
+
+        let res = cmd_flat
+            .execute(&client, "us-east-1", &copy_path, &object)
             .await;
         assert!(res.is_ok());
         Ok(())
@@ -934,14 +942,14 @@ mod tests {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
-        let object = Object {
+        let object = [Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("key".to_string()),
             last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
             owner: None,
             size: Some(4997288),
             storage_class: Some("STANDARD".to_string()),
-        };
+        }];
 
         let cmd = S3Move {
             destination: ("s3://test/1").parse()?,
@@ -950,12 +958,21 @@ mod tests {
 
         let copy_path = "s3://test/1".parse()?;
 
-        let res = cmd
-            .execute(&client, "us-east-1", &copy_path, &[object])
+        let res = cmd.execute(&client, "us-east-1", &copy_path, &object).await;
+        assert!(res.is_ok());
+
+        let cmd_flat = S3Move {
+            destination: ("s3://test/1").parse()?,
+            flat: true,
+        };
+
+        let res = cmd_flat
+            .execute(&client, "us-east-1", &copy_path, &object)
             .await;
         assert!(res.is_ok());
         Ok(())
     }
+
     #[test]
     fn test_generate_s3_url() {
         assert_eq!(
