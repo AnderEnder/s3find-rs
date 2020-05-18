@@ -11,7 +11,7 @@ use std::process::ExitStatus;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Error;
 use dyn_clone::DynClone;
@@ -19,6 +19,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::arg::*;
 use crate::error::*;
+use crate::utils::combine_keys;
 
 impl Cmd {
     pub fn downcast(self) -> Box<dyn RunCommand> {
@@ -45,7 +46,6 @@ pub struct ExecStatus {
 }
 
 #[async_trait]
-
 pub trait RunCommand: DynClone {
     async fn execute(
         &self,
@@ -297,6 +297,14 @@ impl RunCommand for ListTags {
     }
 }
 
+#[inline]
+fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
+    match region {
+        "us-east-1" => format!("https://{}.s3.amazonaws.com/{}", bucket, key),
+        _ => format!("https://{}.s3-{}.amazonaws.com/{}", bucket, region, key),
+    }
+}
+
 #[async_trait]
 impl RunCommand for SetPublic {
     async fn execute(
@@ -318,14 +326,8 @@ impl RunCommand for SetPublic {
 
             client.put_object_acl(request).await?;
 
-            let url = match region {
-                "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", &path.bucket, key),
-                _ => format!(
-                    "http://{}.s3-{}.amazonaws.com/{}",
-                    &path.bucket, region, key
-                ),
-            };
-            println!("{} {}", &key, url);
+            let url = generate_s3_url(region, &path.bucket, key);
+            println!("{} {}", key, url);
         }
         Ok(())
     }
@@ -412,33 +414,17 @@ impl RunCommand for S3Copy {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-            let key2 = if self.flat {
-                Path::new(key)
-                    .file_name()
-                    .ok_or(FunctionError::PathConverError)?
-                    .to_str()
-                    .ok_or(FunctionError::PathConverError)?
-            } else {
-                key
-            };
-
-            let target_key = if let Some(ref r) = self.destination.prefix {
-                Path::new(r).join(key2)
-            } else {
-                PathBuf::from(key2)
-            };
-
-            let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
+            let target = combine_keys(self.flat, key, &self.destination.prefix);
             let source_path = format!("{0}/{1}", &path.bucket, key);
 
             println!(
                 "copying: s3://{0} => s3://{1}/{2}",
-                source_path, &self.destination.bucket, target_key_str,
+                source_path, &self.destination.bucket, target,
             );
 
             let request = CopyObjectRequest {
                 bucket: self.destination.bucket.clone(),
-                key: target_key_str.to_owned(),
+                key: target.to_owned(),
                 copy_source: source_path,
                 ..Default::default()
             };
@@ -461,33 +447,17 @@ impl RunCommand for S3Move {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-            let key2 = if self.flat {
-                Path::new(key)
-                    .file_name()
-                    .ok_or(FunctionError::PathConverError)?
-                    .to_str()
-                    .ok_or(FunctionError::PathConverError)?
-            } else {
-                key
-            };
-
-            let target_key = if let Some(ref r) = self.destination.prefix {
-                Path::new(r).join(key2)
-            } else {
-                PathBuf::from(key2)
-            };
-
-            let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
+            let target = combine_keys(self.flat, key, &self.destination.prefix);
             let source_path = format!("{0}/{1}", &path.bucket, key);
 
             println!(
                 "moving: s3://{0} => s3://{1}/{2}",
-                source_path, &self.destination.bucket, target_key_str,
+                source_path, &self.destination.bucket, target,
             );
 
             let request = CopyObjectRequest {
                 bucket: self.destination.bucket.to_owned(),
-                key: target_key_str.to_owned(),
+                key: target.to_owned(),
                 copy_source: source_path,
                 ..Default::default()
             };
@@ -904,14 +874,14 @@ mod tests {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
-        let object = Object {
+        let object = [Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-            key: Some("key".to_string()),
+            key: Some("path/key".to_string()),
             last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
             owner: None,
             size: Some(4997288),
             storage_class: Some("STANDARD".to_string()),
-        };
+        }];
 
         let cmd = S3Copy {
             destination: ("s3://test/1").parse()?,
@@ -920,8 +890,16 @@ mod tests {
 
         let copy_path = "s3://test/1".parse()?;
 
-        let res = cmd
-            .execute(&client, "us-east-1", &copy_path, &[object])
+        let res = cmd.execute(&client, "us-east-1", &copy_path, &object).await;
+        assert!(res.is_ok());
+
+        let cmd_flat = S3Copy {
+            destination: ("s3://test/1").parse()?,
+            flat: true,
+        };
+
+        let res = cmd_flat
+            .execute(&client, "us-east-1", &copy_path, &object)
             .await;
         assert!(res.is_ok());
         Ok(())
@@ -932,14 +910,14 @@ mod tests {
         let mock = MockRequestDispatcher::with_status(200);
         let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
-        let object = Object {
+        let object = [Object {
             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
             key: Some("key".to_string()),
             last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
             owner: None,
             size: Some(4997288),
             storage_class: Some("STANDARD".to_string()),
-        };
+        }];
 
         let cmd = S3Move {
             destination: ("s3://test/1").parse()?,
@@ -948,10 +926,30 @@ mod tests {
 
         let copy_path = "s3://test/1".parse()?;
 
-        let res = cmd
-            .execute(&client, "us-east-1", &copy_path, &[object])
+        let res = cmd.execute(&client, "us-east-1", &copy_path, &object).await;
+        assert!(res.is_ok());
+
+        let cmd_flat = S3Move {
+            destination: ("s3://test/1").parse()?,
+            flat: true,
+        };
+
+        let res = cmd_flat
+            .execute(&client, "us-east-1", &copy_path, &object)
             .await;
         assert!(res.is_ok());
         Ok(())
+    }
+
+    #[test]
+    fn test_generate_s3_url() {
+        assert_eq!(
+            &generate_s3_url("us-east-1", "test-bucket", "somepath/somekey"),
+            "https://test-bucket.s3.amazonaws.com/somepath/somekey",
+        );
+        assert_eq!(
+            &generate_s3_url("eu-west-1", "test-bucket", "somepath/somekey"),
+            "https://test-bucket.s3-eu-west-1.amazonaws.com/somepath/somekey",
+        );
     }
 }
