@@ -11,7 +11,7 @@ async fn main() -> Result<(), Error> {
     let filters = status.filters.clone();
 
     let stats = list_filter_execute(
-        status.into_stream().stream(),
+        status.to_stream().stream(),
         status.limit,
         status.stats(),
         |x| filters.test_match(x.clone()),

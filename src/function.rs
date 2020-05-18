@@ -11,7 +11,7 @@ use std::process::ExitStatus;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Error;
 use dyn_clone::DynClone;
@@ -402,6 +402,32 @@ impl RunCommand for Download {
     }
 }
 
+fn combine_keys(
+    flat: bool,
+    source: &str,
+    destination: &Option<String>,
+) -> Result<String, FunctionError> {
+    let key = if flat {
+        Path::new(source)
+            .file_name()
+            .ok_or(FunctionError::PathConverError)?
+            .to_str()
+            .ok_or(FunctionError::PathConverError)?
+    } else {
+        source
+    };
+
+    if let Some(ref destination) = destination {
+        Path::new(destination)
+            .join(key)
+            .to_str()
+            .map(|x| x.to_owned())
+            .ok_or(FunctionError::PathConverError)
+    } else {
+        Ok(key.to_owned())
+    }
+}
+
 #[async_trait]
 impl RunCommand for S3Copy {
     async fn execute(
@@ -414,33 +440,17 @@ impl RunCommand for S3Copy {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-            let key2 = if self.flat {
-                Path::new(key)
-                    .file_name()
-                    .ok_or(FunctionError::PathConverError)?
-                    .to_str()
-                    .ok_or(FunctionError::PathConverError)?
-            } else {
-                key
-            };
-
-            let target_key = if let Some(ref r) = self.destination.prefix {
-                Path::new(r).join(key2)
-            } else {
-                PathBuf::from(key2)
-            };
-
-            let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
+            let target = combine_keys(self.flat, key, &self.destination.prefix)?;
             let source_path = format!("{0}/{1}", &path.bucket, key);
 
             println!(
                 "copying: s3://{0} => s3://{1}/{2}",
-                source_path, &self.destination.bucket, target_key_str,
+                source_path, &self.destination.bucket, target,
             );
 
             let request = CopyObjectRequest {
                 bucket: self.destination.bucket.clone(),
-                key: target_key_str.to_owned(),
+                key: target.to_owned(),
                 copy_source: source_path,
                 ..Default::default()
             };
@@ -463,33 +473,17 @@ impl RunCommand for S3Move {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-            let key2 = if self.flat {
-                Path::new(key)
-                    .file_name()
-                    .ok_or(FunctionError::PathConverError)?
-                    .to_str()
-                    .ok_or(FunctionError::PathConverError)?
-            } else {
-                key
-            };
-
-            let target_key = if let Some(ref r) = self.destination.prefix {
-                Path::new(r).join(key2)
-            } else {
-                PathBuf::from(key2)
-            };
-
-            let target_key_str = target_key.to_str().ok_or(FunctionError::PathConverError)?;
+            let target = combine_keys(self.flat, key, &self.destination.prefix)?;
             let source_path = format!("{0}/{1}", &path.bucket, key);
 
             println!(
                 "moving: s3://{0} => s3://{1}/{2}",
-                source_path, &self.destination.bucket, target_key_str,
+                source_path, &self.destination.bucket, target,
             );
 
             let request = CopyObjectRequest {
                 bucket: self.destination.bucket.to_owned(),
-                key: target_key_str.to_owned(),
+                key: target.to_owned(),
                 copy_source: source_path,
                 ..Default::default()
             };
@@ -983,5 +977,30 @@ mod tests {
             &generate_s3_url("eu-west-1", "test-bucket", "somepath/somekey"),
             "https://test-bucket.s3-eu-west-1.amazonaws.com/somepath/somekey",
         );
+    }
+
+    #[test]
+    fn test_combine_keys() {
+        assert_eq!(
+            &combine_keys(false, "path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            "somepath/anotherpath/path",
+        );
+        assert_eq!(
+            &combine_keys(true, "path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            "somepath/anotherpath/path",
+        );
+        assert_eq!(
+            &combine_keys(false, "some/path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            "somepath/anotherpath/some/path",
+        );
+        assert_eq!(
+            &combine_keys(true, "some/path", &Some("somepath/anotherpath".to_owned())).unwrap(),
+            "somepath/anotherpath/path",
+        );
+        assert_eq!(
+            &combine_keys(false, "some/path", &None).unwrap(),
+            "some/path",
+        );
+        assert_eq!(&combine_keys(true, "some/path", &None).unwrap(), "path",);
     }
 }

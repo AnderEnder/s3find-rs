@@ -64,7 +64,7 @@ impl Find {
         }
     }
 
-    pub fn into_stream(&self) -> FindStream {
+    pub fn to_stream(&self) -> FindStream {
         FindStream {
             client: self.client.clone(),
             path: self.path.clone(),
