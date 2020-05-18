@@ -297,6 +297,14 @@ impl RunCommand for ListTags {
     }
 }
 
+#[inline]
+fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
+    match region {
+        "us-east-1" => format!("https://{}.s3.amazonaws.com/{}", bucket, key),
+        _ => format!("https://{}.s3-{}.amazonaws.com/{}", bucket, region, key),
+    }
+}
+
 #[async_trait]
 impl RunCommand for SetPublic {
     async fn execute(
@@ -318,14 +326,8 @@ impl RunCommand for SetPublic {
 
             client.put_object_acl(request).await?;
 
-            let url = match region {
-                "us-east-1" => format!("http://{}.s3.amazonaws.com/{}", &path.bucket, key),
-                _ => format!(
-                    "http://{}.s3-{}.amazonaws.com/{}",
-                    &path.bucket, region, key
-                ),
-            };
-            println!("{} {}", &key, url);
+            let url = generate_s3_url(region, &path.bucket, key);
+            println!("{} {}", key, url);
         }
         Ok(())
     }
@@ -953,5 +955,16 @@ mod tests {
             .await;
         assert!(res.is_ok());
         Ok(())
+    }
+    #[test]
+    fn test_generate_s3_url() {
+        assert_eq!(
+            &generate_s3_url("us-east-1", "test-bucket", "somepath/somekey"),
+            "https://test-bucket.s3.amazonaws.com/somepath/somekey",
+        );
+        assert_eq!(
+            &generate_s3_url("eu-west-1", "test-bucket", "somepath/somekey"),
+            "https://test-bucket.s3-eu-west-1.amazonaws.com/somepath/somekey",
+        );
     }
 }
