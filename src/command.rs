@@ -56,14 +56,6 @@ impl Find {
         status
     }
 
-    pub fn stats(&self) -> Option<FindStat> {
-        if self.summarize {
-            Some(FindStat::default())
-        } else {
-            None
-        }
-    }
-
     pub fn to_stream(&self) -> FindStream {
         FindStream {
             client: self.client.clone(),
@@ -72,6 +64,14 @@ impl Find {
             page_size: self.page_size,
             initial: true,
         }
+    }
+}
+
+pub fn default_stats(summarize: bool) -> Option<FindStat> {
+    if summarize {
+        Some(FindStat::default())
+    } else {
+        None
     }
 }
 
@@ -117,6 +117,32 @@ impl FindStream {
 
     pub fn stream(self) -> impl Stream<Item = Vec<Object>> {
         futures::stream::unfold(self, |s| async { s.list().await })
+    }
+}
+
+impl PartialEq for FindStream {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.token == other.token
+            && self.page_size == other.page_size
+            && self.initial == other.initial
+    }
+}
+
+impl fmt::Debug for FindStream {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "\
+FindStream {{
+    client,
+    path: {:?},
+    token: {:?},
+    page_size: {},
+    initial: {},
+}}",
+            self.path, self.token, self.page_size, self.initial
+        )
     }
 }
 
@@ -334,6 +360,7 @@ impl fmt::Display for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use anyhow::Error;
     use regex::Regex;
     use rusoto_mock::*;
@@ -505,5 +532,114 @@ mod tests {
         assert_eq!(objects[1].key, Some("key2".to_owned()));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_default_stats() {
+        assert_eq!(default_stats(false), None);
+        assert_eq!(default_stats(true), Some(Default::default()));
+    }
+
+    #[tokio::test]
+    async fn test_find_exec() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+        let command: Box<dyn RunCommand> = Box::new(DoNothing {});
+
+        let find = Find {
+            client,
+            region: Region::UsEast1,
+            path: "s3://test/path".parse().unwrap(),
+            filters: FilterList(Vec::new()),
+            limit: None,
+            page_size: 1000,
+            stats: true,
+            summarize: false,
+            command,
+        };
+
+        assert_eq!(find.exec(None, Vec::new()).await, None);
+        assert_eq!(
+            find.exec(Some(Default::default()), Vec::new()).await,
+            Some(Default::default())
+        );
+
+        let objects = vec![
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(10),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample2.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(20),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample3.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:15.000Z".to_string()),
+                owner: None,
+                size: Some(30),
+                storage_class: Some("STANDARD".to_string()),
+            },
+        ];
+
+        let stat = find.exec(Some(Default::default()), objects).await;
+        assert_eq!(
+            stat,
+            Some(FindStat {
+                total_files: 3,
+                total_space: 60,
+                max_size: Some(30),
+                min_size: Some(10),
+                max_key: "sample3.txt".to_owned(),
+                min_key: "sample1.txt".to_owned(),
+                average_size: 20
+            })
+        );
+
+        // smoke debug
+        println!("{:?}", stat.unwrap());
+    }
+
+    #[test]
+    fn test_find_stream() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+        let command: Box<dyn RunCommand> = Box::new(DoNothing {});
+
+        let find = Find {
+            client: client.clone(),
+            region: Region::UsEast1,
+            path: "s3://test/path".parse().unwrap(),
+            filters: FilterList(Vec::new()),
+            limit: None,
+            page_size: 1000,
+            stats: true,
+            summarize: false,
+            command,
+        };
+
+        let stream = find.to_stream();
+        assert_eq!(
+            stream,
+            FindStream {
+                client,
+                path: "s3://test/path".parse().unwrap(),
+                token: None,
+                page_size: 1000,
+                initial: true,
+            }
+        );
+
+        // smoke debug
+        println!("{:?}", stream);
     }
 }

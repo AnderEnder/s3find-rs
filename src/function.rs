@@ -589,7 +589,7 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         };
 
-        let cmd = AdvancedPrint {};
+        let cmd = Cmd::Print(AdvancedPrint {}).downcast();
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
         let path = S3Path {
@@ -612,7 +612,7 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         };
 
-        let cmd = FastPrint {};
+        let cmd = Cmd::Ls(FastPrint {}).downcast();
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
         let path = S3Path {
@@ -635,7 +635,7 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         };
 
-        let cmd = DoNothing {};
+        let cmd = Cmd::Nothing(DoNothing {}).downcast();
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
         let path = S3Path {
@@ -657,9 +657,10 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         };
 
-        let cmd = Exec {
+        let cmd = Cmd::Exec(Exec {
             utility: "echo {}".to_owned(),
-        };
+        })
+        .downcast();
         let region = "us-east-1";
         let client = S3Client::new(Region::UsEast1);
         let path = S3Path {
@@ -706,7 +707,7 @@ mod tests {
             },
         ];
 
-        let cmd = MultipleDelete {};
+        let cmd = Cmd::Delete(MultipleDelete {}).downcast();
         let path = "s3://testbucket".parse()?;
 
         let res = cmd.execute(&client, "us-east-1", &path, objects).await;
@@ -738,7 +739,7 @@ mod tests {
             },
         ];
 
-        let cmd = SetPublic {};
+        let cmd = Cmd::Public(SetPublic {}).downcast();
         let path = "s3://testbucket".parse()?;
 
         let res = cmd.execute(&client, "us-east-1", &path, objects).await;
@@ -770,10 +771,11 @@ mod tests {
             .path()
             .to_path_buf();
 
-        let cmd = Download {
+        let cmd = Cmd::Download(Download {
             destination: target.to_str().unwrap().to_owned(),
             force: false,
-        };
+        })
+        .downcast();
 
         let path = "s3://testbucket".parse()?;
 
@@ -828,7 +830,7 @@ mod tests {
             },
         ];
 
-        let cmd = SetTags { tags };
+        let cmd = Cmd::Tags(SetTags { tags }).downcast();
         let path = "s3://testbucket".parse()?;
 
         let res = cmd.execute(&client, "us-east-1", &path, objects).await;
@@ -860,7 +862,7 @@ mod tests {
             },
         ];
 
-        let cmd = ListTags {};
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
         let path = "s3://testbucket".parse()?;
 
         let res = cmd.execute(&client, "us-east-1", &path, objects).await;
@@ -883,10 +885,11 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         }];
 
-        let cmd = S3Copy {
+        let cmd = Cmd::Copy(S3Copy {
             destination: ("s3://test/1").parse()?,
             flat: false,
-        };
+        })
+        .downcast();
 
         let copy_path = "s3://test/1".parse()?;
 
@@ -919,10 +922,11 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         }];
 
-        let cmd = S3Move {
+        let cmd = Cmd::Move(S3Move {
             destination: ("s3://test/1").parse()?,
             flat: false,
-        };
+        })
+        .downcast();
 
         let copy_path = "s3://test/1".parse()?;
 
