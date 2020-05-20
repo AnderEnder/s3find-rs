@@ -56,14 +56,6 @@ impl Find {
         status
     }
 
-    pub fn stats(&self) -> Option<FindStat> {
-        if self.summarize {
-            Some(FindStat::default())
-        } else {
-            None
-        }
-    }
-
     pub fn to_stream(&self) -> FindStream {
         FindStream {
             client: self.client.clone(),
@@ -72,6 +64,14 @@ impl Find {
             page_size: self.page_size,
             initial: true,
         }
+    }
+}
+
+pub fn default_stats(summarize: bool) -> Option<FindStat> {
+    if summarize {
+        Some(FindStat::default())
+    } else {
+        None
     }
 }
 
@@ -334,6 +334,7 @@ impl fmt::Display for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use anyhow::Error;
     use regex::Regex;
     use rusoto_mock::*;
@@ -505,5 +506,11 @@ mod tests {
         assert_eq!(objects[1].key, Some("key2".to_owned()));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_default_stats() {
+        assert_eq!(default_stats(false), None);
+        assert_eq!(default_stats(true), Some(Default::default()));
     }
 }

@@ -13,7 +13,7 @@ async fn main() -> Result<(), Error> {
     let stats = list_filter_execute(
         status.to_stream().stream(),
         status.limit,
-        status.stats(),
+        default_stats(status.summarize),
         |x| filters.test_match(x.clone()),
         &mut |acc, x| status.exec(acc, x),
     )
