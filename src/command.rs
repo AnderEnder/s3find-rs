@@ -604,9 +604,23 @@ mod tests {
                 average_size: 20
             })
         );
+    }
 
+    #[test]
+    fn test_find_findstat() {
+        let stat = FindStat {
+            total_files: 3,
+            total_space: 60,
+            max_size: Some(30),
+            min_size: Some(10),
+            max_key: "sample3.txt".to_owned(),
+            min_key: "sample1.txt".to_owned(),
+            average_size: 20,
+        };
         // smoke debug
-        println!("{:?}", stat.unwrap());
+        let stat_str = stat.to_string();
+        assert!(stat_str.contains("sample1.txt"));
+        assert!(stat_str.contains("sample3.txt"));
     }
 
     #[test]
