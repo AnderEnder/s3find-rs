@@ -435,18 +435,18 @@ mod tests {
         let objects = [
             Object {
                 e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-                key: Some("sample1.txt".to_string()),
-                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-                owner: None,
-                size: Some(10),
-                storage_class: Some("STANDARD".to_string()),
-            },
-            Object {
-                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
                 key: Some("sample2.txt".to_string()),
                 last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
                 owner: None,
                 size: Some(20),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(10),
                 storage_class: Some("STANDARD".to_string()),
             },
             Object {
@@ -604,9 +604,23 @@ mod tests {
                 average_size: 20
             })
         );
+    }
 
+    #[test]
+    fn test_find_findstat() {
+        let stat = FindStat {
+            total_files: 3,
+            total_space: 60,
+            max_size: Some(30),
+            min_size: Some(10),
+            max_key: "sample3.txt".to_owned(),
+            min_key: "sample1.txt".to_owned(),
+            average_size: 20,
+        };
         // smoke debug
-        println!("{:?}", stat.unwrap());
+        let stat_str = stat.to_string();
+        assert!(stat_str.contains("sample1.txt"));
+        assert!(stat_str.contains("sample3.txt"));
     }
 
     #[test]
@@ -638,8 +652,26 @@ mod tests {
                 initial: true,
             }
         );
+    }
 
-        // smoke debug
-        println!("{:?}", stream);
+    #[test]
+    fn test_stream_debug() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let stream = FindStream {
+            client,
+            path: "s3://test/path".parse().unwrap(),
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let stream_str = format!("{:?}", stream);
+        assert!(stream_str.contains("FindStream"));
+        assert!(stream_str.contains("S3Path"));
+        assert!(stream_str.contains("test"));
+        assert!(stream_str.contains("path"));
+        assert!(stream_str.contains("1000"));
     }
 }
