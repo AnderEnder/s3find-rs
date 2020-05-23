@@ -652,8 +652,26 @@ mod tests {
                 initial: true,
             }
         );
+    }
 
-        // smoke debug
-        println!("{:?}", stream);
+    #[test]
+    fn test_stream_debug() {
+        let mock = MockRequestDispatcher::with_status(200);
+        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+
+        let stream = FindStream {
+            client,
+            path: "s3://test/path".parse().unwrap(),
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let stream_str = format!("{:?}", stream);
+        assert!(stream_str.contains("FindStream"));
+        assert!(stream_str.contains("S3Path"));
+        assert!(stream_str.contains("test"));
+        assert!(stream_str.contains("path"));
+        assert!(stream_str.contains("1000"));
     }
 }
