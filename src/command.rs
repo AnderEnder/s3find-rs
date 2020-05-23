@@ -435,18 +435,18 @@ mod tests {
         let objects = [
             Object {
                 e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-                key: Some("sample1.txt".to_string()),
-                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-                owner: None,
-                size: Some(10),
-                storage_class: Some("STANDARD".to_string()),
-            },
-            Object {
-                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
                 key: Some("sample2.txt".to_string()),
                 last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
                 owner: None,
                 size: Some(20),
+                storage_class: Some("STANDARD".to_string()),
+            },
+            Object {
+                e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
+                key: Some("sample1.txt".to_string()),
+                last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
+                owner: None,
+                size: Some(10),
                 storage_class: Some("STANDARD".to_string()),
             },
             Object {
