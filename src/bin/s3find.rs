@@ -1,3 +1,10 @@
+#[cfg(all(not(target_env = "msvc"), not(target_os = "freebsd")))]
+use jemallocator::Jemalloc;
+
+#[cfg(all(not(target_env = "msvc"), not(target_os = "freebsd")))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use anyhow::Error;
 use structopt::StructOpt;
 
