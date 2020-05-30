@@ -1,4 +1,4 @@
-name: Rust
+name: Build
 
 on:
   push:
@@ -26,3 +26,13 @@ jobs:
         run: cargo test --no-fail-fast --verbose --all -- --nocapture
         env:
           RUST_BACKTRACE: 1
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: build
+        run: |
+          docker run --rm -t \
+            -v "$(pwd)":/volume \
+            anderender/muslrust cargo build
