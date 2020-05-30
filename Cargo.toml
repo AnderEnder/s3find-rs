@@ -49,8 +49,6 @@ itertools = "0.9"
 tokio = "0.2"
 async-trait = "0.1"
 dyn-clone = "1"
-[target.'cfg(all(not(target_env = "msvc"), not(target_os = "freebsd")))'.dependencies]
-jemallocator = "0.3"
 
 [dependencies.clap]
 version = "2"
