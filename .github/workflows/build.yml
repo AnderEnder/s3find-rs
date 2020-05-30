@@ -1,4 +1,4 @@
-name: Rust
+name: Build
 
 on:
   push:
@@ -14,8 +14,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: toolchain
+        uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
@@ -26,3 +28,13 @@ jobs:
         run: cargo test --no-fail-fast --verbose --all -- --nocapture
         env:
           RUST_BACKTRACE: 1
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: build
+        run: |
+          docker run --rm -t \
+            -v "$(pwd)":/volume \
+            anderender/muslrust cargo build

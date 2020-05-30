@@ -9,7 +9,8 @@ jobs:
   release-crates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: checkout
+        uses: actions/checkout@v2
       - name: publish package to crates
         run: |
           cargo package
@@ -18,7 +19,8 @@ jobs:
   release-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: checkout
+        uses: actions/checkout@v2
       - name: static build release
         run: |
           docker run --rm -t \
@@ -38,7 +40,8 @@ jobs:
   release-osx:
     runs-on: macOS-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: checkout
+        uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -57,7 +60,8 @@ jobs:
   release-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: checkout
+        uses: actions/checkout@v2
       - name: build release
         run: cargo build --release --verbose
       - name: archive
