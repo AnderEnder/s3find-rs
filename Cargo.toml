@@ -70,7 +70,7 @@ tempfile = "3"
 remove_dir_all = "0.5"
 
 [dev-dependencies.rusoto_mock]
-version = "0.44"
+version = "0.45"
 default-features = false
 features = [ "rustls" ]
 
