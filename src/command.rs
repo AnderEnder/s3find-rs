@@ -1,5 +1,7 @@
 use futures::Stream;
+use glob::Pattern;
 use humansize::{file_size_opts as options, FileSize};
+use regex::Regex;
 use rusoto_core::request::HttpClient;
 use rusoto_core::Region;
 use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
@@ -12,10 +14,46 @@ use crate::arg::*;
 use crate::filter::Filter;
 use crate::function::*;
 
-#[derive(Clone)]
+pub struct AWSPair {
+    access: Option<String>,
+    secret: Option<String>,
+}
+
 pub struct FilterList(pub Vec<Box<dyn Filter>>);
 
 impl FilterList {
+    pub fn new(
+        name: Vec<Pattern>,
+        iname: Vec<InameGlob>,
+        regex: Vec<Regex>,
+        size: Vec<FindSize>,
+        mtime: Vec<FindTime>,
+    ) -> Self {
+        let mut list: Vec<Box<dyn Filter>> = Vec::new();
+
+        for filter in name {
+            list.push(Box::new(filter));
+        }
+
+        for filter in iname {
+            list.push(Box::new(filter));
+        }
+
+        for filter in regex {
+            list.push(Box::new(filter));
+        }
+
+        for filter in size {
+            list.push(Box::new(filter));
+        }
+
+        for filter in mtime {
+            list.push(Box::new(filter));
+        }
+
+        FilterList(list)
+    }
+
     pub async fn test_match(&self, object: Object) -> bool {
         for item in &self.0 {
             if !item.filter(&object) {
@@ -27,12 +65,10 @@ impl FilterList {
     }
 }
 
-#[derive(Clone)]
 pub struct Find {
     pub client: S3Client,
     pub region: Region,
     pub path: S3Path,
-    pub filters: FilterList,
     pub limit: Option<usize>,
     pub page_size: i64,
     pub stats: bool,
@@ -41,7 +77,31 @@ pub struct Find {
 }
 
 impl Find {
-    #![allow(unreachable_patterns)]
+    pub fn new(
+        aws_credentials: AWSPair,
+        aws_region: Region,
+        cmd: Option<Cmd>,
+        path: S3Path,
+        page_size: i64,
+        summarize: bool,
+        limit: Option<usize>,
+    ) -> Self {
+        let region = aws_region.clone();
+        let client = get_client(aws_credentials.access, aws_credentials.secret, aws_region);
+        let command = cmd.unwrap_or_default().downcast();
+
+        Find {
+            client,
+            region,
+            path,
+            command,
+            page_size,
+            summarize,
+            limit,
+            stats: summarize,
+        }
+    }
+
     pub async fn exec(&self, acc: Option<FindStat>, list: Vec<Object>) -> Option<FindStat> {
         let status = match acc {
             Some(stat) => Some(stat + &list),
@@ -64,6 +124,43 @@ impl Find {
             page_size: self.page_size,
             initial: true,
         }
+    }
+}
+
+impl From<FindOpt> for (Find, FilterList) {
+    fn from(opts: FindOpt) -> Self {
+        let FindOpt {
+            aws_access_key,
+            aws_secret_key,
+            aws_region,
+            path,
+            cmd,
+            page_size,
+            summarize,
+            limit,
+            name,
+            iname,
+            regex,
+            size,
+            mtime,
+            ..
+        } = opts;
+
+        let find = Find::new(
+            AWSPair {
+                access: aws_access_key,
+                secret: aws_secret_key,
+            },
+            aws_region,
+            cmd,
+            path,
+            page_size,
+            summarize,
+            limit,
+        );
+        let filters = FilterList::new(name, iname, regex, size, mtime);
+
+        (find, filters)
     }
 }
 
@@ -146,40 +243,7 @@ FindStream {{
     }
 }
 
-impl From<FindOpt> for Find {
-    fn from(opts: FindOpt) -> Self {
-        let filters = opts.clone().into();
-
-        let FindOpt {
-            aws_access_key,
-            aws_secret_key,
-            aws_region,
-            path,
-            cmd,
-            page_size,
-            summarize,
-            limit,
-            ..
-        } = opts;
-
-        let region = aws_region.clone();
-        let client = get_client(aws_access_key, aws_secret_key, aws_region);
-        let command = cmd.unwrap_or_default().downcast();
-
-        Find {
-            client,
-            filters,
-            region,
-            path,
-            command,
-            page_size,
-            summarize,
-            limit,
-            stats: summarize,
-        }
-    }
-}
-
+#[inline]
 fn get_client(
     aws_access_key: Option<String>,
     aws_secret_key: Option<String>,
@@ -195,43 +259,6 @@ fn get_client(
             let provider = DefaultCredentialsProvider::new().unwrap();
             S3Client::new_with(dispatcher, provider, region)
         }
-    }
-}
-
-impl From<FindOpt> for FilterList {
-    fn from(opts: FindOpt) -> Self {
-        let mut list: Vec<Box<dyn Filter>> = Vec::new();
-
-        let FindOpt {
-            name,
-            iname,
-            regex,
-            size,
-            mtime,
-            ..
-        } = opts;
-
-        for filter in name {
-            list.push(Box::new(filter));
-        }
-
-        for filter in iname {
-            list.push(Box::new(filter));
-        }
-
-        for filter in regex {
-            list.push(Box::new(filter));
-        }
-
-        for filter in size {
-            list.push(Box::new(filter));
-        }
-
-        for filter in mtime {
-            list.push(Box::new(filter));
-        }
-
-        FilterList(list)
     }
 }
 
@@ -386,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_findopt_to_findcommand() {
-        let find: Find = FindOpt {
+        let (find, filters) = FindOpt {
             path: S3Path {
                 bucket: "bucket".to_owned(),
                 prefix: Some("prefix".to_owned()),
@@ -420,14 +447,14 @@ mod tests {
             size: Some(10),
             ..Default::default()
         };
-        assert!(find.filters.test_match(object_ok).await);
+        assert!(filters.test_match(object_ok).await);
 
         let object_fail = Object {
             key: Some("Refer".to_owned()),
             size: Some(10),
             ..Default::default()
         };
-        assert!(!find.filters.test_match(object_fail).await);
+        assert!(!filters.test_match(object_fail).await);
     }
 
     #[test]
@@ -550,7 +577,6 @@ mod tests {
             client,
             region: Region::UsEast1,
             path: "s3://test/path".parse().unwrap(),
-            filters: FilterList(Vec::new()),
             limit: None,
             page_size: 1000,
             stats: true,
@@ -633,7 +659,6 @@ mod tests {
             client: client.clone(),
             region: Region::UsEast1,
             path: "s3://test/path".parse().unwrap(),
-            filters: FilterList(Vec::new()),
             limit: None,
             page_size: 1000,
             stats: true,

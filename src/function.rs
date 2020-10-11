@@ -14,7 +14,6 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::Error;
-use dyn_clone::DynClone;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::arg::*;
@@ -46,7 +45,7 @@ pub struct ExecStatus {
 }
 
 #[async_trait]
-pub trait RunCommand: DynClone {
+pub trait RunCommand {
     async fn execute(
         &self,
         client: &S3Client,
@@ -55,8 +54,6 @@ pub trait RunCommand: DynClone {
         list: &[Object],
     ) -> Result<(), Error>;
 }
-
-dyn_clone::clone_trait_object!(RunCommand);
 
 impl FastPrint {
     #[inline]

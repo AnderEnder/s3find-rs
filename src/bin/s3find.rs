@@ -7,19 +7,18 @@ use s3find::run::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let status: Find = FindOpt::from_args().into();
-    let filters = status.filters.clone();
+    let (find, filters): (Find, FilterList) = FindOpt::from_args().into();
 
     let stats = list_filter_execute(
-        status.to_stream().stream(),
-        status.limit,
-        default_stats(status.summarize),
+        find.to_stream().stream(),
+        find.limit,
+        default_stats(find.summarize),
         |x| filters.test_match(x.clone()),
-        &mut |acc, x| status.exec(acc, x),
+        &mut |acc, x| find.exec(acc, x),
     )
     .await;
 
-    if status.summarize {
+    if find.summarize {
         println!("{}", stats.unwrap());
     }
 
