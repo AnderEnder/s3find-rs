@@ -14,20 +14,14 @@ use crate::arg::*;
 use crate::filter::Filter;
 use crate::function::*;
 
-#[derive(Clone)]
+pub struct AWSPair {
+    access: Option<String>,
+    secret: Option<String>,
+}
+
 pub struct FilterList(pub Vec<Box<dyn Filter>>);
 
 impl FilterList {
-    pub async fn test_match(&self, object: Object) -> bool {
-        for item in &self.0 {
-            if !item.filter(&object) {
-                return false;
-            }
-        }
-
-        true
-    }
-
     pub fn new(
         name: Vec<Pattern>,
         iname: Vec<InameGlob>,
@@ -59,9 +53,18 @@ impl FilterList {
 
         FilterList(list)
     }
+
+    pub async fn test_match(&self, object: Object) -> bool {
+        for item in &self.0 {
+            if !item.filter(&object) {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
-#[derive(Clone)]
 pub struct Find {
     pub client: S3Client,
     pub region: Region,
@@ -74,11 +77,8 @@ pub struct Find {
 }
 
 impl Find {
-    #![allow(unreachable_patterns)]
-
     pub fn new(
-        aws_access_key: Option<String>,
-        aws_secret_key: Option<String>,
+        aws_credentials: AWSPair,
         aws_region: Region,
         cmd: Option<Cmd>,
         path: S3Path,
@@ -87,7 +87,7 @@ impl Find {
         limit: Option<usize>,
     ) -> Self {
         let region = aws_region.clone();
-        let client = get_client(aws_access_key, aws_secret_key, aws_region);
+        let client = get_client(aws_credentials.access, aws_credentials.secret, aws_region);
         let command = cmd.unwrap_or_default().downcast();
 
         Find {
@@ -147,8 +147,10 @@ impl From<FindOpt> for (Find, FilterList) {
         } = opts;
 
         let find = Find::new(
-            aws_access_key,
-            aws_secret_key,
+            AWSPair {
+                access: aws_access_key,
+                secret: aws_secret_key,
+            },
             aws_region,
             cmd,
             path,
@@ -241,6 +243,7 @@ FindStream {{
     }
 }
 
+#[inline]
 fn get_client(
     aws_access_key: Option<String>,
     aws_secret_key: Option<String>,
