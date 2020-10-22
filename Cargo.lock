@@ -1187,7 +1187,7 @@ dependencies = [
  "structopt",
  "tempfile",
  "thiserror",
- "tokio 0.3.0",
+ "tokio 0.3.1",
  "tokio-compat-02",
  "version_check",
 ]
@@ -1582,11 +1582,10 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7137dbb0abee577362ccdc7df21605cfcbb949243aeab47dac9ea6ef7d830e21"
+checksum = "1911a203c5c240fd237e23a42e48846475f3d3b1e1dad3f17e6cc17a775b707c"
 dependencies = [
- "bytes",
  "num_cpus",
  "pin-project-lite",
  "slab",
