@@ -1586,6 +1586,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1911a203c5c240fd237e23a42e48846475f3d3b1e1dad3f17e6cc17a775b707c"
 dependencies = [
+ "futures-core",
  "num_cpus",
  "pin-project-lite",
  "slab",
@@ -1594,13 +1595,15 @@ dependencies = [
 
 [[package]]
 name = "tokio-compat-02"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d43ae4d20c9c773d1c2cd241734abb8534eccedf58922129a68735deb50d05f2"
+checksum = "bb4cec419b8b6f06c32e74aae6d8c5e79646d038a38e5ea2b36045f2c3296e22"
 dependencies = [
+ "bytes",
  "once_cell",
  "pin-project-lite",
  "tokio 0.2.22",
+ "tokio 0.3.1",
 ]
 
 [[package]]
