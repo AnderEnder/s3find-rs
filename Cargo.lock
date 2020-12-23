@@ -1213,7 +1213,7 @@ dependencies = [
  "structopt",
  "tempfile",
  "thiserror",
- "tokio 0.3.6",
+ "tokio 1.0.0",
  "tokio-compat-02",
  "version_check",
 ]
@@ -1614,10 +1614,19 @@ checksum = "720ba21c25078711bf456d607987d95bce90f7c3bea5abe1db587862e7a1e87c"
 dependencies = [
  "autocfg",
  "futures-core",
+ "pin-project-lite 0.2.0",
+]
+
+[[package]]
+name = "tokio"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f4bfdcbd00fa893ac0549b38aa27080636a0104b0d0c38475a99439405e1df8"
+dependencies = [
+ "autocfg",
  "num_cpus",
  "pin-project-lite 0.2.0",
- "slab",
- "tokio-macros 0.3.0",
+ "tokio-macros 1.0.0",
 ]
 
 [[package]]
@@ -1646,9 +1655,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "0.3.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d48caa7b66c7a6ec943edf78d21a594fbeb24e536c781da67d5c32edec54103f"
+checksum = "42517d2975ca3114b22a16192634e8241dc5cc1f130be194645970cc1c371494"
 dependencies = [
  "proc-macro2",
  "quote",
