@@ -798,9 +798,9 @@ checksum = "17b02fc0ff9a9e4b35b3342880f48e896ebf69f2967921fe8646bf5b7125956a"
 
 [[package]]
 name = "once_cell"
-version = "1.4.1"
+version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "260e51e7efe62b592207e9e13a68e43692a7a279171d6ba57abd208bf23645ad"
+checksum = "13bd41f508810a131401606d54ac32a467c97172d74ba7662562ebba5ad07fa0"
 
 [[package]]
 name = "opaque-debug"
@@ -1613,7 +1613,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "720ba21c25078711bf456d607987d95bce90f7c3bea5abe1db587862e7a1e87c"
 dependencies = [
  "autocfg",
- "futures-core",
  "num_cpus",
  "pin-project-lite 0.2.0",
  "slab",
@@ -1621,16 +1620,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-compat-02"
-version = "0.1.2"
+name = "tokio"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb4cec419b8b6f06c32e74aae6d8c5e79646d038a38e5ea2b36045f2c3296e22"
+checksum = "d258221f566b6c803c7b4714abadc080172b272090cdc5e244a6d4dd13c3a6bd"
+dependencies = [
+ "autocfg",
+ "pin-project-lite 0.2.0",
+]
+
+[[package]]
+name = "tokio-compat-02"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7d4237822b7be8fff0a7a27927462fad435dcb6650f95cea9e946bf6bdc7e07"
 dependencies = [
  "bytes",
  "once_cell",
- "pin-project-lite 0.1.10",
+ "pin-project-lite 0.2.0",
  "tokio 0.2.22",
- "tokio 0.3.6",
+ "tokio 1.0.1",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -1665,6 +1675,17 @@ dependencies = [
  "rustls",
  "tokio 0.2.22",
  "webpki",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4cdeb73537e63f98adcd73138af75e3f368ccaecffaa29d7eb61b9f5a440457"
+dependencies = [
+ "futures-core",
+ "pin-project-lite 0.2.0",
+ "tokio 1.0.1",
 ]
 
 [[package]]
