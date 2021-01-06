@@ -35,7 +35,7 @@ travis-ci = { repository = "AnderEnder/s3find-rs"}
 codecov = { repository = "AnderEnder/s3find-rs" }
 
 [dependencies]
-rusoto_credential = "0.45"
+rusoto_credential = "0.46"
 structopt = "0.3"
 glob = "0.3"
 regex = "1"
