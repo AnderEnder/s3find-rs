@@ -1,6 +1,5 @@
 use anyhow::Error;
 use structopt::StructOpt;
-use tokio_compat_02::FutureExt;
 
 use s3find::arg::*;
 use s3find::command::*;
@@ -17,7 +16,6 @@ async fn main() -> Result<(), Error> {
         |x| filters.test_match(x.clone()),
         &mut |acc, x| find.exec(acc, x),
     )
-    .compat()
     .await;
 
     if find.summarize {
