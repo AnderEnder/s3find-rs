@@ -196,6 +196,7 @@ impl FindStream {
             prefix: self.path.prefix.clone(),
             request_payer: None,
             start_after: None,
+            expected_bucket_owner: None,
         };
 
         self.initial = false;
