@@ -9,7 +9,6 @@ s3find is an analog of find for Amazon S3.
 documentation = "https://github.com/AnderEnder/s3find-rs"
 homepage = "https://github.com/AnderEnder/s3find-rs"
 repository = "https://github.com/AnderEnder/s3find-rs"
-readme = "README.md"
 keywords = [
     "find",
     "aws",
