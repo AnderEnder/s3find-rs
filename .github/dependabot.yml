@@ -1,0 +1,53 @@
+version: 2
+updates:
+- package-ecosystem: cargo
+  directory: "/"
+  schedule:
+    interval: daily
+    time: "04:00"
+  open-pull-requests-limit: 10
+  ignore:
+  - dependency-name: async-trait
+    versions:
+    - 0.1.43
+    - 0.1.48
+    - 0.1.49
+  - dependency-name: tokio
+    versions:
+    - 1.1.0
+    - 1.1.1
+    - 1.2.0
+    - 1.3.0
+    - 1.4.0
+  - dependency-name: anyhow
+    versions:
+    - 1.0.38
+    - 1.0.39
+  - dependency-name: regex
+    versions:
+    - 1.4.4
+    - 1.4.5
+  - dependency-name: futures
+    versions:
+    - 0.3.13
+  - dependency-name: remove_dir_all
+    versions:
+    - 0.6.1
+  - dependency-name: rusoto_s3
+    versions:
+    - 0.46.0
+  - dependency-name: rusoto_credential
+    versions:
+    - 0.46.0
+  - dependency-name: rusoto_mock
+    versions:
+    - 0.46.0
+  - dependency-name: rusoto_core
+    versions:
+    - 0.46.0
+  - dependency-name: tokio-compat-02
+    versions:
+    - 0.2.0
+  - dependency-name: thiserror
+    versions:
+    - 1.0.23
