@@ -43,7 +43,7 @@ anyhow = "1"
 thiserror = "1"
 chrono = "0.4"
 futures = "0.3"
-indicatif = "0.15"
+indicatif = "0.16"
 humansize = "1"
 itertools = "0.9"
 tokio = { version = "1", features=["macros", "rt-multi-thread"] }
