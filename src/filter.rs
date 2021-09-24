@@ -43,7 +43,7 @@ impl Filter for FindTime {
 impl Filter for NameGlob {
     fn filter(&self, object: &Object) -> bool {
         let object_key = object.key.as_ref().map(AsRef::as_ref).unwrap_or_default();
-        self.matches(&object_key)
+        self.matches(object_key)
     }
 }
 
@@ -51,7 +51,7 @@ impl Filter for InameGlob {
     fn filter(&self, object: &Object) -> bool {
         let object_key = object.key.as_ref().map(AsRef::as_ref).unwrap_or_default();
         self.0.matches_with(
-            &object_key,
+            object_key,
             MatchOptions {
                 case_sensitive: false,
                 require_literal_separator: false,
@@ -64,7 +64,7 @@ impl Filter for InameGlob {
 impl Filter for Regex {
     fn filter(&self, object: &Object) -> bool {
         let object_key = object.key.as_ref().map(AsRef::as_ref).unwrap_or_default();
-        self.is_match(&object_key)
+        self.is_match(object_key)
     }
 }
 
