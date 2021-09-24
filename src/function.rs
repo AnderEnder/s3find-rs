@@ -188,12 +188,11 @@ impl RunCommand for MultipleDelete {
     ) -> Result<(), Error> {
         let key_list: Vec<_> = list
             .iter()
-            .flat_map(|x| match x.key.as_ref() {
-                Some(key) => Some(ObjectIdentifier {
+            .flat_map(|x| {
+                x.key.as_ref().map(|key| ObjectIdentifier {
                     key: key.to_string(),
                     version_id: None,
-                }),
-                _ => None,
+                })
             })
             .collect();
 
@@ -464,12 +463,11 @@ impl RunCommand for S3Move {
 
         let key_list: Vec<_> = list
             .iter()
-            .flat_map(|x| match x.key.as_ref() {
-                Some(key) => Some(ObjectIdentifier {
+            .flat_map(|x| {
+                x.key.as_ref().map(|key| ObjectIdentifier {
                     key: key.to_string(),
                     version_id: None,
-                }),
-                _ => None,
+                })
             })
             .collect();
 

@@ -103,10 +103,7 @@ impl Find {
     }
 
     pub async fn exec(&self, acc: Option<FindStat>, list: Vec<Object>) -> Option<FindStat> {
-        let status = match acc {
-            Some(stat) => Some(stat + &list),
-            None => None,
-        };
+        let status = acc.map(|stat| stat + &list);
 
         let region = &self.region.name();
         self.command
