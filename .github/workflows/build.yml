@@ -28,6 +28,7 @@ jobs:
         run: cargo test --no-fail-fast --verbose --all -- --nocapture
         env:
           RUST_BACKTRACE: 1
+          RUST_LOG: trace
   docker:
     runs-on: ubuntu-latest
     steps:

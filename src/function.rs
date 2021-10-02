@@ -501,7 +501,6 @@ impl RunCommand for DoNothing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use remove_dir_all::remove_dir_all;
     use rusoto_core::Region;
     use rusoto_mock::*;
     use std::fs::File;
@@ -786,7 +785,7 @@ mod tests {
 
         assert_eq!(contents, test_data);
 
-        remove_dir_all(&target).unwrap();
+        remove_dir_all::remove_dir_all(&target).unwrap();
         Ok(())
     }
 
