@@ -758,12 +758,8 @@ mod tests {
             storage_class: Some("STANDARD".to_string()),
         }];
 
-        let target = Builder::new()
-            .prefix("s3_download")
-            .tempdir()
-            .unwrap()
-            .path()
-            .to_path_buf();
+        let tmp_target = Builder::new().prefix("s3_download").tempdir().unwrap();
+        let target = tmp_target.path().to_path_buf();
 
         let cmd = Cmd::Download(Download {
             destination: target.to_str().unwrap().to_owned(),
@@ -784,8 +780,8 @@ mod tests {
             .expect("something went wrong reading the file");
 
         assert_eq!(contents, test_data);
+        tmp_target.close().unwrap();
 
-        remove_dir_all::remove_dir_all(&target).unwrap();
         Ok(())
     }
 
