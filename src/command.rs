@@ -20,41 +20,9 @@ pub struct AWSPair {
     secret: Option<String>,
 }
 
-pub struct FilterList(pub Vec<Box<dyn Filter>>);
+pub struct FilterList<'a>(pub Vec<&'a Filter>);
 
-impl FilterList {
-    pub fn new(
-        name: Vec<Pattern>,
-        iname: Vec<InameGlob>,
-        regex: Vec<Regex>,
-        size: Vec<FindSize>,
-        mtime: Vec<FindTime>,
-    ) -> Self {
-        let mut list: Vec<Box<dyn Filter>> = Vec::new();
-
-        for filter in name {
-            list.push(Box::new(filter));
-        }
-
-        for filter in iname {
-            list.push(Box::new(filter));
-        }
-
-        for filter in regex {
-            list.push(Box::new(filter));
-        }
-
-        for filter in size {
-            list.push(Box::new(filter));
-        }
-
-        for filter in mtime {
-            list.push(Box::new(filter));
-        }
-
-        FilterList(list)
-    }
-
+impl<'a> FilterList<'a> {
     pub async fn test_match(&self, object: aws_sdk_s3::model::Object) -> bool {
         for item in &self.0 {
             if !item.filter(&object) {
@@ -63,6 +31,38 @@ impl FilterList {
         }
 
         true
+    }
+
+    pub fn new(
+        name: &'a Vec<Pattern>,
+        iname: &'a Vec<InameGlob>,
+        regex: &'a Vec<Regex>,
+        size: &'a Vec<FindSize>,
+        mtime: &'a Vec<FindTime>,
+    ) -> FilterList<'a> {
+        let mut list: Vec<&dyn Filter> = Vec::new();
+
+        for filter in name {
+            list.push(filter);
+        }
+
+        for filter in iname {
+            list.push(filter);
+        }
+
+        for filter in regex {
+            list.push(filter);
+        }
+
+        for filter in size {
+            list.push(filter);
+        }
+
+        for filter in mtime {
+            list.push(filter);
+        }
+
+        FilterList(list)
     }
 }
 
@@ -125,7 +125,7 @@ impl Find {
         }
     }
 
-    pub async fn from_opts(opts: FindOpt) -> (Find, FilterList) {
+    pub async fn from_opts<'a>(opts: &'a FindOpt) -> (Find, FilterList<'a>) {
         let FindOpt {
             aws_access_key,
             aws_secret_key,
@@ -145,15 +145,15 @@ impl Find {
 
         let find = Find::new(
             AWSPair {
-                access: aws_access_key,
-                secret: aws_secret_key,
+                access: aws_access_key.clone(),
+                secret: aws_secret_key.clone(),
             },
             aws_region.name(),
-            cmd,
-            path,
-            page_size,
-            summarize,
-            limit,
+            cmd.clone(),
+            path.clone(),
+            *page_size,
+            *summarize,
+            *limit,
         )
         .await;
 
