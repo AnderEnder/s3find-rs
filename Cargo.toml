@@ -45,8 +45,11 @@ futures = "0.3"
 indicatif = "0.16"
 humansize = "1"
 itertools = "0.10"
-tokio = { version = "1", features=["macros", "rt-multi-thread"] }
+tokio = { version = "1", features=["full"] }
 async-trait = "0.1"
+aws-config = "0.0.24-alpha"
+aws-sdk-s3 = "0.0.24-alpha"
+tracing-subscriber = "*"
 
 [dependencies.clap]
 version = "2"
