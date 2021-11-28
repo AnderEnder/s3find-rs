@@ -113,9 +113,12 @@ impl Exec {
     #[inline]
     fn exec<I: Write>(&self, io: &mut I, key: &str) -> Result<ExecStatus, Error> {
         let command_str = self.utility.replace("{}", key);
+        let split: Vec<_> = command_str.split(' ').collect();
 
-        let mut command_args = command_str.split(' ');
-        let command_name = command_args.next().ok_or(FunctionError::CommandlineParse)?;
+        let (command_name, command_args) = match &*split {
+            [command_name, ref command_args @ ..] => (*command_name, command_args),
+            _ => return Err(FunctionError::CommandlineParse.into()),
+        };
 
         let mut command = Command::new(command_name);
         for arg in command_args {
