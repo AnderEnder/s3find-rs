@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use aws_sdk_s3::model::ObjectCannedAcl;
 use futures::future;
 use futures::stream::StreamExt;
 use rusoto_s3::{
@@ -33,8 +34,8 @@ impl Cmd {
             Cmd::Tags(l) => Box::new(l),
             // Cmd::LsTags(l) => Box::new(l),
             // Cmd::Public(l) => Box::new(l),
-            // Cmd::Copy(l) => Box::new(l),
-            // Cmd::Move(l) => Box::new(l),
+            Cmd::Copy(l) => Box::new(l),
+            Cmd::Move(l) => Box::new(l),
             Cmd::Nothing(l) => Box::new(l),
             _ => Box::new(FastPrint {}),
         }
@@ -481,6 +482,43 @@ impl RunCommand for ListTags {
     }
 }
 
+#[async_trait]
+impl RunCommand2 for ListTags {
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[aws_sdk_s3::model::Object],
+    ) -> Result<(), Error> {
+        for object in list {
+            let tag_output = client
+                .get_object_tagging()
+                .bucket(path.bucket.clone())
+                .set_key(object.key.clone())
+                .send()
+                .await?;
+
+            let tags: String = tag_output
+                .tag_set
+                .map(|tags| {
+                    tags.into_iter()
+                        .map(|x| format!("{}:{}", x.key.unwrap(), x.value.unwrap()))
+                        .collect::<Vec<String>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
+
+            println!(
+                "s3://{}/{} {}",
+                &path.bucket,
+                object.key.as_ref().unwrap_or(&"".to_string()),
+                tags,
+            );
+        }
+        Ok(())
+    }
+}
+
 #[inline]
 fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
     match region {
@@ -512,6 +550,39 @@ impl RunCommand for SetPublic {
 
             let url = generate_s3_url(region, &path.bucket, key);
             println!("{} {}", key, url);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RunCommand2 for SetPublic {
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[aws_sdk_s3::model::Object],
+    ) -> Result<(), Error> {
+        for object in list {
+            // let request = PutObjectAclRequest {
+            //     bucket: path.bucket.to_owned(),
+            //     key: key.to_owned(),
+            //     acl: Some("public-read".to_string()),
+            //     ..Default::default()
+            // };
+
+            let result = client
+                .put_object_acl()
+                .bucket(path.bucket.to_owned())
+                .set_key(object.key.clone())
+                .acl(ObjectCannedAcl::PublicRead)
+                .send()
+                .await?;
+
+            // result.
+            // let key = object.key.clone().unwrap();
+            // let url = generate_s3_url(client.conf().region().unwrap().to_str(), &path.bucket, &key);
+            // println!("{} {}", key, url);
         }
         Ok(())
     }
@@ -680,6 +751,37 @@ impl RunCommand for S3Copy {
 }
 
 #[async_trait]
+impl RunCommand2 for S3Copy {
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[aws_sdk_s3::model::Object],
+    ) -> Result<(), Error> {
+        for object in list {
+            let key = object.key.clone().ok_or(FunctionError::ObjectFieldError)?;
+
+            let target = combine_keys(self.flat, &key, &self.destination.prefix);
+            let source_path = format!("{0}/{1}", &path.bucket, key);
+
+            println!(
+                "copying: s3://{0} => s3://{1}/{2}",
+                source_path, &self.destination.bucket, target,
+            );
+
+            client
+                .copy_object()
+                .bucket(&path.bucket)
+                .key(target)
+                .copy_source(source_path)
+                .send()
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl RunCommand for S3Move {
     async fn execute(
         &self,
@@ -729,6 +831,57 @@ impl RunCommand for S3Move {
         };
 
         client.delete_objects(request).await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RunCommand2 for S3Move {
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[aws_sdk_s3::model::Object],
+    ) -> Result<(), Error> {
+        for object in list {
+            let key = object.key.clone().ok_or(FunctionError::ObjectFieldError)?;
+
+            let target = combine_keys(self.flat, &key, &self.destination.prefix);
+            let source_path = format!("{0}/{1}", &path.bucket, key);
+
+            println!(
+                "moving: s3://{0} => s3://{1}/{2}",
+                source_path, &self.destination.bucket, target,
+            );
+
+            client
+                .copy_object()
+                .bucket(&path.bucket)
+                .key(target)
+                .copy_source(source_path)
+                .send()
+                .await?;
+        }
+
+        let key_list: Vec<_> = list
+            .iter()
+            .map(|x| {
+                aws_sdk_s3::model::ObjectIdentifier::builder()
+                    .set_key(x.key.clone())
+                    .build()
+            })
+            .collect();
+
+        let delete = aws_sdk_s3::model::Delete::builder()
+            .set_objects(Some(key_list))
+            .build();
+
+        client
+            .delete_objects()
+            .bucket(path.bucket.clone())
+            .set_delete(Some(delete))
+            .send()
+            .await?;
         Ok(())
     }
 }

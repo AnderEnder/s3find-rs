@@ -20,7 +20,7 @@ pub struct AWSPair {
     secret: Option<String>,
 }
 
-pub struct FilterList<'a>(pub Vec<&'a Filter>);
+pub struct FilterList<'a>(pub Vec<&'a dyn Filter>);
 
 impl<'a> FilterList<'a> {
     pub async fn test_match(&self, object: aws_sdk_s3::model::Object) -> bool {
