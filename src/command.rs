@@ -73,7 +73,7 @@ pub struct Find {
     pub page_size: i64,
     pub stats: bool,
     pub summarize: bool,
-    pub command: Box<dyn RunCommand2>,
+    pub command: Box<dyn RunCommand>,
 }
 
 impl Find {
@@ -88,7 +88,7 @@ impl Find {
     ) -> Self {
         let client =
             get_s3_client(aws_credentials.access, aws_credentials.secret, aws_region).await;
-        let command = cmd.unwrap_or_default().downcast2();
+        let command = cmd.unwrap_or_default().downcast();
 
         Find {
             client,
