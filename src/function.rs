@@ -32,7 +32,7 @@ impl Cmd {
             Cmd::Copy(l) => Box::new(l),
             Cmd::Move(l) => Box::new(l),
             Cmd::Nothing(l) => Box::new(l),
-            _ => Box::new(FastPrint {}),
+            // _ => Box::new(FastPrint {}),
         }
     }
 }
@@ -60,7 +60,7 @@ impl FastPrint {
             io,
             "s3://{}/{}",
             bucket,
-            object.key.as_ref().unwrap_or(&"".to_string())
+            object.key.clone().unwrap_or_default()
         )
     }
 }

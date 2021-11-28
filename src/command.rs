@@ -1,15 +1,12 @@
+use aws_config::meta::credentials::CredentialsProviderChain;
 use futures::Stream;
 use glob::Pattern;
 use humansize::{file_size_opts as options, FileSize};
 use regex::Regex;
-use rusoto_core::Region;
-use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
-use rusoto_s3::*;
-use rusoto_s3::{ListObjectsV2Request, Object, S3Client, Tag};
 use std::fmt;
 use std::ops::Add;
 
-use aws_sdk_s3::Client;
+use aws_sdk_s3::{Client, Credentials};
 
 use crate::arg::*;
 use crate::filter::Filter;
@@ -171,78 +168,6 @@ pub fn default_stats(summarize: bool) -> Option<FindStat> {
     }
 }
 
-pub struct FindStream {
-    pub client: S3Client,
-    pub path: S3Path,
-    pub token: Option<String>,
-    pub page_size: i64,
-    pub initial: bool,
-}
-
-impl FindStream {
-    async fn list(mut self) -> Option<(Vec<Object>, Self)> {
-        if !self.initial && self.token == None {
-            return None;
-        }
-
-        let request = ListObjectsV2Request {
-            bucket: self.path.bucket.clone(),
-            continuation_token: self.token.clone(),
-            delimiter: None,
-            encoding_type: None,
-            fetch_owner: None,
-            max_keys: Some(self.page_size),
-            prefix: self.path.prefix.clone(),
-            request_payer: None,
-            start_after: None,
-            expected_bucket_owner: None,
-        };
-
-        self.initial = false;
-        self.token = None;
-
-        let (token, objects) = self
-            .client
-            .list_objects_v2(request)
-            .await
-            .map(|x| (x.next_continuation_token, x.contents))
-            .unwrap();
-
-        self.token = token;
-        objects.map(|x| (x, self))
-    }
-
-    pub fn stream(self) -> impl Stream<Item = Vec<Object>> {
-        futures::stream::unfold(self, |s| async { s.list().await })
-    }
-}
-
-impl PartialEq for FindStream {
-    fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
-            && self.token == other.token
-            && self.page_size == other.page_size
-            && self.initial == other.initial
-    }
-}
-
-impl fmt::Debug for FindStream {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "\
-FindStream {{
-    client,
-    path: {:?},
-    token: {:?},
-    page_size: {},
-    initial: {},
-}}",
-            self.path, self.token, self.page_size, self.initial
-        )
-    }
-}
-
 pub struct FindStream2 {
     pub client: Client,
     pub path: S3Path,
@@ -314,19 +239,25 @@ async fn get_s3_client(
     let region = region.to_owned();
     let region_provider =
         aws_config::meta::region::RegionProviderChain::first_try(aws_sdk_s3::Region::new(region))
-            .or_default_provider()
-            .or_else(aws_sdk_s3::Region::new("us-west-2"));
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-    Client::new(&shared_config)
-}
+            .or_default_provider();
 
-impl From<FindTag> for Tag {
-    fn from(tag: FindTag) -> Self {
-        Tag {
-            key: tag.key,
-            value: tag.value,
-        }
-    }
+    let credentials_provider = CredentialsProviderChain::first_try(
+        "".to_owned(),
+        Credentials::from_keys(
+            aws_access_key.unwrap_or_default(),
+            aws_secret_key.unwrap_or_default(),
+            None,
+        ),
+    )
+    .or_default_provider()
+    .await;
+
+    let shared_config = aws_config::from_env()
+        .region(region_provider)
+        .credentials_provider(credentials_provider)
+        .load()
+        .await;
+    Client::new(&shared_config)
 }
 
 impl fmt::Display for FindStat {
@@ -444,30 +375,30 @@ impl Default for FindStat {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*;
 
-    use anyhow::Error;
-    use regex::Regex;
-    use rusoto_mock::*;
-    use std::str::FromStr;
+    // use anyhow::Error;
+    // use regex::Regex;
+    // use rusoto_mock::*;
+    // use std::str::FromStr;
 
-    #[test]
-    fn from_findtag() -> Result<(), Error> {
-        let tag: Tag = FindTag {
-            key: "tag".to_owned(),
-            value: "val".to_owned(),
-        }
-        .into();
+    // #[test]
+    // fn from_findtag() -> Result<(), Error> {
+    //     let tag: Tag = FindTag {
+    //         key: "tag".to_owned(),
+    //         value: "val".to_owned(),
+    //     }
+    //     .into();
 
-        assert_eq!(
-            tag,
-            Tag {
-                key: "tag".to_owned(),
-                value: "val".to_owned(),
-            }
-        );
-        Ok(())
-    }
+    //     assert_eq!(
+    //         tag,
+    //         Tag {
+    //             key: "tag".to_owned(),
+    //             value: "val".to_owned(),
+    //         }
+    //     );
+    //     Ok(())
+    // }
 
     // #[tokio::test]
     // async fn from_findopt_to_findcommand() {
@@ -560,64 +491,63 @@ mod tests {
 
     //     Ok(())
     // }
+    // #[tokio::test]
+    // async fn findstream_list() -> Result<(), Error> {
+    //     let mock = MockRequestDispatcher::with_status(200).with_body(
+    //         r#"
+    //         <?xml version="1.0" encoding="UTF-8"?>
+    //         <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+    //           <Name>test</Name>
+    //           <Prefix></Prefix>
+    //           <Marker></Marker>
+    //           <MaxKeys>1</MaxKeys>
+    //           <IsTruncated>false</IsTruncated>
+    //           <Contents>
+    //             <Key>key1</Key>
+    //             <LastModified>2013-01-10T21:45:09.000Z</LastModified>
+    //             <ETag>&quot;1d921b22129502cbbe5cbaf2c8bac682&quot;</ETag>
+    //             <Size>10000</Size>
+    //             <Owner>
+    //               <ID>1936a5d8a2b189cda450d1d1d514f3861b3adc2df515</ID>
+    //               <DisplayName>aws</DisplayName>
+    //             </Owner>
+    //             <StorageClass>STANDARD</StorageClass>
+    //           </Contents>
+    //           <Contents>
+    //             <Key>key2</Key>
+    //             <LastModified>2013-01-10T22:45:09.000Z</LastModified>
+    //             <ETag>&quot;1d921b22129502cbbe5cbaf2c8bac682&quot;</ETag>
+    //             <Size>1234</Size>
+    //             <Owner>
+    //               <ID>1936a5d8a2b189cda450d1d1d514f3861b3adc2df515</ID>
+    //               <DisplayName>aws</DisplayName>
+    //             </Owner>
+    //             <StorageClass>STANDARD</StorageClass>
+    //           </Contents>
+    //         </ListBucketResult>"#,
+    //     );
+    //     let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+    //     let path = S3Path {
+    //         bucket: "test".to_owned(),
+    //         prefix: None,
+    //     };
 
-    #[tokio::test]
-    async fn findstream_list() -> Result<(), Error> {
-        let mock = MockRequestDispatcher::with_status(200).with_body(
-            r#"
-            <?xml version="1.0" encoding="UTF-8"?>
-            <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-              <Name>test</Name>
-              <Prefix></Prefix>
-              <Marker></Marker>
-              <MaxKeys>1</MaxKeys>
-              <IsTruncated>false</IsTruncated>
-              <Contents>
-                <Key>key1</Key>
-                <LastModified>2013-01-10T21:45:09.000Z</LastModified>
-                <ETag>&quot;1d921b22129502cbbe5cbaf2c8bac682&quot;</ETag>
-                <Size>10000</Size>
-                <Owner>
-                  <ID>1936a5d8a2b189cda450d1d1d514f3861b3adc2df515</ID>
-                  <DisplayName>aws</DisplayName>
-                </Owner>
-                <StorageClass>STANDARD</StorageClass>
-              </Contents>
-              <Contents>
-                <Key>key2</Key>
-                <LastModified>2013-01-10T22:45:09.000Z</LastModified>
-                <ETag>&quot;1d921b22129502cbbe5cbaf2c8bac682&quot;</ETag>
-                <Size>1234</Size>
-                <Owner>
-                  <ID>1936a5d8a2b189cda450d1d1d514f3861b3adc2df515</ID>
-                  <DisplayName>aws</DisplayName>
-                </Owner>
-                <StorageClass>STANDARD</StorageClass>
-              </Contents>
-            </ListBucketResult>"#,
-        );
-        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
-        let path = S3Path {
-            bucket: "test".to_owned(),
-            prefix: None,
-        };
+    //     let command = FindStream {
+    //         client,
+    //         path,
+    //         token: None,
+    //         page_size: 1,
+    //         initial: true,
+    //     };
 
-        let command = FindStream {
-            client,
-            path,
-            token: None,
-            page_size: 1,
-            initial: true,
-        };
+    //     let (objects, command2) = command.list().await.unwrap();
+    //     assert_eq!(command2.token, None);
+    //     assert_eq!(command2.initial, false);
+    //     assert_eq!(objects[0].key, Some("key1".to_owned()));
+    //     assert_eq!(objects[1].key, Some("key2".to_owned()));
 
-        let (objects, command2) = command.list().await.unwrap();
-        assert_eq!(command2.token, None);
-        assert_eq!(command2.initial, false);
-        assert_eq!(objects[0].key, Some("key1".to_owned()));
-        assert_eq!(objects[1].key, Some("key2".to_owned()));
-
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     // #[test]
     // fn test_default_stats() {
@@ -736,25 +666,24 @@ mod tests {
     //         }
     //     );
     // }
+    // #[test]
+    // fn test_stream_debug() {
+    //     let mock = MockRequestDispatcher::with_status(200);
+    //     let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
 
-    #[test]
-    fn test_stream_debug() {
-        let mock = MockRequestDispatcher::with_status(200);
-        let client = S3Client::new_with(mock, MockCredentialsProvider, Region::UsEast1);
+    //     let stream = FindStream {
+    //         client,
+    //         path: "s3://test/path".parse().unwrap(),
+    //         token: None,
+    //         page_size: 1000,
+    //         initial: true,
+    //     };
 
-        let stream = FindStream {
-            client,
-            path: "s3://test/path".parse().unwrap(),
-            token: None,
-            page_size: 1000,
-            initial: true,
-        };
-
-        let stream_str = format!("{:?}", stream);
-        assert!(stream_str.contains("FindStream"));
-        assert!(stream_str.contains("S3Path"));
-        assert!(stream_str.contains("test"));
-        assert!(stream_str.contains("path"));
-        assert!(stream_str.contains("1000"));
-    }
+    //     let stream_str = format!("{:?}", stream);
+    //     assert!(stream_str.contains("FindStream"));
+    //     assert!(stream_str.contains("S3Path"));
+    //     assert!(stream_str.contains("test"));
+    //     assert!(stream_str.contains("path"));
+    //     assert!(stream_str.contains("1000"));
+    // }
 }
