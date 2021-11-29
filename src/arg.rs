@@ -1,11 +1,14 @@
+use aws_types::region::Region;
 use glob::Pattern;
 use regex::Regex;
-use rusoto_core::Region;
 use std::str::FromStr;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 use thiserror::Error;
 
+fn region<'a>(s: &'a str) -> Region {
+    Region::new(s.to_owned())
+}
 /// Walk an Amazon S3 path hierarchy
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
@@ -44,7 +47,7 @@ pub struct FindOpt {
     pub aws_secret_key: Option<String>,
 
     /// The region to use. Default value is us-east-1
-    #[structopt(name = "aws-region", long = "aws-region", default_value = "us-east-1")]
+    #[structopt(name = "aws-region", long = "aws-region", default_value = "us-east-1", parse(from_str = region))]
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
@@ -264,6 +267,7 @@ pub enum FindError {
 pub struct S3Path {
     pub bucket: String,
     pub prefix: Option<String>,
+    pub region: Region,
 }
 
 impl FromStr for S3Path {
@@ -279,7 +283,11 @@ impl FromStr for S3Path {
             .ok_or(FindError::S3Parse)?;
         let prefix = captures.get(3).map(|x| x.as_str().to_owned());
 
-        Ok(S3Path { bucket, prefix })
+        Ok(S3Path {
+            bucket,
+            prefix,
+            region: Region::from_static("us-east-1"),
+        })
     }
 }
 
@@ -427,6 +435,7 @@ mod tests {
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: Some("".to_owned()),
+                region: Region::from_static("us-east-1"),
             })
         );
 
@@ -434,7 +443,8 @@ mod tests {
             "s3://testbucket/path".parse().ok(),
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
-                prefix: Some("path".to_owned())
+                prefix: Some("path".to_owned()),
+                region: Region::from_static("us-east-1"),
             })
         );
 
@@ -442,7 +452,8 @@ mod tests {
             "s3://testbucket/multi/path".parse().ok(),
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
-                prefix: Some("multi/path".to_owned())
+                prefix: Some("multi/path".to_owned()),
+                region: Region::from_static("us-east-1"),
             })
         );
 
@@ -450,7 +461,8 @@ mod tests {
             "s3://testbucket".parse().ok(),
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
-                prefix: None
+                prefix: None,
+                region: Region::from_static("us-east-1"),
             })
         );
     }

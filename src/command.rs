@@ -2,7 +2,7 @@ use std::fmt;
 use std::ops::Add;
 
 use aws_config::meta::credentials::CredentialsProviderChain;
-use aws_sdk_s3::{Client, Credentials};
+use aws_sdk_s3::{Client, Credentials, Region};
 use futures::Stream;
 use glob::Pattern;
 use humansize::{file_size_opts as options, FileSize};
@@ -76,15 +76,19 @@ pub struct Find {
 impl Find {
     pub async fn new(
         aws_credentials: AWSPair,
-        aws_region: &str,
+        aws_region: &Region,
         cmd: Option<Cmd>,
         path: S3Path,
         page_size: i64,
         summarize: bool,
         limit: Option<usize>,
     ) -> Self {
-        let client =
-            get_s3_client(aws_credentials.access, aws_credentials.secret, aws_region).await;
+        let client = get_s3_client(
+            aws_credentials.access,
+            aws_credentials.secret,
+            aws_region.to_owned(),
+        )
+        .await;
         let command = cmd.unwrap_or_default().downcast();
 
         Find {
@@ -140,14 +144,19 @@ impl Find {
             ..
         } = opts;
 
+        let path = S3Path {
+            region: aws_region.to_owned(),
+            ..path.clone()
+        };
+
         let find = Find::new(
             AWSPair {
                 access: aws_access_key.clone(),
                 secret: aws_secret_key.clone(),
             },
-            aws_region.name(),
+            aws_region,
             cmd.clone(),
-            path.clone(),
+            path,
             *page_size,
             *summarize,
             *limit,
@@ -234,16 +243,15 @@ FindStream {{
 async fn get_s3_client(
     aws_access_key: Option<String>,
     aws_secret_key: Option<String>,
-    region: &str,
+    region: Region,
 ) -> Client {
-    let region = region.to_owned();
     let region_provider =
-        aws_config::meta::region::RegionProviderChain::first_try(aws_sdk_s3::Region::new(region))
-            .or_default_provider();
+        aws_config::meta::region::RegionProviderChain::first_try(region).or_default_provider();
 
     let shared_config = match (aws_access_key, aws_secret_key) {
         (Some(aws_access_key), Some(aws_secret_key)) => {
-            let credentials_provider = Credentials::from_keys(aws_access_key, aws_secret_key, None);
+            let credentials_provider =
+                Credentials::new(aws_access_key, aws_secret_key, None, None, "static");
             aws_config::from_env()
                 .region(region_provider)
                 .credentials_provider(credentials_provider)

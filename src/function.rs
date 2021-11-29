@@ -274,7 +274,7 @@ impl RunCommand for SetPublic {
                 .await?;
 
             let key = object.key.clone().unwrap();
-            let url = generate_s3_url("us-east", &path.bucket, &key);
+            let url = generate_s3_url(path.region.as_ref(), &path.bucket, &key);
             println!("{} {}", key, url);
         }
         Ok(())

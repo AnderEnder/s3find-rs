@@ -22,10 +22,7 @@ impl Filter for FindSize {
 
 impl Filter for FindTime {
     fn filter(&self, object: &Object) -> bool {
-        let last_modified_time = object
-            .last_modified
-            .map(|x| x.epoch_seconds())
-            .unwrap_or_default();
+        let last_modified_time = object.last_modified.map(|x| x.secs()).unwrap_or_default();
 
         let now = Utc::now().timestamp();
 

@@ -34,7 +34,6 @@ travis-ci = { repository = "AnderEnder/s3find-rs"}
 codecov = { repository = "AnderEnder/s3find-rs" }
 
 [dependencies]
-rusoto_credential = "0.47"
 structopt = "0.3"
 glob = "0.3"
 regex = "1"
@@ -47,8 +46,9 @@ humansize = "1"
 itertools = "0.10"
 tokio = { version = "1", features=["full"] }
 async-trait = "0.1"
-aws-config = "0.0.24-alpha"
-aws-sdk-s3 = "0.0.24-alpha"
+aws-types = "0.0.26-alpha"
+aws-config = "0.0.26-alpha"
+aws-sdk-s3 = "0.0.26-alpha"
 tracing-subscriber = "*"
 
 [dependencies.clap]
@@ -56,23 +56,8 @@ version = "2"
 default-features = false
 features = [ "suggestions", "color" ]
 
-[dependencies.rusoto_core]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
-
-[dependencies.rusoto_s3]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
-
 [dev-dependencies]
 tempfile = "3"
-
-[dev-dependencies.rusoto_mock]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
 
 [build-dependencies]
 version_check = "0.9"
@@ -82,11 +67,7 @@ glob = "0.3"
 regex = "1"
 anyhow = "1"
 thiserror = "1"
-
-[build-dependencies.rusoto_core]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
+aws-types = "0.0.26-alpha"
 
 [profile.release]
 lto = "fat"
