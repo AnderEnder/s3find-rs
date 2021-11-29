@@ -1,12 +1,12 @@
+use std::fmt;
+use std::ops::Add;
+
 use aws_config::meta::credentials::CredentialsProviderChain;
+use aws_sdk_s3::{Client, Credentials};
 use futures::Stream;
 use glob::Pattern;
 use humansize::{file_size_opts as options, FileSize};
 use regex::Regex;
-use std::fmt;
-use std::ops::Add;
-
-use aws_sdk_s3::{Client, Credentials};
 
 use crate::arg::*;
 use crate::filter::Filter;
@@ -112,8 +112,8 @@ impl Find {
         status
     }
 
-    pub fn to_stream(&self) -> FindStream2 {
-        FindStream2 {
+    pub fn to_stream(&self) -> FindStream {
+        FindStream {
             client: self.client.clone(),
             path: self.path.clone(),
             token: None,
@@ -168,7 +168,7 @@ pub fn default_stats(summarize: bool) -> Option<FindStat> {
     }
 }
 
-pub struct FindStream2 {
+pub struct FindStream {
     pub client: Client,
     pub path: S3Path,
     pub token: Option<String>,
@@ -176,7 +176,7 @@ pub struct FindStream2 {
     pub initial: bool,
 }
 
-impl FindStream2 {
+impl FindStream {
     async fn list(mut self) -> Option<(Vec<aws_sdk_s3::model::Object>, Self)> {
         if !self.initial && self.token == None {
             return None;
@@ -204,7 +204,7 @@ impl FindStream2 {
     }
 }
 
-impl PartialEq for FindStream2 {
+impl PartialEq for FindStream {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
             && self.token == other.token
@@ -213,7 +213,7 @@ impl PartialEq for FindStream2 {
     }
 }
 
-impl fmt::Debug for FindStream2 {
+impl fmt::Debug for FindStream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -241,22 +241,25 @@ async fn get_s3_client(
         aws_config::meta::region::RegionProviderChain::first_try(aws_sdk_s3::Region::new(region))
             .or_default_provider();
 
-    let credentials_provider = CredentialsProviderChain::first_try(
-        "".to_owned(),
-        Credentials::from_keys(
-            aws_access_key.unwrap_or_default(),
-            aws_secret_key.unwrap_or_default(),
-            None,
-        ),
-    )
-    .or_default_provider()
-    .await;
+    let shared_config = match (aws_access_key, aws_secret_key) {
+        (Some(aws_access_key), Some(aws_secret_key)) => {
+            let credentials_provider = Credentials::from_keys(aws_access_key, aws_secret_key, None);
+            aws_config::from_env()
+                .region(region_provider)
+                .credentials_provider(credentials_provider)
+                .load()
+                .await
+        }
+        _ => {
+            let credentials_provider = CredentialsProviderChain::default_provider().await;
+            aws_config::from_env()
+                .region(region_provider)
+                .credentials_provider(credentials_provider)
+                .load()
+                .await
+        }
+    };
 
-    let shared_config = aws_config::from_env()
-        .region(region_provider)
-        .credentials_provider(credentials_provider)
-        .load()
-        .await;
     Client::new(&shared_config)
 }
 
