@@ -7,6 +7,7 @@ use std::process::ExitStatus;
 
 use anyhow::Error;
 use async_trait::async_trait;
+use aws_smithy_types::date_time::Format;
 use futures::future;
 use futures::stream::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -90,7 +91,7 @@ impl AdvancedPrint {
             object.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
             object.owner.as_ref().map(|x| x.display_name.as_ref()),
             object.size,
-            object.last_modified,
+            object.last_modified.unwrap().fmt(Format::DateTime),
             bucket,
             object.key.as_ref().unwrap_or(&"".to_string()),
             object.storage_class,
@@ -412,60 +413,67 @@ impl RunCommand for DoNothing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // use rusoto_core::Region;
-    // use rusoto_mock::*;
+    use aws_sdk_s3::{model::ObjectStorageClass, DateTime};
+    use aws_smithy_types::date_time::Format;
+    use aws_types::region::Region;
+
     // use std::fs::File;
     // use std::io::prelude::*;
     // use tempfile::Builder;
 
-    // #[test]
-    // fn test_advanced_print_object() -> Result<(), Error> {
-    //     let mut buf = Vec::new();
-    //     let cmd = AdvancedPrint {};
-    //     let bucket = "test";
+    #[test]
+    fn test_advanced_print_object() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = AdvancedPrint {};
+        let bucket = "test";
 
-    //     let object = Object {
-    //         e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-    //         key: Some("somepath/otherpath".to_string()),
-    //         last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-    //         owner: None,
-    //         size: Some(4_997_288),
-    //         storage_class: Some("STANDARD".to_string()),
-    //     };
+        let object = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
 
-    //     cmd.print_object(&mut buf, bucket, &object)?;
-    //     let out = std::str::from_utf8(&buf)?;
+        cmd.print_object(&mut buf, bucket, &object)?;
+        let out = std::str::from_utf8(&buf)?;
 
-    //     assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
-    //     assert!(out.contains("None"));
-    //     assert!(out.contains("4997288"));
-    //     assert!(out.contains("2017-07-19T19:04:17.000Z"));
-    //     assert!(out.contains("s3://test/somepath/otherpath"));
-    //     assert!(out.contains("STANDARD"));
-    //     Ok(())
-    // }
+        println!("{}", out);
+        assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
+        assert!(out.contains("None"));
+        assert!(out.contains("4997288"));
+        assert!(out.contains("2017-07-19T19:04:17Z"));
+        assert!(out.contains("s3://test/somepath/otherpath"));
+        assert!(out.contains("Standard"));
+        Ok(())
+    }
 
-    // #[test]
-    // fn test_fast_print_object() -> Result<(), Error> {
-    //     let mut buf = Vec::new();
-    //     let cmd = FastPrint {};
-    //     let bucket = "test";
+    #[test]
+    fn test_fast_print_object() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = FastPrint {};
+        let bucket = "test";
 
-    //     let object = Object {
-    //         e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-    //         key: Some("somepath/otherpath".to_string()),
-    //         last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-    //         owner: None,
-    //         size: Some(4_997_288),
-    //         storage_class: Some("STANDARD".to_string()),
-    //     };
+        let object = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
 
-    //     cmd.print_object(&mut buf, bucket, &object)?;
-    //     let out = std::str::from_utf8(&buf)?;
+        cmd.print_object(&mut buf, bucket, &object)?;
+        let out = std::str::from_utf8(&buf)?;
 
-    //     assert!(out.contains("s3://test/somepath/otherpath"));
-    //     Ok(())
-    // }
+        assert!(out.contains("s3://test/somepath/otherpath"));
+        Ok(())
+    }
 
     #[test]
     fn test_exec() -> Result<(), Error> {
@@ -483,97 +491,115 @@ mod tests {
         Ok(())
     }
 
-    // #[tokio::test]
-    // async fn test_advanced_print() -> Result<(), Error> {
-    //     let object = Object {
-    //         e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-    //         key: Some("somepath/otherpath".to_string()),
-    //         last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-    //         owner: None,
-    //         size: Some(4_997_288),
-    //         storage_class: Some("STANDARD".to_string()),
-    //     };
+    #[tokio::test]
+    async fn test_advanced_print() -> Result<(), Error> {
+        let object = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
 
-    //     let cmd = Cmd::Print(AdvancedPrint {}).downcast();
-    //     let region = "us-east-1";
-    //     let client = S3Client::new(Region::UsEast1);
-    //     let path = S3Path {
-    //         bucket: "test".to_owned(),
-    //         prefix: None,
-    //     };
+        let cmd = Cmd::Print(AdvancedPrint {}).downcast();
+        let config = aws_config::from_env().load().await;
+        let client = Client::new(&config);
 
-    //     cmd.execute(&client, region, &path, &[object]).await?;
-    //     Ok(())
-    // }
-    // #[tokio::test]
-    // async fn test_fastprint() -> Result<(), Error> {
-    //     let object = Object {
-    //         e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-    //         key: Some("somepath/otherpath".to_string()),
-    //         last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-    //         owner: None,
-    //         size: Some(4_997_288),
-    //         storage_class: Some("STANDARD".to_string()),
-    //     };
+        let path = S3Path {
+            bucket: "test".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
 
-    //     let cmd = Cmd::Ls(FastPrint {}).downcast();
-    //     let region = "us-east-1";
-    //     let client = S3Client::new(Region::UsEast1);
-    //     let path = S3Path {
-    //         bucket: "test".to_owned(),
-    //         prefix: None,
-    //     };
+        cmd.execute(&client, &path, &[object]).await?;
+        Ok(())
+    }
 
-    //     cmd.execute(&client, region, &path, &[object]).await?;
-    //     Ok(())
-    // }
+    #[tokio::test]
+    async fn test_fastprint() -> Result<(), Error> {
+        let object = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
 
-    // #[tokio::test]
-    // async fn smoke_donothing() -> Result<(), Error> {
-    //     let object = Object {
-    //         e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-    //         key: Some("somepath/otherpath".to_string()),
-    //         last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-    //         owner: None,
-    //         size: Some(4_997_288),
-    //         storage_class: Some("STANDARD".to_string()),
-    //     };
+        let cmd = Cmd::Ls(FastPrint {}).downcast();
+        let config = aws_config::from_env().load().await;
+        let client = Client::new(&config);
 
-    //     let cmd = Cmd::Nothing(DoNothing {}).downcast();
-    //     let region = "us-east-1";
-    //     let client = S3Client::new(Region::UsEast1);
-    //     let path = S3Path {
-    //         bucket: "test".to_owned(),
-    //         prefix: None,
-    //     };
+        let path = S3Path {
+            bucket: "test".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
 
-    //     cmd.execute(&client, region, &path, &[object]).await
-    // }
+        cmd.execute(&client, &path, &[object]).await?;
+        Ok(())
+    }
 
-    //     #[tokio::test]
-    //     async fn smoke_exec() -> Result<(), Error> {
-    //         let object = Object {
-    //             e_tag: Some("9d48114aa7c18f9d68aa20086dbb7756".to_string()),
-    //             key: Some("somepath/otherpath".to_string()),
-    //             last_modified: Some("2017-07-19T19:04:17.000Z".to_string()),
-    //             owner: None,
-    //             size: Some(4_997_288),
-    //             storage_class: Some("STANDARD".to_string()),
-    //         };
+    #[tokio::test]
+    async fn smoke_donothing() -> Result<(), Error> {
+        let object = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
 
-    //         let cmd = Cmd::Exec(Exec {
-    //             utility: "echo {}".to_owned(),
-    //         })
-    //         .downcast();
-    //         let region = "us-east-1";
-    //         let client = S3Client::new(Region::UsEast1);
-    //         let path = S3Path {
-    //             bucket: "test".to_owned(),
-    //             prefix: None,
-    //         };
+        let cmd = Cmd::Nothing(DoNothing {}).downcast();
+        let config = aws_config::from_env().load().await;
+        let client = Client::new(&config);
 
-    //         cmd.execute(&client, region, &path, &[object]).await
-    //     }
+        let path = S3Path {
+            bucket: "test".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object]).await
+    }
+
+    #[tokio::test]
+    async fn smoke_exec() -> Result<(), Error> {
+        let object = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
+
+        let cmd = Cmd::Exec(Exec {
+            utility: "echo {}".to_owned(),
+        })
+        .downcast();
+
+        let config = aws_config::from_env().load().await;
+        let client = Client::new(&config);
+
+        let path = S3Path {
+            bucket: "test".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object]).await
+    }
 
     //     #[tokio::test]
     //     async fn smoke_s3_delete() -> Result<(), Error> {
@@ -844,7 +870,6 @@ mod tests {
     //         assert!(res.is_ok());
     //         Ok(())
     //     }
-
     #[test]
     fn test_generate_s3_url() {
         assert_eq!(
