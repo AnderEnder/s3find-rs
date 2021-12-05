@@ -31,11 +31,11 @@ impl<'a> FilterList<'a> {
     }
 
     pub fn new(
-        name: &'a Vec<Pattern>,
-        iname: &'a Vec<InameGlob>,
-        regex: &'a Vec<Regex>,
-        size: &'a Vec<FindSize>,
-        mtime: &'a Vec<FindTime>,
+        name: &'a [Pattern],
+        iname: &'a [InameGlob],
+        regex: &'a [Regex],
+        size: &'a [FindSize],
+        mtime: &'a [FindTime],
     ) -> FilterList<'a> {
         let mut list: Vec<&dyn Filter> = Vec::new();
 
@@ -126,7 +126,7 @@ impl Find {
         }
     }
 
-    pub async fn from_opts<'a>(opts: &'a FindOpt) -> (Find, FilterList<'a>) {
+    pub async fn from_opts(opts: &FindOpt) -> (Find, FilterList<'_>) {
         let FindOpt {
             aws_access_key,
             aws_secret_key,
@@ -195,7 +195,7 @@ impl FindStream {
             .client
             .list_objects_v2()
             .bucket(self.path.bucket.clone())
-            .prefix(self.path.prefix.clone().unwrap_or("".to_owned()))
+            .prefix(self.path.prefix.clone().unwrap_or_else(|| "".to_owned()))
             .max_keys(self.page_size as i32)
             .set_continuation_token(self.token)
             .send()

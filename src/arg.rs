@@ -6,7 +6,7 @@ use structopt::clap::AppSettings;
 use structopt::StructOpt;
 use thiserror::Error;
 
-fn region<'a>(s: &'a str) -> Region {
+fn region(s: &str) -> Region {
     Region::new(s.to_owned())
 }
 /// Walk an Amazon S3 path hierarchy

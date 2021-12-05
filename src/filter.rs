@@ -63,91 +63,76 @@ impl Filter for Regex {
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
-    // use chrono::Duration;
-    // use std::str::FromStr;
+    use super::*;
+    use std::{str::FromStr, time::Duration};
 
-    // #[test]
-    // fn findsize_filter() {
-    //     let object = Object {
-    //         size: Some(10),
-    //         ..Default::default()
-    //     };
+    #[test]
+    fn findsize_filter() {
+        let object = Object::builder().size(10).build();
 
-    //     assert!(FindSize::Bigger(5).filter(&object));
-    //     assert!(FindSize::Lower(11).filter(&object));
-    //     assert!(FindSize::Equal(10).filter(&object));
+        assert!(FindSize::Bigger(5).filter(&object));
+        assert!(FindSize::Lower(11).filter(&object));
+        assert!(FindSize::Equal(10).filter(&object));
 
-    //     assert!(!FindSize::Bigger(11).filter(&object));
-    //     assert!(!FindSize::Lower(5).filter(&object));
-    //     assert!(!FindSize::Equal(11).filter(&object));
-    // }
+        assert!(!FindSize::Bigger(11).filter(&object));
+        assert!(!FindSize::Lower(5).filter(&object));
+        assert!(!FindSize::Equal(11).filter(&object));
+    }
 
-    // #[test]
-    // fn findtime_filter() {
-    //     let current = Utc::now().checked_sub_signed(Duration::hours(1)).unwrap();
-    //     let time = format!("{:?}", current);
-    //     let object = Object {
-    //         last_modified: Some(time),
-    //         ..Default::default()
-    //     };
+    #[test]
+    fn findtime_filter() {
+        let current = std::time::SystemTime::now()
+            .checked_sub(Duration::from_secs(60))
+            .unwrap();
+        let object = Object::builder().last_modified(current.into()).build();
 
-    //     assert!(FindTime::Lower(10).filter(&object));
-    //     assert!(FindTime::Upper(4000).filter(&object));
+        assert!(FindTime::Lower(10).filter(&object));
+        assert!(FindTime::Upper(4000).filter(&object));
 
-    //     assert!(!FindTime::Lower(4000).filter(&object));
-    //     assert!(!FindTime::Upper(10).filter(&object));
-    // }
+        assert!(!FindTime::Lower(4000).filter(&object));
+        assert!(!FindTime::Upper(10).filter(&object));
+    }
 
-    // #[test]
-    // fn nameglob_filter() {
-    //     let object = Object {
-    //         key: Some("some_key".to_owned()),
-    //         ..Default::default()
-    //     };
+    #[test]
+    fn nameglob_filter() {
+        let object = Object::builder().key("some_key").build();
 
-    //     assert!(NameGlob::from_str("*ome*").unwrap().filter(&object));
-    //     assert!(NameGlob::from_str("some_key").unwrap().filter(&object));
+        assert!(NameGlob::from_str("*ome*").unwrap().filter(&object));
+        assert!(NameGlob::from_str("some_key").unwrap().filter(&object));
 
-    //     assert!(!NameGlob::from_str("ome*").unwrap().filter(&object));
-    //     assert!(!NameGlob::from_str("other").unwrap().filter(&object));
-    //     assert!(!NameGlob::from_str("*Ome*").unwrap().filter(&object));
-    //     assert!(!NameGlob::from_str("some_Key").unwrap().filter(&object));
-    // }
+        assert!(!NameGlob::from_str("ome*").unwrap().filter(&object));
+        assert!(!NameGlob::from_str("other").unwrap().filter(&object));
+        assert!(!NameGlob::from_str("*Ome*").unwrap().filter(&object));
+        assert!(!NameGlob::from_str("some_Key").unwrap().filter(&object));
+    }
 
-    // #[test]
-    // fn inameglob_filter() {
-    //     let object = Object {
-    //         key: Some("some_key".to_owned()),
-    //         ..Default::default()
-    //     };
+    #[test]
+    fn inameglob_filter() {
+        let object = Object::builder().key("some_key").build();
 
-    //     assert!(InameGlob::from_str("*ome*").unwrap().filter(&object));
-    //     assert!(InameGlob::from_str("some_key").unwrap().filter(&object));
-    //     assert!(InameGlob::from_str("*Ome*").unwrap().filter(&object));
-    //     assert!(InameGlob::from_str("some_Key").unwrap().filter(&object));
+        assert!(InameGlob::from_str("*ome*").unwrap().filter(&object));
+        assert!(InameGlob::from_str("some_key").unwrap().filter(&object));
+        assert!(InameGlob::from_str("*Ome*").unwrap().filter(&object));
+        assert!(InameGlob::from_str("some_Key").unwrap().filter(&object));
 
-    //     assert!(!InameGlob::from_str("ome*").unwrap().filter(&object));
-    //     assert!(!InameGlob::from_str("other").unwrap().filter(&object));
-    // }
+        assert!(!InameGlob::from_str("ome*").unwrap().filter(&object));
+        assert!(!InameGlob::from_str("other").unwrap().filter(&object));
+    }
 
-    // #[test]
-    // fn regex_filter() {
-    //     let object = Object {
-    //         key: Some("some_key".to_owned()),
-    //         ..Default::default()
-    //     };
+    #[test]
+    fn regex_filter() {
+        let object = Object::builder().key("some_key").build();
 
-    //     assert!(Regex::from_str("^some_key").unwrap().filter(&object));
-    //     assert!(Regex::from_str("some_key$").unwrap().filter(&object));
-    //     assert!(Regex::from_str("key").unwrap().filter(&object));
-    //     assert!(Regex::from_str("key$").unwrap().filter(&object));
+        assert!(Regex::from_str("^some_key").unwrap().filter(&object));
+        assert!(Regex::from_str("some_key$").unwrap().filter(&object));
+        assert!(Regex::from_str("key").unwrap().filter(&object));
+        assert!(Regex::from_str("key$").unwrap().filter(&object));
 
-    //     assert!(!Regex::from_str("^Some").unwrap().filter(&object));
-    //     assert!(!Regex::from_str("^key").unwrap().filter(&object));
-    //     assert!(!Regex::from_str("some&").unwrap().filter(&object));
-    //     assert!(!Regex::from_str("other").unwrap().filter(&object));
-    //     assert!(!Regex::from_str("Ome").unwrap().filter(&object));
-    //     assert!(!Regex::from_str("some_Key").unwrap().filter(&object));
-    // }
+        assert!(!Regex::from_str("^Some").unwrap().filter(&object));
+        assert!(!Regex::from_str("^key").unwrap().filter(&object));
+        assert!(!Regex::from_str("some&").unwrap().filter(&object));
+        assert!(!Regex::from_str("other").unwrap().filter(&object));
+        assert!(!Regex::from_str("Ome").unwrap().filter(&object));
+        assert!(!Regex::from_str("some_Key").unwrap().filter(&object));
+    }
 }
