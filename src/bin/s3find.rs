@@ -7,7 +7,8 @@ use s3find::run::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let (find, filters): (Find, FilterList) = FindOpt::from_args().into();
+    let args = FindOpt::from_args();
+    let (find, filters) = Find::from_opts(&args).await;
 
     let stats = list_filter_execute(
         find.to_stream().stream(),
