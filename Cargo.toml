@@ -67,7 +67,7 @@ features = [ "rustls" ]
 tempfile = "3"
 
 [dev-dependencies.rusoto_mock]
-version = "0.47"
+version = "0.48"
 default-features = false
 features = [ "rustls" ]
 
