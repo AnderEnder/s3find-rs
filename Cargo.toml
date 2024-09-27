@@ -53,7 +53,7 @@ tracing-subscriber = "*"
 aws-smithy-types = "0.34"
 
 [dependencies.clap]
-version = "2"
+version = "4"
 default-features = false
 features = [ "suggestions", "color" ]
 
@@ -63,7 +63,7 @@ tempfile = "3"
 [build-dependencies]
 version_check = "0.9"
 structopt = "0.3"
-clap = "2"
+clap = "4"
 glob = "0.3"
 regex = "1"
 anyhow = "1"
