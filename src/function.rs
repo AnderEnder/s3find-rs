@@ -8,11 +8,9 @@ use std::process::ExitStatus;
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_smithy_types::date_time::Format;
-use futures::future;
-use futures::stream::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use aws_sdk_s3::model::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
+use aws_sdk_s3::types::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
 use aws_sdk_s3::Client;
 
 use crate::arg::*;
@@ -90,7 +88,7 @@ impl AdvancedPrint {
             "{0} {1:?} {2} {3:?} s3://{4}/{5} {6:?}",
             object.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
             object.owner.as_ref().map(|x| x.display_name.as_ref()),
-            object.size,
+            object.size.unwrap_or_default(),
             object.last_modified.unwrap().fmt(Format::DateTime),
             bucket,
             object.key.as_ref().unwrap_or(&"".to_string()),
@@ -155,10 +153,15 @@ impl RunCommand for MultipleDelete {
     async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         let key_list: Vec<_> = list
             .iter()
-            .map(|x| ObjectIdentifier::builder().set_key(x.key.clone()).build())
+            .filter_map(|x| {
+                ObjectIdentifier::builder()
+                    .set_key(x.key.clone())
+                    .build()
+                    .ok()
+            })
             .collect();
 
-        let objects = Delete::builder().set_objects(Some(key_list)).build();
+        let objects = Delete::builder().set_objects(Some(key_list)).build()?;
 
         client
             .delete_objects()
@@ -194,21 +197,22 @@ impl RunCommand for SetTags {
             let tags = self
                 .tags
                 .iter()
-                .map(|x| {
+                .filter_map(|x| {
                     Tag::builder()
                         .key(x.key.clone())
                         .value(x.value.clone())
                         .build()
+                        .ok()
                 })
                 .collect();
 
-            let tagging = Tagging::builder().set_tag_set(Some(tags)).build();
+            let tagging = Tagging::builder().set_tag_set(Some(tags)).build().ok();
 
             client
                 .put_object_tagging()
                 .bucket(path.bucket.to_owned())
                 .set_key(object.key.clone())
-                .set_tagging(Some(tagging))
+                .set_tagging(tagging)
                 .send()
                 .await?;
 
@@ -235,13 +239,10 @@ impl RunCommand for ListTags {
 
             let tags: String = tag_output
                 .tag_set
-                .map(|tags| {
-                    tags.into_iter()
-                        .map(|x| format!("{}:{}", x.key.unwrap(), x.value.unwrap()))
-                        .collect::<Vec<String>>()
-                        .join(",")
-                })
-                .unwrap_or_default();
+                .into_iter()
+                .map(|x| format!("{}:{}", x.key, x.value))
+                .collect::<Vec<String>>()
+                .join(",");
 
             println!(
                 "s3://{}/{} {}",
@@ -288,7 +289,7 @@ impl RunCommand for Download {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
-            let size = object.size as u64;
+            let size = object.size.unwrap_or_default() as u64;
             let file_path = Path::new(&self.destination).join(key);
             let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
 
@@ -313,7 +314,7 @@ impl RunCommand for Download {
                 return Ok(());
             }
 
-            let stream = client
+            let mut stream = client
                 .get_object()
                 .bucket(&path.bucket)
                 .key(key)
@@ -324,15 +325,11 @@ impl RunCommand for Download {
             fs::create_dir_all(&dir_path)?;
             let mut output = File::create(&file_path)?;
 
-            stream
-                .for_each(|buf| {
-                    let b = buf.unwrap();
-                    output.write_all(&b).unwrap();
-                    count += b.len() as u64;
-                    pb.set_position(count);
-                    future::ready(())
-                })
-                .await;
+            while let Some(bytes) = stream.try_next().await? {
+                output.write_all(&bytes).unwrap();
+                count += bytes.len() as u64;
+                pb.set_position(count);
+            }
         }
         Ok(())
     }
@@ -389,15 +386,20 @@ impl RunCommand for S3Move {
 
         let key_list: Vec<_> = list
             .iter()
-            .map(|x| ObjectIdentifier::builder().set_key(x.key.clone()).build())
+            .filter_map(|x| {
+                ObjectIdentifier::builder()
+                    .set_key(x.key.clone())
+                    .build()
+                    .ok()
+            })
             .collect();
 
-        let delete = Delete::builder().set_objects(Some(key_list)).build();
+        let delete = Delete::builder().set_objects(Some(key_list)).build().ok();
 
         client
             .delete_objects()
             .bucket(path.bucket.clone())
-            .set_delete(Some(delete))
+            .set_delete(delete)
             .send()
             .await?;
         Ok(())
@@ -414,7 +416,8 @@ impl RunCommand for DoNothing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_sdk_s3::{model::ObjectStorageClass, DateTime};
+    use aws_config::BehaviorVersion;
+    use aws_sdk_s3::{primitives::DateTime, types::ObjectStorageClass};
     use aws_smithy_types::date_time::Format;
     use aws_types::region::Region;
 
@@ -506,7 +509,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Print(AdvancedPrint {}).downcast();
-        let config = aws_config::from_env().load().await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -533,7 +536,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Ls(FastPrint {}).downcast();
-        let config = aws_config::from_env().load().await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -560,7 +563,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Nothing(DoNothing {}).downcast();
-        let config = aws_config::from_env().load().await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -590,7 +593,7 @@ mod tests {
         })
         .downcast();
 
-        let config = aws_config::from_env().load().await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
         let client = Client::new(&config);
 
         let path = S3Path {

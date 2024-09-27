@@ -2,7 +2,9 @@ use std::fmt;
 use std::ops::Add;
 
 use aws_config::meta::credentials::CredentialsProviderChain;
-use aws_sdk_s3::{Client, Credentials, Region};
+use aws_config::BehaviorVersion;
+use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::Client;
 use futures::Stream;
 use glob::Pattern;
 use humansize::*;
@@ -20,7 +22,7 @@ pub struct AWSPair {
 pub struct FilterList<'a>(pub Vec<&'a dyn Filter>);
 
 impl<'a> FilterList<'a> {
-    pub async fn test_match(&self, object: aws_sdk_s3::model::Object) -> bool {
+    pub async fn test_match(&self, object: aws_sdk_s3::types::Object) -> bool {
         for item in &self.0 {
             if !item.filter(&object) {
                 return false;
@@ -105,7 +107,7 @@ impl Find {
     pub async fn exec(
         &self,
         acc: Option<FindStat>,
-        list: Vec<aws_sdk_s3::model::Object>,
+        list: Vec<aws_sdk_s3::types::Object>,
     ) -> Option<FindStat> {
         let status = acc.map(|stat| stat + &list);
 
@@ -186,7 +188,7 @@ pub struct FindStream {
 }
 
 impl FindStream {
-    async fn list(mut self) -> Option<(Vec<aws_sdk_s3::model::Object>, Self)> {
+    async fn list(mut self) -> Option<(Vec<aws_sdk_s3::types::Object>, Self)> {
         if !self.initial && self.token == None {
             return None;
         }
@@ -208,7 +210,7 @@ impl FindStream {
         objects.map(|x| (x, self))
     }
 
-    pub fn stream(self) -> impl Stream<Item = Vec<aws_sdk_s3::model::Object>> {
+    pub fn stream(self) -> impl Stream<Item = Vec<aws_sdk_s3::types::Object>> {
         futures::stream::unfold(self, |s| async { s.list().await })
     }
 }
@@ -252,7 +254,8 @@ async fn get_s3_client(
         (Some(aws_access_key), Some(aws_secret_key)) => {
             let credentials_provider =
                 Credentials::new(aws_access_key, aws_secret_key, None, None, "static");
-            aws_config::from_env()
+            aws_config::ConfigLoader::default()
+                .behavior_version(BehaviorVersion::v2024_03_28())
                 .region(region_provider)
                 .credentials_provider(credentials_provider)
                 .load()
@@ -260,7 +263,8 @@ async fn get_s3_client(
         }
         _ => {
             let credentials_provider = CredentialsProviderChain::default_provider().await;
-            aws_config::from_env()
+            aws_config::ConfigLoader::default()
+                .behavior_version(BehaviorVersion::v2024_03_28())
                 .region(region_provider)
                 .credentials_provider(credentials_provider)
                 .load()
@@ -287,17 +291,10 @@ impl fmt::Display for FindStat {
             f,
             "{:19} {}",
             "Largest file size:",
-            file_size(self
-                .max_size
-                .unwrap_or_default() as u64),
+            file_size(self.max_size.unwrap_or_default() as u64),
         )?;
         writeln!(f, "{:19} {}", "Smallest file:", &self.min_key)?;
-        writeln!(
-            f,
-            "{:19} {}",
-            "Smallest file size:",
-            self.min_key,
-        )?;
+        writeln!(f, "{:19} {}", "Smallest file size:", self.min_key,)?;
         writeln!(
             f,
             "{:19} {}",
@@ -319,23 +316,23 @@ pub struct FindStat {
     pub average_size: i64,
 }
 
-impl Add<&[aws_sdk_s3::model::Object]> for FindStat {
+impl Add<&[aws_sdk_s3::types::Object]> for FindStat {
     type Output = FindStat;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add(mut self: FindStat, list: &[aws_sdk_s3::model::Object]) -> Self {
+    fn add(mut self: FindStat, list: &[aws_sdk_s3::types::Object]) -> Self {
         for x in list {
             self.total_files += 1;
             let size = x.size;
-            self.total_space += size;
+            self.total_space += size.unwrap_or_default();
 
             match self.max_size {
                 None => {
-                    self.max_size = Some(size);
+                    self.max_size = size;
                     self.max_key = x.key.clone().unwrap_or_default();
                 }
-                Some(max_size) if max_size <= size => {
-                    self.max_size = Some(size);
+                Some(max_size) if max_size <= size.unwrap_or_default() => {
+                    self.max_size = size;
                     self.max_key = x.key.clone().unwrap_or_default();
                 }
                 _ => {}
@@ -343,11 +340,11 @@ impl Add<&[aws_sdk_s3::model::Object]> for FindStat {
 
             match self.min_size {
                 None => {
-                    self.min_size = Some(size);
+                    self.min_size = size;
                     self.min_key = x.key.clone().unwrap_or_default();
                 }
-                Some(min_size) if min_size > size => {
-                    self.min_size = Some(size);
+                Some(min_size) if min_size > size.unwrap_or_default() => {
+                    self.min_size = size;
                     self.min_key = x.key.clone().unwrap_or_default();
                 }
                 _ => {}

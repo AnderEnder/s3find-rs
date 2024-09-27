@@ -1,4 +1,4 @@
-use aws_sdk_s3::model::Object;
+use aws_sdk_s3::types::Object;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 use futures::Future;

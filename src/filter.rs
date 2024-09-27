@@ -1,4 +1,4 @@
-use aws_sdk_s3::model::Object;
+use aws_sdk_s3::types::Object;
 use chrono::prelude::*;
 use glob::MatchOptions;
 use regex::Regex;
@@ -11,7 +11,7 @@ pub trait Filter {
 
 impl Filter for FindSize {
     fn filter(&self, object: &Object) -> bool {
-        let object_size = object.size;
+        let object_size = object.size.unwrap_or_default();
         match *self {
             FindSize::Bigger(size) => object_size >= size,
             FindSize::Lower(size) => object_size <= size,
