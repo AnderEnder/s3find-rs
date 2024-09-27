@@ -296,6 +296,7 @@ impl RunCommand for Download {
             let pb = ProgressBar::new(size);
             pb.set_style(ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .unwrap()
             .progress_chars("#>-"));
 
             println!(
