@@ -43,7 +43,7 @@ chrono = "0.4"
 futures = "0.3"
 indicatif = "0.16"
 humansize = "2"
-itertools = "0.10"
+itertools = "0.13"
 tokio = { version = "1", features=["full"] }
 async-trait = "0.1"
 aws-types = "0.4"
