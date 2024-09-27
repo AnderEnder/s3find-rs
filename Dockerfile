@@ -1,4 +1,4 @@
-FROM anderender/muslrust as cargo-build
+FROM clux/muslrust:stable as cargo-build
 WORKDIR /usr/src
 COPY . /usr/src
 RUN cargo build --release
