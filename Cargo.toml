@@ -42,7 +42,7 @@ thiserror = "1"
 chrono = "0.4"
 futures = "0.3"
 indicatif = "0.16"
-humansize = "1"
+humansize = "2"
 itertools = "0.10"
 tokio = { version = "1", features=["full"] }
 async-trait = "0.1"
