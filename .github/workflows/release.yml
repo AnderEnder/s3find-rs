@@ -25,7 +25,7 @@ jobs:
         run: |
           docker run --rm -t \
             -v "$(pwd)":/volume \
-            anderender/muslrust cargo build --release
+            clux/muslrust:stable cargo build --release
       - name: archive
         run: |
           sudo strip target/x86_64-unknown-linux-musl/release/s3find
@@ -49,11 +49,11 @@ jobs:
       - name: build release
         run: cargo build --release --verbose
       - name: archive
-        run: tar -C target/release -czf $(pwd)/s3find-x86_64-osx.tar.gz s3find
+        run: tar -C target/release -czf $(pwd)/s3find-aarch64-osx.tar.gz s3find
       - name: publish release
         uses: softprops/action-gh-release@v1
         with:
-          files: s3find-x86_64-osx.tar.gz
+          files: s3find-aarch64-osx.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
