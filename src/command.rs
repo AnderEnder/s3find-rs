@@ -189,7 +189,7 @@ pub struct FindStream {
 
 impl FindStream {
     async fn list(mut self) -> Option<(Vec<aws_sdk_s3::types::Object>, Self)> {
-        if !self.initial && self.token == None {
+        if !self.initial && self.token.is_none() {
             return None;
         }
 

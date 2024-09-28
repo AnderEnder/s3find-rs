@@ -322,7 +322,7 @@ impl RunCommand for Download {
                 .await?
                 .body;
 
-            fs::create_dir_all(&dir_path)?;
+            fs::create_dir_all(dir_path)?;
             let mut output = File::create(&file_path)?;
 
             while let Some(bytes) = stream.try_next().await? {
