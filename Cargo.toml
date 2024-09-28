@@ -1,7 +1,7 @@
 [package]
 name = "s3find"
 authors = ["Andrii Radyk <ander.ender@gmail.com>"]
-version = "0.7.2"
+version = "0.8.0"
 description = """
 A command line utility to walk an Amazon S3 hierarchy.
 s3find is an analog of find for Amazon S3.
@@ -34,7 +34,6 @@ travis-ci = { repository = "AnderEnder/s3find-rs"}
 codecov = { repository = "AnderEnder/s3find-rs" }
 
 [dependencies]
-rusoto_credential = "0.47"
 structopt = "0.3"
 glob = "0.3"
 regex = "1"
@@ -42,48 +41,34 @@ anyhow = "1"
 thiserror = "1"
 chrono = "0.4"
 futures = "0.3"
-indicatif = "0.16"
-humansize = "1"
-itertools = "0.10"
-tokio = { version = "1", features=["macros", "rt-multi-thread"] }
+indicatif = "0.17"
+humansize = "2"
+itertools = "0.13"
+tokio = { version = "1", features=["full"] }
 async-trait = "0.1"
+aws-types = "1.3"
+aws-config = "1.5.7"
+aws-sdk-s3 = "1"
+tracing-subscriber = "*"
+aws-smithy-types = "1.2"
 
 [dependencies.clap]
-version = "2"
+version = "4"
 default-features = false
 features = [ "suggestions", "color" ]
-
-[dependencies.rusoto_core]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
-
-[dependencies.rusoto_s3]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
 
 [dev-dependencies]
 tempfile = "3"
 
-[dev-dependencies.rusoto_mock]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
-
 [build-dependencies]
 version_check = "0.9"
 structopt = "0.3"
-clap = "2"
+clap = "4"
 glob = "0.3"
 regex = "1"
 anyhow = "1"
 thiserror = "1"
-
-[build-dependencies.rusoto_core]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
+aws-types = "1.3"
 
 [profile.release]
 lto = "fat"

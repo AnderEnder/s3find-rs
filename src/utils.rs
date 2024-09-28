@@ -16,7 +16,7 @@ impl S3Key for String {
 
     #[inline]
     fn join_key(mut self, dest: &Self) -> Self {
-        if self.chars().rev().next() != Some(DELIMETER) && !self.is_empty() {
+        if !self.ends_with(DELIMETER) && !self.is_empty() {
             self.push(DELIMETER);
         }
         self.push_str(dest);
