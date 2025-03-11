@@ -1,7 +1,9 @@
 use std::fs;
 use std::io::{self, Write};
 use std::process::exit;
-use structopt::clap::Shell;
+
+use clap::CommandFactory;
+use clap_complete::aot::{generate, Shell};
 
 include!("src/arg.rs");
 
@@ -14,13 +16,42 @@ fn main() {
     let var = std::env::var_os("SHELL_COMPLETIONS_DIR").or_else(|| std::env::var_os("OUT_DIR"));
     let outdir = match var {
         None => return,
-        Some(outdir) => outdir,
+        Some(outdir) => std::path::PathBuf::from(outdir),
     };
     fs::create_dir_all(&outdir).unwrap();
 
-    let mut app = FindOpt::clap();
-    app.gen_completions("s3find", Shell::Bash, &outdir);
-    app.gen_completions("s3find", Shell::Fish, &outdir);
-    app.gen_completions("s3find", Shell::Zsh, &outdir);
-    app.gen_completions("s3find", Shell::PowerShell, &outdir);
+    let mut cmd = FindOpt::command();
+    let name = cmd.get_name().to_string();
+
+    eprintln!("Generating completion file ...");
+    generate(
+        Shell::Bash,
+        &mut cmd,
+        &name,
+        &mut fs::File::create(outdir.join(format!("{}.bash", &name))).unwrap(),
+    );
+    generate(
+        Shell::Elvish,
+        &mut cmd,
+        &name,
+        &mut fs::File::create(outdir.join(format!("{}.elvish", &name))).unwrap(),
+    );
+    generate(
+        Shell::Fish,
+        &mut cmd,
+        &name,
+        &mut fs::File::create(outdir.join(format!("{}.fish", &name))).unwrap(),
+    );
+    generate(
+        Shell::Zsh,
+        &mut cmd,
+        &name,
+        &mut fs::File::create(outdir.join(format!("{}.zsh", &name))).unwrap(),
+    );
+    generate(
+        Shell::PowerShell,
+        &mut cmd,
+        &name,
+        &mut fs::File::create(outdir.join(format!("{}.ps1", &name))).unwrap(),
+    );
 }

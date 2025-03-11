@@ -421,10 +421,6 @@ mod tests {
     use aws_smithy_types::date_time::Format;
     use aws_types::region::Region;
 
-    // use std::fs::File;
-    // use std::io::prelude::*;
-    // use tempfile::Builder;
-
     #[test]
     fn test_advanced_print_object() -> Result<(), Error> {
         let mut buf = Vec::new();
@@ -509,7 +505,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Print(AdvancedPrint {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -536,7 +532,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Ls(FastPrint {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -563,7 +559,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Nothing(DoNothing {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -593,7 +589,7 @@ mod tests {
         })
         .downcast();
 
-        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let client = Client::new(&config);
 
         let path = S3Path {

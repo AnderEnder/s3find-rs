@@ -1,20 +1,24 @@
 use aws_types::region::Region;
+use clap::{Args, Error, Parser, Subcommand};
 use glob::Pattern;
 use regex::Regex;
 use std::str::FromStr;
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
 use thiserror::Error;
 
-fn region(s: &str) -> Region {
-    Region::new(s.to_owned())
+// use crate::command;
+
+fn region(s: &str) -> std::result::Result<Region, Error> {
+    Ok(Region::new(s.to_owned()))
 }
 /// Walk an Amazon S3 path hierarchy
-#[derive(StructOpt, Debug, Clone)]
-#[structopt(
+#[derive(Parser)]
+#[command(
     name = "s3find",
-	global_settings(&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]),
-    after_help = r#"
+    arg_required_else_help = true,
+    version,
+    about,
+    long_about(
+        r#"
 The authorization flow is the following chain:
   * use credentials from arguments provided by users
   * use environment variable credentials: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
@@ -24,14 +28,15 @@ The authorization flow is the following chain:
   * use AWS instance IAM profile
   * use AWS container IAM profile
 "#
+    )
 )]
 pub struct FindOpt {
     /// S3 path to walk through. It should be s3://bucket/path
-    #[structopt(name = "path")]
+    #[arg(name = "path")]
     pub path: S3Path,
 
     /// AWS access key. Unrequired.
-    #[structopt(
+    #[arg(
         name = "aws-access-key",
         long = "aws-access-key",
         requires_all = &["aws-secret-key"]
@@ -39,31 +44,31 @@ pub struct FindOpt {
     pub aws_access_key: Option<String>,
 
     /// AWS secret key from AWS credential pair. Required only for the credential based authentication.
-    #[structopt(
+    #[arg(
         name = "aws-secret-key",
         long = "aws-secret-key",
         requires_all = &["aws-access-key"]
     )]
     pub aws_secret_key: Option<String>,
 
-    /// The region to use. Default value is us-east-1
-    #[structopt(name = "aws-region", long = "aws-region", default_value = "us-east-1", parse(from_str = region))]
+    // The region to use. Default value is us-east-1
+    #[arg(name = "aws-region", long, default_value = "us-east-1", value_parser=region)]
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
-    #[structopt(name = "npatern", long = "name", number_of_values = 1)]
+    #[arg(name = "npatern", long = "name", number_of_values = 1)]
     pub name: Vec<NameGlob>,
 
     /// Case-insensitive glob pattern for match, can be multiple
-    #[structopt(name = "ipatern", long = "iname", number_of_values = 1)]
+    #[arg(name = "ipatern", long = "iname", number_of_values = 1)]
     pub iname: Vec<InameGlob>,
 
     /// Regex pattern for match, can be multiple
-    #[structopt(name = "rpatern", long = "regex", number_of_values = 1)]
+    #[arg(name = "rpatern", long = "regex", number_of_values = 1)]
     pub regex: Vec<Regex>,
 
     /// Modification time for match
-    #[structopt(
+    #[arg(
         name = "time",
         long = "mtime",
         number_of_values = 1,
@@ -84,9 +89,9 @@ Can be multiple, but should be overlaping"#
     pub mtime: Vec<FindTime>,
 
     /// File size for match
-    #[structopt(
+    #[arg(
         name = "bytes-size",
-        long = "size",
+        long,
         number_of_values = 1,
         allow_hyphen_values = true,
         long_help = r#"File size for match:
@@ -104,13 +109,13 @@ Possible file size units are as follows:
     pub size: Vec<FindSize>,
 
     /// Limit result
-    #[structopt(name = "limit", long = "limit")]
+    #[arg(name = "limit", long)]
     pub limit: Option<usize>,
 
     /// The number of results to return in each response to a list operation.
-    #[structopt(
+    #[arg(
         name = "number",
-        long = "page-size",
+        long,
         default_value = "1000",
         long_help = r#"The number of results to return in each response to a
 list operation. The default value is 1000 (the maximum
@@ -120,58 +125,58 @@ times out."#
     pub page_size: i64,
 
     /// Print summary statistic
-    #[structopt(name = "summarize", long = "summarize")]
+    #[arg(name = "summarize", long, short)]
     pub summarize: bool,
 
-    //  /// Action to be ran with matched list of paths
-    #[structopt(subcommand)]
+    /// Action to be ran with matched list of paths
+    #[command(subcommand)]
     pub cmd: Option<Cmd>,
 }
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Subcommand, Clone)]
 pub enum Cmd {
     /// Exec any shell program with every key
-    #[structopt(name = "exec")]
+    #[command(name = "exec")]
     Exec(Exec),
 
     /// Extended print with detail information
-    #[structopt(name = "print")]
+    #[command(name = "print")]
     Print(AdvancedPrint),
 
     /// Delete matched keys
-    #[structopt(name = "delete")]
+    #[command(name = "delete")]
     Delete(MultipleDelete),
 
     /// Download matched keys
-    #[structopt(name = "download")]
+    #[command(name = "download")]
     Download(Download),
 
     /// Copy matched keys to a s3 destination
-    #[structopt(name = "copy")]
+    #[command(name = "copy")]
     Copy(S3Copy),
 
     /// Move matched keys to a s3 destination
-    #[structopt(name = "move")]
+    #[command(name = "move")]
     Move(S3Move),
 
     /// Print the list of matched keys
-    #[structopt(name = "ls")]
+    #[command(name = "ls")]
     Ls(FastPrint),
 
     /// Print the list of matched keys with tags
-    #[structopt(name = "lstags")]
+    #[command(name = "lstags")]
     LsTags(ListTags),
 
     /// Set the tags(overwrite) for the matched keys
-    #[structopt(name = "tags")]
+    #[command(name = "tags")]
     Tags(SetTags),
 
     /// Make the matched keys public available (readonly)
-    #[structopt(name = "public")]
+    #[command(name = "public")]
     Public(SetPublic),
 
     /// Do not do anything with keys, do not print them as well
-    #[structopt(name = "nothing")]
+    #[command(name = "nothing")]
     Nothing(DoNothing),
 }
 
@@ -181,70 +186,70 @@ impl Default for Cmd {
     }
 }
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct FastPrint {}
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct AdvancedPrint {}
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct MultipleDelete {}
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct ListTags {}
 
 // region ?
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct SetPublic {}
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct Exec {
     /// Utility(program) to run
-    #[structopt(name = "utility")]
+    #[arg(name = "utility")]
     pub utility: String,
 }
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct Download {
     /// Force download files(overwrite) even if the target files are already present
-    #[structopt(long = "force", short = "f")]
+    #[arg(long = "force")]
     pub force: bool,
 
     /// Directory destination to download files to
-    #[structopt(name = "destination")]
+    #[arg(name = "destination")]
     pub destination: String,
 }
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct S3Copy {
     /// S3 path destination to copy files to
-    #[structopt(name = "destination")]
+    #[arg(name = "destination")]
     pub destination: S3Path,
 
     /// Copy keys like files
-    #[structopt(long = "flat", short = "f")]
+    #[arg(long = "flat")]
     pub flat: bool,
 }
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct S3Move {
     /// S3 path destination to copy files to
-    #[structopt(name = "destination")]
+    #[arg(name = "destination")]
     pub destination: S3Path,
 
     /// Copy keys like files
-    #[structopt(long = "flat", short = "f")]
+    #[arg(long = "flat")]
     pub flat: bool,
 }
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct SetTags {
     /// List of the tags to set
-    #[structopt(name = "key:value", min_values = 1)]
+    #[arg(name = "key:value", number_of_values = 1)]
     pub tags: Vec<FindTag>,
 }
 
-#[derive(StructOpt, Debug, PartialEq, Clone)]
+#[derive(Args, Clone)]
 pub struct DoNothing {}
 
 #[derive(Error, Debug)]
