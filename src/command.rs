@@ -369,3 +369,273 @@ impl Default for FindStat {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_s3::types::Object;
+    use std::io::Write;
+
+    #[tokio::test]
+    async fn test_find_new() {
+        let aws_credentials = AWSPair {
+            access: Some("access_key".to_string()),
+            secret: Some("secret_key".to_string()),
+        };
+        let aws_region = Region::new("us-east-1");
+        let cmd = Some(Cmd::Ls(FastPrint {}));
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: aws_region.clone(),
+        };
+        let page_size = 1000;
+        let summarize = true;
+        let limit = Some(10);
+
+        let find = Find::new(
+            aws_credentials,
+            &aws_region,
+            cmd,
+            path.clone(),
+            page_size,
+            summarize,
+            limit,
+        )
+        .await;
+
+        assert_eq!(find.path, path);
+        assert_eq!(find.page_size, page_size);
+        assert_eq!(find.summarize, summarize);
+        assert_eq!(find.limit, limit);
+    }
+
+    // #[tokio::test]
+    // async fn test_find_exec() {
+    //     let aws_credentials = AWSPair {
+    //         access: Some("access_key".to_string()),
+    //         secret: Some("secret_key".to_string()),
+    //     };
+    //     let aws_region = Region::new("us-east-1");
+    //     let cmd = Some(Cmd::Ls(FastPrint {}));
+    //     let path = S3Path {
+    //         bucket: "test-bucket".to_string(),
+    //         prefix: Some("test-prefix".to_string()),
+    //         region: aws_region.clone(),
+    //     };
+    //     let page_size = 1000;
+    //     let summarize = true;
+    //     let limit = Some(10);
+
+    //     let find = Find::new(
+    //         aws_credentials,
+    //         &aws_region,
+    //         cmd,
+    //         path.clone(),
+    //         page_size,
+    //         summarize,
+    //         limit,
+    //     )
+    //     .await;
+
+    //     let objects = vec![
+    //         Object::builder().key("object1").build(),
+    //         Object::builder().key("object2").build(),
+    //     ];
+
+    //     let result = find.exec(None, objects.clone()).await;
+
+    //     assert_eq!(result.unwrap().total_files, objects.len());
+    // }
+
+    #[tokio::test]
+    async fn test_find_to_stream() {
+        let aws_credentials = AWSPair {
+            access: Some("access_key".to_string()),
+            secret: Some("secret_key".to_string()),
+        };
+        let aws_region = Region::new("us-east-1");
+        let cmd = Some(Cmd::Ls(FastPrint {}));
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: aws_region.clone(),
+        };
+        let page_size = 1000;
+        let summarize = true;
+        let limit = Some(10);
+
+        let find = Find::new(
+            aws_credentials,
+            &aws_region,
+            cmd,
+            path.clone(),
+            page_size,
+            summarize,
+            limit,
+        )
+        .await;
+
+        let stream = find.to_stream();
+
+        assert_eq!(stream.path, path);
+        assert_eq!(stream.page_size, page_size);
+        assert!(stream.initial);
+    }
+
+    #[tokio::test]
+    async fn test_find_from_opts() {
+        let opts = FindOpt {
+            aws_access_key: Some("access_key".to_string()),
+            aws_secret_key: Some("secret_key".to_string()),
+            aws_region: Region::new("us-east-1"),
+            path: S3Path {
+                bucket: "test-bucket".to_string(),
+                prefix: Some("test-prefix".to_string()),
+                region: Region::new("us-east-1"),
+            },
+            cmd: Some(Cmd::Ls(FastPrint {})),
+            page_size: 1000,
+            summarize: true,
+            limit: Some(10),
+            name: vec![],
+            iname: vec![],
+            regex: vec![],
+            size: vec![],
+            mtime: vec![],
+        };
+
+        let (find, filters) = Find::from_opts(&opts).await;
+
+        assert_eq!(find.path, opts.path);
+        assert_eq!(find.page_size, opts.page_size);
+        assert_eq!(find.summarize, opts.summarize);
+        assert_eq!(find.limit, opts.limit);
+        assert!(filters.0.is_empty());
+    }
+
+    // #[tokio::test]
+    // async fn test_find_stream_list() {
+    //     let aws_credentials = AWSPair {
+    //         access: Some("access_key".to_string()),
+    //         secret: Some("secret_key".to_string()),
+    //     };
+    //     let aws_region = Region::new("us-east-1");
+    //     let cmd = Some(Cmd::Ls(FastPrint {}));
+    //     let path = S3Path {
+    //         bucket: "test-bucket".to_string(),
+    //         prefix: Some("test-prefix".to_string()),
+    //         region: aws_region.clone(),
+    //     };
+    //     let page_size = 1000;
+    //     let summarize = true;
+    //     let limit = Some(10);
+
+    //     let find = Find::new(
+    //         aws_credentials,
+    //         &aws_region,
+    //         cmd,
+    //         path.clone(),
+    //         page_size,
+    //         summarize,
+    //         limit,
+    //     )
+    //     .await;
+
+    //     let stream = find.to_stream();
+    //     let result = stream.list().await;
+
+    //     assert!(result.is_none());
+    // }
+
+    // #[tokio::test]
+    // async fn test_find_stream_stream() {
+    //     let aws_credentials = AWSPair {
+    //         access: Some("access_key".to_string()),
+    //         secret: Some("secret_key".to_string()),
+    //     };
+    //     let aws_region = Region::new("us-east-1");
+    //     let cmd = Some(Cmd::Ls(FastPrint {}));
+    //     let path = S3Path {
+    //         bucket: "test-bucket".to_string(),
+    //         prefix: Some("test-prefix".to_string()),
+    //         region: aws_region.clone(),
+    //     };
+    //     let page_size = 1000;
+    //     let summarize = true;
+    //     let limit = Some(10);
+
+    //     let find = Find::new(
+    //         aws_credentials,
+    //         &aws_region,
+    //         cmd,
+    //         path.clone(),
+    //         page_size,
+    //         summarize,
+    //         limit,
+    //     )
+    //     .await;
+
+    //     let stream = find.to_stream();
+    //     let result: Vec<_> = stream.stream().collect().await;
+
+    //     assert!(result.is_empty());
+    // }
+
+    #[test]
+    fn test_find_stat_add() {
+        let objects = vec![
+            Object::builder().key("object1").size(100).build(),
+            Object::builder().key("object2").size(200).build(),
+            Object::builder().key("object3").size(300).build(),
+        ];
+
+        let stat = FindStat::default() + &objects;
+
+        assert_eq!(stat.total_files, objects.len());
+        assert_eq!(stat.total_space, 600);
+        assert_eq!(stat.max_size, Some(300));
+        assert_eq!(stat.min_size, Some(100));
+        assert_eq!(stat.max_key, "object3");
+        assert_eq!(stat.min_key, "object1");
+        assert_eq!(stat.average_size, 200);
+    }
+
+    #[test]
+    fn test_find_stat_default() {
+        let stat = FindStat::default();
+
+        assert_eq!(stat.total_files, 0);
+        assert_eq!(stat.total_space, 0);
+        assert_eq!(stat.max_size, None);
+        assert_eq!(stat.min_size, None);
+        assert_eq!(stat.max_key, "");
+        assert_eq!(stat.min_key, "");
+        assert_eq!(stat.average_size, 0);
+    }
+
+    #[test]
+    fn test_find_stat_fmt() {
+        let stat = FindStat {
+            total_files: 3,
+            total_space: 600,
+            max_size: Some(300),
+            min_size: Some(100),
+            max_key: "object3".to_string(),
+            min_key: "object1".to_string(),
+            average_size: 200,
+        };
+
+        let mut buf = Vec::new();
+        write!(&mut buf, "{}", stat).unwrap();
+        let out = std::str::from_utf8(&buf).unwrap();
+
+        assert!(out.contains("Total files:"));
+        assert!(out.contains("Total space:"));
+        assert!(out.contains("Largest file:"));
+        assert!(out.contains("Largest file size:"));
+        assert!(out.contains("Smallest file:"));
+        assert!(out.contains("Smallest file size:"));
+        assert!(out.contains("Average file size:"));
+    }
+}
