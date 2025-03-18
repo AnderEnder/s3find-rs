@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
     - name: coverage
       run: |
         docker run \
@@ -20,6 +20,6 @@ jobs:
           xd009642/tarpaulin:latest \
           cargo tarpaulin -f -t 5 --out Xml -v -- --test-threads=1 || true
     - name: upload coverage to Codecov
-      uses: codecov/codecov-action@v1
+      uses: codecov/codecov-action@v5
       with:
         token: ${{secrets.CODECOV_TOKEN}}

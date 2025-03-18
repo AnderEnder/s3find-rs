@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: publish package to crates
         run: |
           cargo package
@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: static build release
         run: |
           docker run --rm -t \
@@ -31,7 +31,7 @@ jobs:
           sudo strip target/x86_64-unknown-linux-musl/release/s3find
           sudo tar -C target/x86_64-unknown-linux-musl/release -czf  $(pwd)/s3find-x86_64-linux.tar.gz s3find
       - name: publish release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: s3find-x86_64-linux.tar.gz
         env:
@@ -41,7 +41,7 @@ jobs:
     runs-on: macOS-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -51,7 +51,7 @@ jobs:
       - name: archive
         run: tar -C target/release -czf $(pwd)/s3find-aarch64-osx.tar.gz s3find
       - name: publish release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: s3find-aarch64-osx.tar.gz
         env:
@@ -61,14 +61,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: build release
         run: cargo build --release --verbose
       - name: archive
         run: tar -C target/release -czf $(pwd)/s3find-x86_64-windows.tar.gz s3find.exe
         shell: bash
       - name: publish release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: s3find-x86_64-windows.tar.gz
         env:
