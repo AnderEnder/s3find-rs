@@ -42,10 +42,7 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - uses: dtolnay/rust-toolchain@stable
       - name: build release
         run: cargo build --release --verbose
       - name: archive
