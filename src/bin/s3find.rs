@@ -1,13 +1,13 @@
 use anyhow::Error;
-use structopt::StructOpt;
 
+use clap::Parser;
 use s3find::arg::*;
 use s3find::command::*;
 use s3find::run::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let args = FindOpt::from_args();
+    let args = FindOpt::parse();
     let (find, filters) = Find::from_opts(&args).await;
 
     let stats = list_filter_execute(

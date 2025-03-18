@@ -255,7 +255,7 @@ async fn get_s3_client(
             let credentials_provider =
                 Credentials::new(aws_access_key, aws_secret_key, None, None, "static");
             aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::v2024_03_28())
+                .behavior_version(BehaviorVersion::v2025_01_17())
                 .region(region_provider)
                 .credentials_provider(credentials_provider)
                 .load()
@@ -264,7 +264,7 @@ async fn get_s3_client(
         _ => {
             let credentials_provider = CredentialsProviderChain::default_provider().await;
             aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::v2024_03_28())
+                .behavior_version(BehaviorVersion::v2025_01_17())
                 .region(region_provider)
                 .credentials_provider(credentials_provider)
                 .load()
