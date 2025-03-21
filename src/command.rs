@@ -1,10 +1,10 @@
 use std::fmt;
 use std::ops::Add;
 
-use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::config::{Credentials, Region};
+use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_sdk_s3::Client;
+use aws_sdk_s3::config::{Credentials, Region};
 use futures::Stream;
 use glob::Pattern;
 use humansize::*;
