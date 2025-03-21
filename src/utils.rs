@@ -32,7 +32,7 @@ pub fn combine_keys(flat: bool, source: &str, destination: &Option<String>) -> S
         source.to_owned()
     };
 
-    if let Some(ref destination) = destination {
+    if let Some(destination) = destination {
         destination.to_owned().join_key(&key)
     } else {
         key
