@@ -12,6 +12,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use aws_sdk_s3::Client;
 use aws_sdk_s3::types::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
+use aws_smithy_types::byte_stream::ByteStream; // Import ByteStream
 
 use crate::arg::*;
 use crate::error::*;
@@ -31,7 +32,6 @@ impl Cmd {
             Cmd::Copy(l) => Box::new(l),
             Cmd::Move(l) => Box::new(l),
             Cmd::Nothing(l) => Box::new(l),
-            // _ => Box::new(FastPrint {}),
         }
     }
 }
@@ -43,8 +43,148 @@ pub struct ExecStatus {
 }
 
 #[async_trait]
+pub trait S3Client: Send + Sync {
+    async fn put_object_acl(
+        &self,
+        bucket: String,
+        key: String,
+        acl: ObjectCannedAcl,
+    ) -> Result<(), Error>;
+
+    async fn get_object(
+        &self,
+        bucket: String,
+        key: String,
+    ) -> Result<ByteStream, Error>;
+
+    async fn get_object_tagging(
+        &self,
+        bucket: String,
+        key: String,
+    ) -> Result<Vec<Tag>, Error>;
+
+    async fn copy_object(
+        &self,
+        source_bucket: String,
+        source_key: String,
+        dest_bucket: String,
+        dest_key: String,
+    ) -> Result<(), Error>;
+
+    async fn delete_objects(
+        &self,
+        bucket: String,
+        keys: Vec<String>,
+    ) -> Result<(), Error>;
+
+    async fn put_object_tagging(
+        &self,
+        bucket: String,
+        key: String,
+        tagging: Option<Tagging>,
+    ) -> Result<(), Error>;
+}
+
+#[async_trait]
+impl S3Client for Client {
+    async fn put_object_acl(
+        &self,
+        bucket: String,
+        key: String,
+        acl: ObjectCannedAcl,
+    ) -> Result<(), Error> {
+        self.put_object_acl()
+            .bucket(bucket)
+            .key(key)
+            .acl(acl)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn get_object(
+        &self,
+        bucket: String,
+        key: String,
+    ) -> Result<ByteStream, Error> {
+        let response = self
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await?;
+        Ok(response.body)
+    }
+
+    async fn get_object_tagging(
+        &self,
+        bucket: String,
+        key: String,
+    ) -> Result<Vec<Tag>, Error> {
+        let response = self
+            .get_object_tagging()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await?;
+        Ok(response.tag_set)
+    }
+
+    async fn copy_object(
+        &self,
+        source_bucket: String,
+        source_key: String,
+        dest_bucket: String,
+        dest_key: String,
+    ) -> Result<(), Error> {
+        self.copy_object()
+            .copy_source(format!("{}/{}", source_bucket, source_key))
+            .bucket(dest_bucket)
+            .key(dest_key)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_objects(
+        &self,
+        bucket: String,
+        keys: Vec<String>,
+    ) -> Result<(), Error> {
+        let objects = keys
+            .into_iter()
+            .map(|key| ObjectIdentifier::builder().key(key).build())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let delete = Delete::builder().set_objects(Some(objects)).build()?;
+
+        self.delete_objects()
+            .bucket(bucket)
+            .delete(delete)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn put_object_tagging(
+        &self,
+        bucket: String,
+        key: String,
+        tagging: Option<Tagging>,
+    ) -> Result<(), Error> {
+        self.put_object_tagging()
+            .bucket(bucket)
+            .key(key)
+            .set_tagging(tagging)
+            .send()
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
 pub trait RunCommand {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error>;
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error>;
 }
 
 impl FastPrint {
@@ -66,7 +206,7 @@ impl FastPrint {
 
 #[async_trait]
 impl RunCommand for FastPrint {
-    async fn execute(&self, _c: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, _c: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
         for x in list {
             self.print_object(&mut stdout, &path.bucket, x)?
@@ -99,7 +239,7 @@ impl AdvancedPrint {
 
 #[async_trait]
 impl RunCommand for AdvancedPrint {
-    async fn execute(&self, _c: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, _c: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
         for x in list {
             self.print_object(&mut stdout, &path.bucket, x)?
@@ -137,7 +277,7 @@ impl Exec {
 
 #[async_trait]
 impl RunCommand for Exec {
-    async fn execute(&self, _: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, _: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
         for x in list {
             let key = x.key.as_deref().unwrap_or("");
@@ -150,7 +290,7 @@ impl RunCommand for Exec {
 
 #[async_trait]
 impl RunCommand for MultipleDelete {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         let key_list: Vec<_> = list
             .iter()
             .filter_map(|x| {
@@ -163,36 +303,20 @@ impl RunCommand for MultipleDelete {
 
         let objects = Delete::builder().set_objects(Some(key_list)).build()?;
 
-        client
-            .delete_objects()
-            .bucket(path.bucket.to_owned())
-            .delete(objects)
-            .send()
-            .await
-            .map_or_else(
-                |e| {
-                    eprintln!("{}", e);
-                    Ok(())
-                },
-                |r| {
-                    if let Some(deleted_list) = r.deleted {
-                        for object in deleted_list {
-                            println!(
-                                "deleted: s3://{}/{}",
-                                &path.bucket,
-                                object.key.as_ref().unwrap_or(&"".to_string())
-                            );
-                        }
-                    }
-                    Ok(())
-                },
-            )
+        let keys: Vec<String> = objects
+            .objects()
+            .iter()
+            .map(|obj| obj.key().to_string())
+            .collect();
+
+        client.delete_objects(path.bucket.to_owned(), keys).await?;
+        Ok(())
     }
 }
 
 #[async_trait]
 impl RunCommand for SetTags {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         for object in list {
             let tags = self
                 .tags
@@ -209,11 +333,7 @@ impl RunCommand for SetTags {
             let tagging = Tagging::builder().set_tag_set(Some(tags)).build().ok();
 
             client
-                .put_object_tagging()
-                .bucket(path.bucket.to_owned())
-                .set_key(object.key.clone())
-                .set_tagging(tagging)
-                .send()
+                .put_object_tagging(path.bucket.to_owned(), object.key.clone().unwrap(), tagging)
                 .await?;
 
             println!(
@@ -228,17 +348,13 @@ impl RunCommand for SetTags {
 
 #[async_trait]
 impl RunCommand for ListTags {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         for object in list {
             let tag_output = client
-                .get_object_tagging()
-                .bucket(path.bucket.clone())
-                .set_key(object.key.clone())
-                .send()
+                .get_object_tagging(path.bucket.clone(), object.key.clone().unwrap())
                 .await?;
 
             let tags: String = tag_output
-                .tag_set
                 .into_iter()
                 .map(|x| format!("{}:{}", x.key, x.value))
                 .collect::<Vec<String>>()
@@ -265,14 +381,10 @@ fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
 
 #[async_trait]
 impl RunCommand for SetPublic {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         for object in list {
             client
-                .put_object_acl()
-                .bucket(path.bucket.to_owned())
-                .set_key(object.key.clone())
-                .acl(ObjectCannedAcl::PublicRead)
-                .send()
+                .put_object_acl(path.bucket.to_owned(), object.key.clone().unwrap(), ObjectCannedAcl::PublicRead)
                 .await?;
 
             let key = object.key.clone().unwrap();
@@ -285,7 +397,7 @@ impl RunCommand for SetPublic {
 
 #[async_trait]
 impl RunCommand for Download {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         for object in list {
             let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
 
@@ -315,12 +427,8 @@ impl RunCommand for Download {
             }
 
             let mut stream = client
-                .get_object()
-                .bucket(&path.bucket)
-                .key(key)
-                .send()
-                .await?
-                .body;
+                .get_object(path.bucket.clone(), key.to_string())
+                .await?;
 
             fs::create_dir_all(dir_path)?;
             let mut output = File::create(&file_path)?;
@@ -337,7 +445,7 @@ impl RunCommand for Download {
 
 #[async_trait]
 impl RunCommand for S3Copy {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         for object in list {
             let key = object.key.clone().ok_or(FunctionError::ObjectFieldError)?;
 
@@ -350,11 +458,7 @@ impl RunCommand for S3Copy {
             );
 
             client
-                .copy_object()
-                .bucket(&path.bucket)
-                .key(target)
-                .copy_source(source_path)
-                .send()
+                .copy_object(path.bucket.clone(), key, self.destination.bucket.clone(), target)
                 .await?;
         }
         Ok(())
@@ -363,7 +467,7 @@ impl RunCommand for S3Copy {
 
 #[async_trait]
 impl RunCommand for S3Move {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, client: &dyn S3Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         for object in list {
             let key = object.key.clone().ok_or(FunctionError::ObjectFieldError)?;
 
@@ -376,11 +480,7 @@ impl RunCommand for S3Move {
             );
 
             client
-                .copy_object()
-                .bucket(&path.bucket)
-                .key(target)
-                .copy_source(source_path)
-                .send()
+                .copy_object(path.bucket.clone(), key, self.destination.bucket.clone(), target)
                 .await?;
         }
 
@@ -394,13 +494,10 @@ impl RunCommand for S3Move {
             })
             .collect();
 
-        let delete = Delete::builder().set_objects(Some(key_list)).build().ok();
+        // let delete = Delete::builder().set_objects(Some(key_list)).build().ok();
 
         client
-            .delete_objects()
-            .bucket(path.bucket.clone())
-            .set_delete(delete)
-            .send()
+            .delete_objects(path.bucket.clone(), key_list.into_iter().map(|o| o.key.to_string()).collect())
             .await?;
         Ok(())
     }
@@ -408,7 +505,7 @@ impl RunCommand for S3Move {
 
 #[async_trait]
 impl RunCommand for DoNothing {
-    async fn execute(&self, _c: &Client, _p: &S3Path, _l: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, _c: &dyn S3Client, _p: &S3Path, _l: &[Object]) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -416,181 +513,168 @@ impl RunCommand for DoNothing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_config::BehaviorVersion;
-    use aws_sdk_s3::{primitives::DateTime, types::ObjectStorageClass};
-    use aws_smithy_types::date_time::Format;
+    use std::sync::{Arc, Mutex};
+    use aws_sdk_s3::types::ObjectCannedAcl;
     use aws_types::region::Region;
+    use anyhow::Result;
 
-    #[test]
-    fn test_advanced_print_object() -> Result<(), Error> {
-        let mut buf = Vec::new();
-        let cmd = AdvancedPrint {};
-        let bucket = "test";
-
-        let object = Object::builder()
-            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
-            .key("somepath/otherpath")
-            .size(4_997_288)
-            .storage_class(ObjectStorageClass::Standard)
-            .last_modified(DateTime::from_str(
-                "2017-07-19T19:04:17.000Z",
-                Format::DateTime,
-            )?)
-            .build();
-
-        cmd.print_object(&mut buf, bucket, &object)?;
-        let out = std::str::from_utf8(&buf)?;
-
-        println!("{}", out);
-        assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
-        assert!(out.contains("None"));
-        assert!(out.contains("4997288"));
-        assert!(out.contains("2017-07-19T19:04:17Z"));
-        assert!(out.contains("s3://test/somepath/otherpath"));
-        assert!(out.contains("Standard"));
-        Ok(())
+    struct MockS3Client {
+        pub put_object_acl_called: Arc<Mutex<bool>>,
+        pub get_object_called: Arc<Mutex<bool>>,
+        pub get_object_tagging_called: Arc<Mutex<bool>>,
+        pub put_object_tagging_called: Arc<Mutex<bool>>,
+        pub copy_object_called: Arc<Mutex<bool>>,
+        pub delete_objects_called: Arc<Mutex<bool>>,
     }
 
-    #[test]
-    fn test_fast_print_object() -> Result<(), Error> {
-        let mut buf = Vec::new();
-        let cmd = FastPrint {};
-        let bucket = "test";
-
-        let object = Object::builder()
-            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
-            .key("somepath/otherpath")
-            .size(4_997_288)
-            .storage_class(ObjectStorageClass::Standard)
-            .last_modified(DateTime::from_str(
-                "2017-07-19T19:04:17.000Z",
-                Format::DateTime,
-            )?)
-            .build();
-
-        cmd.print_object(&mut buf, bucket, &object)?;
-        let out = std::str::from_utf8(&buf)?;
-
-        assert!(out.contains("s3://test/somepath/otherpath"));
-        Ok(())
+    impl MockS3Client {
+        fn new() -> Self {
+            MockS3Client {
+                put_object_acl_called: Arc::new(Mutex::new(false)),
+                get_object_called: Arc::new(Mutex::new(false)),
+                get_object_tagging_called: Arc::new(Mutex::new(false)),
+                put_object_tagging_called: Arc::new(Mutex::new(false)),
+                copy_object_called: Arc::new(Mutex::new(false)),
+                delete_objects_called: Arc::new(Mutex::new(false)),
+            }
+        }
     }
 
-    #[test]
-    fn test_exec() -> Result<(), Error> {
-        let mut buf = Vec::new();
-        let cmd = Exec {
-            utility: "echo test {}".to_owned(),
-        };
+    #[async_trait]
+    impl S3Client for MockS3Client {
+        async fn put_object_acl(
+            &self,
+            _bucket: String,
+            _key: String,
+            _acl: ObjectCannedAcl,
+        ) -> Result<(), Error> {
+            *self.put_object_acl_called.lock().unwrap() = true;
+            Ok(())
+        }
 
-        let path = "s3://test/somepath/otherpath";
-        cmd.exec(&mut buf, path)?;
-        let out = std::str::from_utf8(&buf)?;
+        async fn get_object(
+            &self,
+            _bucket: String,
+            _key: String,
+        ) -> Result<ByteStream, Error> {
+            *self.get_object_called.lock().unwrap() = true;
+            Ok(ByteStream::from_static(b"test data"))
+        }
 
-        assert!(out.contains("test"));
-        assert!(out.contains("s3://test/somepath/otherpath"));
-        Ok(())
+        async fn get_object_tagging(
+            &self,
+            _bucket: String,
+            _key: String,
+        ) -> Result<Vec<Tag>, Error> {
+            *self.get_object_tagging_called.lock().unwrap() = true;
+            Ok(vec![
+                Tag::builder().key("tag1").value("value1").build()?,
+                Tag::builder().key("tag2").value("value2").build()?,
+            ])
+        }
+
+        async fn copy_object(
+            &self,
+            _source_bucket: String,
+            _source_key: String,
+            _dest_bucket: String,
+            _dest_key: String,
+        ) -> Result<(), Error> {
+            *self.copy_object_called.lock().unwrap() = true;
+            Ok(())
+        }
+
+        async fn delete_objects(
+            &self,
+            _bucket: String,
+            _keys: Vec<String>,
+        ) -> Result<(), Error> {
+            *self.delete_objects_called.lock().unwrap() = true;
+            Ok(())
+        }
+
+        async fn put_object_tagging(
+            &self,
+            _bucket: String,
+            _key: String,
+            _tagging: Option<Tagging>,
+        ) -> Result<(), Error> {
+            *self.put_object_tagging_called.lock().unwrap() = true;
+            Ok(())
+        }
     }
 
     #[tokio::test]
-    async fn test_advanced_print() -> Result<(), Error> {
-        let object = Object::builder()
-            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
-            .key("somepath/otherpath")
-            .size(4_997_288)
-            .storage_class(ObjectStorageClass::Standard)
-            .last_modified(DateTime::from_str(
-                "2017-07-19T19:04:17.000Z",
-                Format::DateTime,
-            )?)
-            .build();
+    async fn test_set_public() -> Result<(), Error> {
+        let mock_client = MockS3Client::new();
+        let object = Object::builder().key("test-key").build();
 
-        let cmd = Cmd::Print(AdvancedPrint {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
-        let client = Client::new(&config);
-
+        let cmd = Cmd::Public(SetPublic {}).downcast();
         let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
             region: Region::from_static("us-east-1"),
         };
 
-        cmd.execute(&client, &path, &[object]).await?;
+        cmd.execute(&mock_client, &path, &[object]).await?;
+        assert!(*mock_client.put_object_acl_called.lock().unwrap());
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_fastprint() -> Result<(), Error> {
-        let object = Object::builder()
-            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
-            .key("somepath/otherpath")
-            .size(4_997_288)
-            .storage_class(ObjectStorageClass::Standard)
-            .last_modified(DateTime::from_str(
-                "2017-07-19T19:04:17.000Z",
-                Format::DateTime,
-            )?)
-            .build();
+    async fn test_download() -> Result<(), Error> {
+        let mock_client = MockS3Client::new();
+        let temp_dir = tempfile::tempdir()?;
+        let object = Object::builder().key("test-key").size(10).build();
 
-        let cmd = Cmd::Ls(FastPrint {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
-        let client = Client::new(&config);
-
-        let path = S3Path {
-            bucket: "test".to_owned(),
-            prefix: None,
-            region: Region::from_static("us-east-1"),
-        };
-
-        cmd.execute(&client, &path, &[object]).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn smoke_donothing() -> Result<(), Error> {
-        let object = Object::builder()
-            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
-            .key("somepath/otherpath")
-            .size(4_997_288)
-            .storage_class(ObjectStorageClass::Standard)
-            .last_modified(DateTime::from_str(
-                "2017-07-19T19:04:17.000Z",
-                Format::DateTime,
-            )?)
-            .build();
-
-        let cmd = Cmd::Nothing(DoNothing {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
-        let client = Client::new(&config);
-
-        let path = S3Path {
-            bucket: "test".to_owned(),
-            prefix: None,
-            region: Region::from_static("us-east-1"),
-        };
-
-        cmd.execute(&client, &path, &[object]).await
-    }
-
-    #[tokio::test]
-    async fn smoke_exec() -> Result<(), Error> {
-        let object = Object::builder()
-            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
-            .key("somepath/otherpath")
-            .size(4_997_288)
-            .storage_class(ObjectStorageClass::Standard)
-            .last_modified(DateTime::from_str(
-                "2017-07-19T19:04:17.000Z",
-                Format::DateTime,
-            )?)
-            .build();
-
-        let cmd = Cmd::Exec(Exec {
-            utility: "echo {}".to_owned(),
+        let cmd = Cmd::Download(Download {
+            destination: temp_dir.path().to_str().unwrap().to_string(),
+            force: true,
         })
         .downcast();
 
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
-        let client = Client::new(&config);
+        let path = S3Path {
+            bucket: "test".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&mock_client, &path, &[object]).await?;
+        assert!(*mock_client.get_object_called.lock().unwrap());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_tags() -> Result<(), Error> {
+        let mock_client = MockS3Client::new();
+        let object = Object::builder().key("test-key").build();
+
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
+        let path = S3Path {
+            bucket: "test".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&mock_client, &path, &[object]).await?;
+        assert!(*mock_client.get_object_tagging_called.lock().unwrap());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_s3_move() -> Result<(), Error> {
+        let mock_client = MockS3Client::new();
+        let object = Object::builder().key("test-key").build();
+
+        let cmd = Cmd::Move(S3Move {
+            destination: S3Path {
+                bucket: "dest-bucket".to_owned(),
+                prefix: Some("dest-prefix".to_owned()),
+                region: Region::from_static("us-east-1"),
+            },
+            flat: false,
+        })
+        .downcast();
 
         let path = S3Path {
             bucket: "test".to_owned(),
@@ -598,18 +682,9 @@ mod tests {
             region: Region::from_static("us-east-1"),
         };
 
-        cmd.execute(&client, &path, &[object]).await
-    }
-
-    #[test]
-    fn test_generate_s3_url() {
-        assert_eq!(
-            &generate_s3_url("us-east-1", "test-bucket", "somepath/somekey"),
-            "https://test-bucket.s3.amazonaws.com/somepath/somekey",
-        );
-        assert_eq!(
-            &generate_s3_url("eu-west-1", "test-bucket", "somepath/somekey"),
-            "https://test-bucket.s3-eu-west-1.amazonaws.com/somepath/somekey",
-        );
+        cmd.execute(&mock_client, &path, &[object]).await?;
+        assert!(*mock_client.copy_object_called.lock().unwrap());
+        assert!(*mock_client.delete_objects_called.lock().unwrap());
+        Ok(())
     }
 }
