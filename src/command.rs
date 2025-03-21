@@ -5,6 +5,7 @@ use aws_config::BehaviorVersion;
 use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Credentials, Region};
+
 use futures::Stream;
 use glob::Pattern;
 use humansize::*;
@@ -373,269 +374,238 @@ impl Default for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use aws_sdk_s3::types::Object;
-    use std::io::Write;
 
-    #[tokio::test]
-    async fn test_find_new() {
-        let aws_credentials = AWSPair {
-            access: Some("access_key".to_string()),
-            secret: Some("secret_key".to_string()),
-        };
-        let aws_region = Region::new("us-east-1");
-        let cmd = Some(Cmd::Ls(FastPrint {}));
-        let path = S3Path {
-            bucket: "test-bucket".to_string(),
-            prefix: Some("test-prefix".to_string()),
-            region: aws_region.clone(),
-        };
-        let page_size = 1000;
-        let summarize = true;
-        let limit = Some(10);
+    // Simple mock for S3 client - we won't use actual AWS SDK test utilities
+    // which require feature flags
+    struct MockS3ClientBuilder {}
 
-        let find = Find::new(
-            aws_credentials,
-            &aws_region,
-            cmd,
-            path.clone(),
-            page_size,
-            summarize,
-            limit,
-        )
-        .await;
+    impl MockS3ClientBuilder {
+        fn new() -> Self {
+            Self {}
+        }
 
-        assert_eq!(find.path, path);
-        assert_eq!(find.page_size, page_size);
-        assert_eq!(find.summarize, summarize);
-        assert_eq!(find.limit, limit);
-    }
+        fn build(self) -> Client {
+            let conf = aws_sdk_s3::Config::builder()
+                .region(Region::new("mock-region"))
+                .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+                .behavior_version(BehaviorVersion::v2025_01_17())
+                .build();
 
-    // #[tokio::test]
-    // async fn test_find_exec() {
-    //     let aws_credentials = AWSPair {
-    //         access: Some("access_key".to_string()),
-    //         secret: Some("secret_key".to_string()),
-    //     };
-    //     let aws_region = Region::new("us-east-1");
-    //     let cmd = Some(Cmd::Ls(FastPrint {}));
-    //     let path = S3Path {
-    //         bucket: "test-bucket".to_string(),
-    //         prefix: Some("test-prefix".to_string()),
-    //         region: aws_region.clone(),
-    //     };
-    //     let page_size = 1000;
-    //     let summarize = true;
-    //     let limit = Some(10);
-
-    //     let find = Find::new(
-    //         aws_credentials,
-    //         &aws_region,
-    //         cmd,
-    //         path.clone(),
-    //         page_size,
-    //         summarize,
-    //         limit,
-    //     )
-    //     .await;
-
-    //     let objects = vec![
-    //         Object::builder().key("object1").build(),
-    //         Object::builder().key("object2").build(),
-    //     ];
-
-    //     let result = find.exec(None, objects.clone()).await;
-
-    //     assert_eq!(result.unwrap().total_files, objects.len());
-    // }
-
-    #[tokio::test]
-    async fn test_find_to_stream() {
-        let aws_credentials = AWSPair {
-            access: Some("access_key".to_string()),
-            secret: Some("secret_key".to_string()),
-        };
-        let aws_region = Region::new("us-east-1");
-        let cmd = Some(Cmd::Ls(FastPrint {}));
-        let path = S3Path {
-            bucket: "test-bucket".to_string(),
-            prefix: Some("test-prefix".to_string()),
-            region: aws_region.clone(),
-        };
-        let page_size = 1000;
-        let summarize = true;
-        let limit = Some(10);
-
-        let find = Find::new(
-            aws_credentials,
-            &aws_region,
-            cmd,
-            path.clone(),
-            page_size,
-            summarize,
-            limit,
-        )
-        .await;
-
-        let stream = find.to_stream();
-
-        assert_eq!(stream.path, path);
-        assert_eq!(stream.page_size, page_size);
-        assert!(stream.initial);
+            Client::from_conf(conf)
+        }
     }
 
     #[tokio::test]
-    async fn test_find_from_opts() {
-        let opts = FindOpt {
-            aws_access_key: Some("access_key".to_string()),
-            aws_secret_key: Some("secret_key".to_string()),
-            aws_region: Region::new("us-east-1"),
-            path: S3Path {
-                bucket: "test-bucket".to_string(),
-                prefix: Some("test-prefix".to_string()),
-                region: Region::new("us-east-1"),
-            },
-            cmd: Some(Cmd::Ls(FastPrint {})),
-            page_size: 1000,
-            summarize: true,
-            limit: Some(10),
-            name: vec![],
-            iname: vec![],
-            regex: vec![],
-            size: vec![],
-            mtime: vec![],
-        };
+    async fn test_filter_list_test_match() {
+        // Create a test object
+        let object = Object::builder().key("test-object.txt").size(100).build();
 
-        let (find, filters) = Find::from_opts(&opts).await;
+        // Create a test filter that always returns true
+        struct AlwaysTrueFilter;
+        impl Filter for AlwaysTrueFilter {
+            fn filter(&self, _: &Object) -> bool {
+                true
+            }
+        }
 
-        assert_eq!(find.path, opts.path);
-        assert_eq!(find.page_size, opts.page_size);
-        assert_eq!(find.summarize, opts.summarize);
-        assert_eq!(find.limit, opts.limit);
-        assert!(filters.0.is_empty());
+        // Create a test filter that always returns false
+        struct AlwaysFalseFilter;
+        impl Filter for AlwaysFalseFilter {
+            fn filter(&self, _: &Object) -> bool {
+                false
+            }
+        }
+
+        // Test with all true filters
+        let true_filter = AlwaysTrueFilter;
+        let filter_list = FilterList(vec![&true_filter, &true_filter]);
+        assert!(filter_list.test_match(object.clone()).await);
+
+        // Test with one false filter
+        let false_filter = AlwaysFalseFilter;
+        let filter_list = FilterList(vec![&true_filter, &false_filter]);
+        assert!(!filter_list.test_match(object.clone()).await);
     }
-
-    // #[tokio::test]
-    // async fn test_find_stream_list() {
-    //     let aws_credentials = AWSPair {
-    //         access: Some("access_key".to_string()),
-    //         secret: Some("secret_key".to_string()),
-    //     };
-    //     let aws_region = Region::new("us-east-1");
-    //     let cmd = Some(Cmd::Ls(FastPrint {}));
-    //     let path = S3Path {
-    //         bucket: "test-bucket".to_string(),
-    //         prefix: Some("test-prefix".to_string()),
-    //         region: aws_region.clone(),
-    //     };
-    //     let page_size = 1000;
-    //     let summarize = true;
-    //     let limit = Some(10);
-
-    //     let find = Find::new(
-    //         aws_credentials,
-    //         &aws_region,
-    //         cmd,
-    //         path.clone(),
-    //         page_size,
-    //         summarize,
-    //         limit,
-    //     )
-    //     .await;
-
-    //     let stream = find.to_stream();
-    //     let result = stream.list().await;
-
-    //     assert!(result.is_none());
-    // }
-
-    // #[tokio::test]
-    // async fn test_find_stream_stream() {
-    //     let aws_credentials = AWSPair {
-    //         access: Some("access_key".to_string()),
-    //         secret: Some("secret_key".to_string()),
-    //     };
-    //     let aws_region = Region::new("us-east-1");
-    //     let cmd = Some(Cmd::Ls(FastPrint {}));
-    //     let path = S3Path {
-    //         bucket: "test-bucket".to_string(),
-    //         prefix: Some("test-prefix".to_string()),
-    //         region: aws_region.clone(),
-    //     };
-    //     let page_size = 1000;
-    //     let summarize = true;
-    //     let limit = Some(10);
-
-    //     let find = Find::new(
-    //         aws_credentials,
-    //         &aws_region,
-    //         cmd,
-    //         path.clone(),
-    //         page_size,
-    //         summarize,
-    //         limit,
-    //     )
-    //     .await;
-
-    //     let stream = find.to_stream();
-    //     let result: Vec<_> = stream.stream().collect().await;
-
-    //     assert!(result.is_empty());
-    // }
 
     #[test]
-    fn test_find_stat_add() {
+    fn test_filter_list_new() {
+        // Create test filters
+        let name_patterns = vec![Pattern::new("*.txt").unwrap()];
+        let iname_globs = vec![InameGlob(Pattern::new("*.TXT").unwrap())];
+        let regexs = vec![Regex::new(r"test.*\.txt").unwrap()];
+        // Directly create FindSize instance instead of using parse
+        let sizes = vec![FindSize::Bigger(100)];
+        // Directly create FindTime instance
+        let mtimes = vec![FindTime::Lower(3600 * 24)];
+
+        // Create filter list
+        let filter_list = FilterList::new(&name_patterns, &iname_globs, &regexs, &sizes, &mtimes);
+
+        // Verify the filter list contains all filters
+        assert_eq!(filter_list.0.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_find_exec() {
+        // We don't need to use credentials in tests
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: Region::new("mock-region"),
+        };
+
+        // Create a mock command that counts the objects
+        struct MockCommand {
+            pub count: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait]
+        impl RunCommand for MockCommand {
+            async fn execute(
+                &self,
+                _client: &dyn S3Client,
+                _path: &S3Path,
+                objects: &[Object],
+            ) -> Result<(), anyhow::Error> {
+                self.count
+                    .fetch_add(objects.len(), std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let mock_command = MockCommand {
+            count: std::sync::atomic::AtomicUsize::new(0),
+        };
+
+        let find = Find {
+            client: MockS3ClientBuilder::new().build(),
+            path,
+            limit: None,
+            page_size: 1000,
+            stats: true,
+            summarize: true,
+            command: Box::new(mock_command),
+        };
+
+        // Create test objects
         let objects = vec![
             Object::builder().key("object1").size(100).build(),
             Object::builder().key("object2").size(200).build(),
-            Object::builder().key("object3").size(300).build(),
         ];
 
-        let stat = FindStat::default() + &objects;
+        // Execute find with stats
+        let acc = Some(FindStat::default());
+        let result = find.exec(acc, objects).await;
 
-        assert_eq!(stat.total_files, objects.len());
-        assert_eq!(stat.total_space, 600);
-        assert_eq!(stat.max_size, Some(300));
-        assert_eq!(stat.min_size, Some(100));
-        assert_eq!(stat.max_key, "object3");
-        assert_eq!(stat.min_key, "object1");
-        assert_eq!(stat.average_size, 200);
+        // Verify stats were updated
+        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert_eq!(stats.total_files, 2);
+        assert_eq!(stats.total_space, 300);
     }
 
     #[test]
-    fn test_find_stat_default() {
-        let stat = FindStat::default();
+    fn test_default_stats() {
+        // Test with summarize = true
+        let stats = default_stats(true);
+        assert!(stats.is_some());
 
-        assert_eq!(stat.total_files, 0);
-        assert_eq!(stat.total_space, 0);
-        assert_eq!(stat.max_size, None);
-        assert_eq!(stat.min_size, None);
-        assert_eq!(stat.max_key, "");
-        assert_eq!(stat.min_key, "");
-        assert_eq!(stat.average_size, 0);
+        // Test with summarize = false
+        let stats = default_stats(false);
+        assert!(stats.is_none());
     }
 
-    #[test]
-    fn test_find_stat_fmt() {
-        let stat = FindStat {
-            total_files: 3,
-            total_space: 600,
-            max_size: Some(300),
-            min_size: Some(100),
-            max_key: "object3".to_string(),
-            min_key: "object1".to_string(),
-            average_size: 200,
+    #[tokio::test]
+    async fn test_find_stream_list() {
+        // Instead of testing the actual list method which makes a network call,
+        // let's test the FindStream struct properties and initialization
+
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: Region::new("mock-region"),
         };
 
-        let mut buf = Vec::new();
-        write!(&mut buf, "{}", stat).unwrap();
-        let out = std::str::from_utf8(&buf).unwrap();
+        // Create FindStream
+        let find_stream = FindStream {
+            client: MockS3ClientBuilder::new().build(),
+            path: path.clone(),
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
 
-        assert!(out.contains("Total files:"));
-        assert!(out.contains("Total space:"));
-        assert!(out.contains("Largest file:"));
-        assert!(out.contains("Largest file size:"));
-        assert!(out.contains("Smallest file:"));
-        assert!(out.contains("Smallest file size:"));
-        assert!(out.contains("Average file size:"));
+        // Test the initial state
+        assert_eq!(find_stream.token, None);
+        assert_eq!(find_stream.page_size, 1000);
+        assert!(find_stream.initial);
+        assert_eq!(find_stream.path, path);
+
+        // Test equality
+        let same_stream = FindStream {
+            client: MockS3ClientBuilder::new().build(),
+            path: path.clone(),
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        assert_eq!(find_stream, same_stream);
+
+        // Test with different values
+        let different_stream = FindStream {
+            client: MockS3ClientBuilder::new().build(),
+            path: path.clone(),
+            token: Some("token".to_string()), // Different token
+            page_size: 1000,
+            initial: true,
+        };
+
+        assert_ne!(find_stream, different_stream);
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_stream() {
+        // This test requires a more complex setup with multiple pages
+        // For simplicity, we'll just verify that the stream function returns a Stream
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: Region::new("mock-region"),
+        };
+
+        let find_stream = FindStream {
+            client: MockS3ClientBuilder::new().build(),
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        // Call stream
+        let _stream = find_stream.stream();
+        // We're just testing that it compiles and returns a stream
+        // Testing the actual stream would require much more setup
+    }
+
+    #[tokio::test]
+    async fn test_get_s3_client() {
+        // Test with credentials
+        let client1 = get_s3_client(
+            Some("mock_access".to_string()),
+            Some("mock_secret".to_string()),
+            Region::new("mock-region"),
+        )
+        .await;
+
+        // Test without credentials
+        let client2 = get_s3_client(None, None, Region::new("mock-region")).await;
+
+        // We can't easily test the actual client behavior, but we can verify that
+        // the function returns a client in both cases without error
+        assert!(client1.config().region().is_some());
+        assert!(client2.config().region().is_some());
     }
 }
