@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use aws_smithy_types::date_time::Format;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use aws_sdk_s3::types::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
 use aws_sdk_s3::Client;
+use aws_sdk_s3::types::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
 
 use crate::arg::*;
 use crate::error::*;
@@ -115,7 +115,7 @@ impl Exec {
         let split: Vec<_> = command_str.split(' ').collect();
 
         let (command_name, command_args) = match &*split {
-            [command_name, ref command_args @ ..] => (*command_name, command_args),
+            [command_name, command_args @ ..] => (*command_name, command_args),
             _ => return Err(FunctionError::CommandlineParse.into()),
         };
 
