@@ -22,7 +22,7 @@ exclude = [
     ".travis.yml",
     "ci/*",
 ]
-edition = "2018"
+edition = "2024"
 
 [[bin]]
 name = "s3find"

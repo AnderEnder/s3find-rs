@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::process::exit;
 
 use clap::CommandFactory;
-use clap_complete::aot::{generate, Shell};
+use clap_complete::aot::{Shell, generate};
 
 include!("src/arg.rs");
 

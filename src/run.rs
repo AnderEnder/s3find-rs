@@ -1,7 +1,7 @@
 use aws_sdk_s3::types::Object;
+use futures::Future;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
-use futures::Future;
 
 use crate::command::FindStat;
 
