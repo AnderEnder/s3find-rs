@@ -684,7 +684,7 @@ mod tests {
 
         let different_stream = FindStream {
             client,
-            path: path.clone(),
+            path,
             token: Some("token".to_string()),
             page_size: 1000,
             initial: true,
@@ -718,5 +718,179 @@ mod tests {
         };
 
         let _stream = find_stream.stream();
+    }
+
+    #[test]
+    fn test_find_stream_debug() {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix/".to_string()),
+            region: Region::new("us-west-2"),
+        };
+
+        let config = aws_sdk_s3::Config::builder()
+            .region(Region::new("us-west-2"))
+            .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+            .behavior_version(BehaviorVersion::v2025_01_17())
+            .build();
+
+        let find_stream = FindStream {
+            client: Client::from_conf(config),
+            path: path.clone(),
+            token: Some("test-token".to_string()),
+            page_size: 1000,
+            initial: true,
+        };
+
+        let debug_str = format!("{:?}", find_stream);
+
+        assert!(debug_str.contains("FindStream {"));
+        assert!(debug_str.contains(&format!("path: {:?}", path)));
+        assert!(debug_str.contains("token: Some(\"test-token\")"));
+        assert!(debug_str.contains("page_size: 1000"));
+        assert!(debug_str.contains("initial: true"));
+    }
+
+    #[tokio::test]
+    async fn test_find_new() {
+        let aws_credentials = AWSPair {
+            access: Some("test-access".to_string()),
+            secret: Some("test-secret".to_string()),
+        };
+
+        let region = Region::new("test-region");
+
+        let cmd: Option<Cmd> = None;
+
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix/".to_string()),
+            region: region.clone(),
+        };
+
+        let page_size: i64 = 500;
+        let summarize = true;
+        let limit = Some(100);
+
+        let find = Find::new(
+            aws_credentials,
+            &region,
+            cmd,
+            path.clone(),
+            page_size,
+            summarize,
+            limit,
+        )
+        .await;
+
+        assert_eq!(find.path.bucket, "test-bucket");
+        assert_eq!(find.path.prefix, Some("test-prefix/".to_string()));
+        assert_eq!(find.page_size, page_size);
+        assert_eq!(find.summarize, summarize);
+        assert_eq!(find.stats, summarize);
+        assert_eq!(find.limit, limit);
+
+        let find2 = Find::new(
+            AWSPair {
+                access: None,
+                secret: None,
+            },
+            &region,
+            Some(Cmd::default()),
+            path,
+            1000,
+            false,
+            None,
+        )
+        .await;
+
+        assert!(!find2.summarize);
+        assert!(!find2.stats);
+        assert_eq!(find2.page_size, 1000);
+        assert_eq!(find2.limit, None);
+    }
+
+    #[test]
+    fn test_find_to_stream() {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: Region::new("mock-region"),
+        };
+
+        let config = aws_sdk_s3::Config::builder()
+            .region(Region::new("mock-region"))
+            .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+            .behavior_version(BehaviorVersion::v2025_01_17())
+            .build();
+
+        let client = Client::from_conf(config);
+        let command = Box::new(DoNothing {});
+        let page_size = 1000;
+
+        let find = Find {
+            client,
+            path: path.clone(),
+            limit: None,
+            page_size,
+            stats: true,
+            summarize: true,
+            command,
+        };
+
+        let stream = find.to_stream();
+
+        assert_eq!(stream.path, path);
+        assert_eq!(stream.token, None);
+        assert_eq!(stream.page_size, page_size);
+        assert!(stream.initial);
+    }
+
+    #[tokio::test]
+    async fn test_find_from_opts() {
+        let bucket = "test-bucket".to_string();
+        let region = Region::new("test-region");
+        let path = S3Path {
+            bucket: bucket.clone(),
+            prefix: Some("test-prefix/".to_string()),
+            region: region.clone(),
+        };
+
+        let name_patterns = vec![Pattern::new("*.txt").unwrap()];
+        let iname_globs = vec![InameGlob(Pattern::new("*.TXT").unwrap())];
+        let regexes = vec![Regex::new(r"test.*\.txt").unwrap()];
+        let sizes = vec![FindSize::Bigger(100)];
+        let mtimes = vec![FindTime::Lower(3600 * 24)];
+
+        let page_size = 500;
+        let summarize = true;
+        let limit = Some(100);
+
+        let opts = FindOpt {
+            aws_access_key: Some("test-access".to_string()),
+            aws_secret_key: Some("test-secret".to_string()),
+            aws_region: region.clone(),
+            path: path.clone(),
+            cmd: None,
+            page_size,
+            summarize,
+            limit,
+            name: name_patterns,
+            iname: iname_globs,
+            regex: regexes,
+            size: sizes,
+            mtime: mtimes,
+        };
+
+        let (find, filters) = Find::from_opts(&opts).await;
+
+        assert_eq!(find.path.bucket, bucket);
+        assert_eq!(find.path.region, region);
+        assert_eq!(find.page_size, page_size);
+        assert_eq!(find.summarize, summarize);
+        assert_eq!(find.stats, summarize);
+        assert_eq!(find.limit, limit);
+
+        assert_eq!(filters.0.len(), 5);
     }
 }

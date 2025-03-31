@@ -1,9 +1,7 @@
 # s3find
 [![build status](https://github.com/AnderEnder/s3find-rs/workflows/Build/badge.svg)](https://github.com/AnderEnder/s3find-rs/actions)
-[![freebsd build status](https://api.cirrus-ci.com/github/AnderEnder/s3find-rs.svg)](https://cirrus-ci.com/github/AnderEnder/s3find-rs/>)
 [![codecov](https://codecov.io/gh/AnderEnder/s3find-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/AnderEnder/s3find-rs)
 [![crates.io](https://img.shields.io/crates/v/s3find.svg)](https://crates.io/crates/s3find)
-[![docker image](https://img.shields.io/docker/cloud/build/anderender/s3find.svg)](https://hub.docker.com/r/anderender/s3find)
 
 
 A command line utility to walk an Amazon S3 hierarchy. An analog of find for Amazon S3.
@@ -17,13 +15,6 @@ Github Release page provides binaries for:
 * Windows
 * Linux
 * macOS
-
-### Docker
-
-Docker image on docker hub:
-
-* develop: `anderender/s3find:latest`
-* release: `anderender/s3find:<version>`
 
 ## Usage
 
