@@ -468,4 +468,133 @@ mod tests {
             "should be able to add filters to default list"
         );
     }
+
+    #[test]
+    fn test_find_stat_display() {
+        let find_stat = FindStat {
+            total_files: 42,
+            total_space: 1234567890,
+            max_size: Some(987654321),
+            min_size: Some(123),
+            max_key: "largest-file.txt".to_owned(),
+            min_key: "smallest-file.txt".to_owned(),
+            average_size: 29394474,
+        };
+
+        let display_output = find_stat.to_string();
+
+        assert!(display_output.contains("Summary"), "Missing Summary header");
+        assert!(
+            display_output.contains("Total files:        42"),
+            "Incorrect total files count"
+        );
+        assert!(
+            display_output.contains("Total space:"),
+            "Missing total space"
+        );
+        assert!(
+            display_output.contains("Largest file:       largest-file.txt"),
+            "Incorrect largest file name"
+        );
+        assert!(
+            display_output.contains("Largest file size:"),
+            "Missing largest file size"
+        );
+        assert!(
+            display_output.contains("Smallest file:      smallest-file.txt"),
+            "Incorrect smallest file name"
+        );
+        assert!(
+            display_output.contains("Smallest file size:"),
+            "Missing smallest file size"
+        );
+        assert!(
+            display_output.contains("Average file size:"),
+            "Missing average file size"
+        );
+
+        assert!(
+            display_output.contains("GiB"),
+            "Expected binary size format (MiB/GiB)"
+        );
+    }
+
+    #[test]
+    fn test_find_stat_add() {
+        let mut stat = FindStat::default();
+
+        let objects = vec![
+            Object::builder().key("file1.txt").size(100).build(),
+            Object::builder().key("file2.txt").size(200).build(),
+            Object::builder().key("file3.txt").size(50).build(),
+        ];
+
+        stat = stat + &objects;
+
+        assert_eq!(stat.total_files, 3, "Total files count incorrect");
+        assert_eq!(stat.total_space, 350, "Total space incorrect");
+        assert_eq!(stat.max_size, Some(200), "Max size incorrect");
+        assert_eq!(stat.max_key, "file2.txt", "Max key incorrect");
+        assert_eq!(stat.min_size, Some(50), "Min size incorrect");
+        assert_eq!(stat.min_key, "file3.txt", "Min key incorrect");
+        assert_eq!(stat.average_size, 116, "Average size incorrect");
+
+        let more_objects = vec![
+            Object::builder().key("file4.txt").size(500).build(),
+            Object::builder().key("file5.txt").size(10).build(),
+        ];
+
+        stat = stat + &more_objects;
+
+        assert_eq!(
+            stat.total_files, 5,
+            "Total files count incorrect after second add"
+        );
+        assert_eq!(
+            stat.total_space, 860,
+            "Total space incorrect after second add"
+        );
+        assert_eq!(
+            stat.max_size,
+            Some(500),
+            "Max size incorrect after second add"
+        );
+        assert_eq!(
+            stat.max_key, "file4.txt",
+            "Max key incorrect after second add"
+        );
+        assert_eq!(
+            stat.min_size,
+            Some(10),
+            "Min size incorrect after second add"
+        );
+        assert_eq!(
+            stat.min_key, "file5.txt",
+            "Min key incorrect after second add"
+        );
+        assert_eq!(
+            stat.average_size, 172,
+            "Average size incorrect after second add"
+        );
+
+        let object_without_size = vec![Object::builder().key("no-size.txt").build()];
+
+        let before_total_space = stat.total_space;
+        stat = stat + &object_without_size;
+
+        assert_eq!(
+            stat.total_files, 6,
+            "Total files should increase even for objects with no size"
+        );
+        assert_eq!(
+            stat.total_space, before_total_space,
+            "Total space shouldn't change for object with no size"
+        );
+
+        let empty_list: Vec<Object> = vec![];
+        let before = stat.clone();
+        stat = stat + &empty_list;
+
+        assert_eq!(stat, before, "Adding empty list should not change stats");
+    }
 }
