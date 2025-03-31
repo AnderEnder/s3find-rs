@@ -673,10 +673,11 @@ mod tests {
                 .build(),
         );
 
-        let cmd = Download {
+        let cmd = Cmd::Download(Download {
             destination: temp_path.clone(),
             force: true,
-        };
+        })
+        .downcast();
 
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -755,7 +756,7 @@ mod tests {
                 .build(),
         );
 
-        let cmd = SetPublic {};
+        let cmd = Cmd::Public(SetPublic {}).downcast();
 
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -828,7 +829,7 @@ mod tests {
                 .build(),
         );
 
-        let cmd = MultipleDelete {};
+        let cmd = Cmd::Delete(MultipleDelete {}).downcast();
 
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -912,7 +913,7 @@ mod tests {
             },
         ];
 
-        let cmd = SetTags { tags };
+        let cmd = Cmd::Tags(SetTags { tags }).downcast();
 
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -1011,7 +1012,7 @@ mod tests {
                 .build(),
         );
 
-        let cmd = ListTags {};
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
 
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -1106,10 +1107,11 @@ mod tests {
             region: Region::from_static("us-east-1"),
         };
 
-        let cmd = S3Copy {
+        let cmd = Cmd::Copy(S3Copy {
             destination,
             flat: true,
-        };
+        })
+        .downcast();
 
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -1230,10 +1232,11 @@ mod tests {
             region: Region::from_static("us-east-1"),
         };
 
-        let cmd = S3Move {
+        let cmd = Cmd::Move(S3Move {
             destination,
             flat: true,
-        };
+        })
+        .downcast();
 
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
