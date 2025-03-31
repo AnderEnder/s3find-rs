@@ -26,13 +26,3 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           RUST_LOG: trace
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-      - name: build
-        run: |
-          docker run --rm -t \
-            -v "$(pwd)":/volume \
-            clux/muslrust:stable cargo build
