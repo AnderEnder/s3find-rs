@@ -5,10 +5,9 @@ use aws_config::BehaviorVersion;
 use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::types::Object;
 use futures::Stream;
-use glob::Pattern;
 use humansize::*;
-use regex::Regex;
 
 use crate::arg::*;
 use crate::filter::Filter;
@@ -22,7 +21,7 @@ pub struct AWSPair {
 pub struct FilterList<'a>(pub Vec<&'a dyn Filter>);
 
 impl<'a> FilterList<'a> {
-    pub async fn test_match(&self, object: aws_sdk_s3::types::Object) -> bool {
+    pub async fn test_match(&self, object: Object) -> bool {
         for item in &self.0 {
             if !item.filter(&object) {
                 return false;
@@ -32,36 +31,28 @@ impl<'a> FilterList<'a> {
         true
     }
 
-    pub fn new(
-        name: &'a [Pattern],
-        iname: &'a [InameGlob],
-        regex: &'a [Regex],
-        size: &'a [FindSize],
-        mtime: &'a [FindTime],
-    ) -> FilterList<'a> {
-        let mut list: Vec<&dyn Filter> = Vec::new();
+    #[inline]
+    pub fn add_filter(mut self, filter: &'a dyn Filter) -> Self {
+        self.0.push(filter);
+        self
+    }
 
-        for filter in name {
-            list.push(filter);
+    #[inline]
+    pub fn add_filters<F: Filter>(mut self, filters: &'a [F]) -> Self {
+        for filter in filters {
+            self.0.push(filter);
         }
+        self
+    }
 
-        for filter in iname {
-            list.push(filter);
-        }
+    pub fn new() -> FilterList<'a> {
+        FilterList(Vec::new())
+    }
+}
 
-        for filter in regex {
-            list.push(filter);
-        }
-
-        for filter in size {
-            list.push(filter);
-        }
-
-        for filter in mtime {
-            list.push(filter);
-        }
-
-        FilterList(list)
+impl Default for FilterList<'_> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -104,11 +95,7 @@ impl Find {
         }
     }
 
-    pub async fn exec(
-        &self,
-        acc: Option<FindStat>,
-        list: Vec<aws_sdk_s3::types::Object>,
-    ) -> Option<FindStat> {
+    pub async fn exec(&self, acc: Option<FindStat>, list: Vec<Object>) -> Option<FindStat> {
         let status = acc.map(|stat| stat + &list);
 
         self.command
@@ -165,7 +152,12 @@ impl Find {
         )
         .await;
 
-        let filters = FilterList::new(name, iname, regex, size, mtime);
+        let filters = FilterList::new()
+            .add_filters(name)
+            .add_filters(iname)
+            .add_filters(mtime)
+            .add_filters(regex)
+            .add_filters(size);
 
         (find, filters)
     }
@@ -188,7 +180,7 @@ pub struct FindStream {
 }
 
 impl FindStream {
-    async fn list(mut self) -> Option<(Vec<aws_sdk_s3::types::Object>, Self)> {
+    async fn list(mut self) -> Option<(Vec<Object>, Self)> {
         if !self.initial && self.token.is_none() {
             return None;
         }
@@ -210,7 +202,7 @@ impl FindStream {
         objects.map(|x| (x, self))
     }
 
-    pub fn stream(self) -> impl Stream<Item = Vec<aws_sdk_s3::types::Object>> {
+    pub fn stream(self) -> impl Stream<Item = Vec<Object>> {
         futures::stream::unfold(self, |s| async { s.list().await })
     }
 }
@@ -316,11 +308,11 @@ pub struct FindStat {
     pub average_size: i64,
 }
 
-impl Add<&[aws_sdk_s3::types::Object]> for FindStat {
+impl Add<&[Object]> for FindStat {
     type Output = FindStat;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add(mut self: FindStat, list: &[aws_sdk_s3::types::Object]) -> Self {
+    fn add(mut self: FindStat, list: &[Object]) -> Self {
         for x in list {
             self.total_files += 1;
             let size = x.size;
@@ -373,7 +365,8 @@ impl Default for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_sdk_s3::types::Object;
+    use glob::Pattern;
+    use regex::Regex;
 
     #[tokio::test]
     async fn test_filter_list_test_match() {
@@ -394,14 +387,20 @@ mod tests {
         }
 
         let true_filter = AlwaysTrueFilter;
-        let filter_list = FilterList(vec![&true_filter, &true_filter]);
+        let filter_list = FilterList::new()
+            .add_filter(&true_filter)
+            .add_filter(&true_filter);
+
         assert!(
             filter_list.test_match(object.clone()).await,
             "all true filters failed"
         );
 
         let false_filter = AlwaysFalseFilter;
-        let filter_list = FilterList(vec![&true_filter, &false_filter]);
+        let filter_list = FilterList::new()
+            .add_filter(&true_filter)
+            .add_filter(&false_filter);
+
         assert!(
             !filter_list.test_match(object.clone()).await,
             "one false filter failed"
@@ -416,7 +415,12 @@ mod tests {
         let sizes = vec![FindSize::Bigger(100)];
         let mtimes = vec![FindTime::Lower(3600 * 24)];
 
-        let filter_list = FilterList::new(&name_patterns, &iname_globs, &regexs, &sizes, &mtimes);
+        let filter_list = FilterList::new()
+            .add_filters(&name_patterns)
+            .add_filters(&iname_globs)
+            .add_filters(&regexs)
+            .add_filters(&sizes)
+            .add_filters(&mtimes);
 
         assert_eq!(filter_list.0.len(), 5, "it should contains 5 filters");
     }
@@ -443,5 +447,25 @@ mod tests {
 
         assert!(client_with_creds.config().region().is_some());
         assert!(client_without_creds.config().region().is_some());
+    }
+
+    #[test]
+    fn test_filter_list_default() {
+        let filter_list = FilterList::default();
+
+        assert_eq!(
+            filter_list.0.len(),
+            0,
+            "default filter list should be empty"
+        );
+
+        let test_filter = Pattern::new("*.txt").unwrap();
+        let filter_list = filter_list.add_filter(&test_filter);
+
+        assert_eq!(
+            filter_list.0.len(),
+            1,
+            "should be able to add filters to default list"
+        );
     }
 }
