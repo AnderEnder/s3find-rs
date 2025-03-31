@@ -369,3 +369,79 @@ impl Default for FindStat {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_s3::types::Object;
+
+    #[tokio::test]
+    async fn test_filter_list_test_match() {
+        let object = Object::builder().key("test-object.txt").size(100).build();
+
+        struct AlwaysTrueFilter;
+        impl Filter for AlwaysTrueFilter {
+            fn filter(&self, _: &Object) -> bool {
+                true
+            }
+        }
+
+        struct AlwaysFalseFilter;
+        impl Filter for AlwaysFalseFilter {
+            fn filter(&self, _: &Object) -> bool {
+                false
+            }
+        }
+
+        let true_filter = AlwaysTrueFilter;
+        let filter_list = FilterList(vec![&true_filter, &true_filter]);
+        assert!(
+            filter_list.test_match(object.clone()).await,
+            "all true filters failed"
+        );
+
+        let false_filter = AlwaysFalseFilter;
+        let filter_list = FilterList(vec![&true_filter, &false_filter]);
+        assert!(
+            !filter_list.test_match(object.clone()).await,
+            "one false filter failed"
+        );
+    }
+
+    #[test]
+    fn test_filter_list_new() {
+        let name_patterns = vec![Pattern::new("*.txt").unwrap()];
+        let iname_globs = vec![InameGlob(Pattern::new("*.TXT").unwrap())];
+        let regexs = vec![Regex::new(r"test.*\.txt").unwrap()];
+        let sizes = vec![FindSize::Bigger(100)];
+        let mtimes = vec![FindTime::Lower(3600 * 24)];
+
+        let filter_list = FilterList::new(&name_patterns, &iname_globs, &regexs, &sizes, &mtimes);
+
+        assert_eq!(filter_list.0.len(), 5, "it should contains 5 filters");
+    }
+
+    #[test]
+    fn test_default_stats() {
+        let stats = default_stats(true);
+        assert!(stats.is_some());
+
+        let stats = default_stats(false);
+        assert!(stats.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_s3_client() {
+        let client_with_creds = get_s3_client(
+            Some("mock_access".to_string()),
+            Some("mock_secret".to_string()),
+            Region::new("mock-region"),
+        )
+        .await;
+
+        let client_without_creds = get_s3_client(None, None, Region::new("mock-region")).await;
+
+        assert!(client_with_creds.config().region().is_some());
+        assert!(client_without_creds.config().region().is_some());
+    }
+}
