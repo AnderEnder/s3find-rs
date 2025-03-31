@@ -418,8 +418,13 @@ mod tests {
     use super::*;
     use aws_config::BehaviorVersion;
     use aws_sdk_s3::{primitives::DateTime, types::ObjectStorageClass};
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_types::body::SdkBody;
     use aws_smithy_types::date_time::Format;
     use aws_types::region::Region;
+    use http::{HeaderValue, StatusCode};
+    use std::path::PathBuf;
+    use tempfile::tempdir;
 
     #[test]
     fn test_advanced_print_object() -> Result<(), Error> {
@@ -611,5 +616,633 @@ mod tests {
             &generate_s3_url("eu-west-1", "test-bucket", "somepath/somekey"),
             "https://test-bucket.s3-eu-west-1.amazonaws.com/somepath/somekey",
         );
+    }
+
+    fn make_s3_test_credentials() -> aws_sdk_s3::config::Credentials {
+        aws_sdk_s3::config::Credentials::new(
+            "ATESTCLIENT",
+            "astestsecretkey",
+            Some("atestsessiontoken".to_string()),
+            None,
+            "",
+        )
+    }
+
+    #[tokio::test]
+    async fn test_download_with_replay_client() -> Result<(), Error> {
+        let temp_dir = tempdir()?;
+        let temp_path = temp_dir.path().to_string_lossy().to_string();
+
+        let key = "test/file.txt";
+        let object = Object::builder()
+            .e_tag("test-etag")
+            .key(key)
+            .size(14) // Size of "Test content\n"
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let content = "Test content\n";
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/test/file.txt")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("text/plain"))
+            .header("ETag", HeaderValue::from_static("\"test-etag\""))
+            .header("Content-Length", HeaderValue::from_static("13"))
+            .body(SdkBody::from(content))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Download {
+            destination: temp_path.clone(),
+            force: true,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object]).await?;
+
+        let file_path = PathBuf::from(temp_path).join(key);
+        assert!(file_path.exists(), "Downloaded file should exist");
+
+        let downloaded_content = fs::read_to_string(&file_path)?;
+        assert_eq!(downloaded_content, "Test content\n");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_public_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/file1.txt";
+        let key2 = "test/file2.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key(key2)
+            .size(200)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req1 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt?acl")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let req2 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt?acl")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = SetPublic {};
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/file1.txt";
+        let key2 = "test/file2.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key(key2)
+            .size(200)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/?delete")
+            .body(SdkBody::empty()) // In a real request this would contain XML with keys to delete
+            .unwrap();
+
+        let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Deleted>
+                <Key>test/file1.txt</Key>
+            </Deleted>
+            <Deleted>
+                <Key>test/file2.txt</Key>
+            </Deleted>
+        </DeleteResult>"#;
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = MultipleDelete {};
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_tags_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/file1.txt";
+        let key2 = "test/file2.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key(key2)
+            .size(200)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req1 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt?tagging")
+            .body(SdkBody::empty()) // In a real request this would contain XML with tags
+            .unwrap();
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let req2 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt?tagging")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let tags = vec![
+            FindTag {
+                key: "tag1".to_owned(),
+                value: "value1".to_owned(),
+            },
+            FindTag {
+                key: "tag2".to_owned(),
+                value: "value2".to_owned(),
+            },
+        ];
+
+        let cmd = SetTags { tags };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_tags_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/file1.txt";
+        let key2 = "test/file2.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key(key2)
+            .size(200)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req1 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt?tagging")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <TagSet>
+                <Tag>
+                    <Key>key1</Key>
+                    <Value>value1</Value>
+                </Tag>
+                <Tag>
+                    <Key>key2</Key>
+                    <Value>value2</Value>
+                </Tag>
+            </TagSet>
+        </Tagging>"#;
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body1))
+            .unwrap();
+
+        let req2 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt?tagging")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body2 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <TagSet>
+                <Tag>
+                    <Key>category</Key>
+                    <Value>documents</Value>
+                </Tag>
+            </TagSet>
+        </Tagging>"#;
+
+        let resp2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body2))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = ListTags {};
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/file1.txt";
+        let key2 = "test/file2.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key(key2)
+            .size(200)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req1 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/dest/file1.txt")
+            .header("x-amz-copy-source", "test-bucket/test/file1.txt")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <LastModified>2023-01-02T00:00:00Z</LastModified>
+            <ETag>"new-etag-1"</ETag>
+        </CopyObjectResult>"#;
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body1))
+            .unwrap();
+
+        let req2 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/dest/file2.txt")
+            .header("x-amz-copy-source", "test-bucket/test/file2.txt")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body2 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <LastModified>2023-01-02T00:00:00Z</LastModified>
+            <ETag>"new-etag-2"</ETag>
+        </CopyObjectResult>"#;
+
+        let resp2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body2))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let destination = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: Some("dest/".to_owned()),
+            region: Region::from_static("us-east-1"),
+        };
+
+        let cmd = S3Copy {
+            destination,
+            flat: true,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_s3_move_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/file1.txt";
+        let key2 = "test/file2.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key(key2)
+            .size(200)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req_copy1 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/dest/file1.txt")
+            .header("x-amz-copy-source", "test-bucket/test/file1.txt")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_copy_body1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <LastModified>2023-01-02T00:00:00Z</LastModified>
+            <ETag>"new-etag-1"</ETag>
+        </CopyObjectResult>"#;
+
+        let resp_copy1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_copy_body1))
+            .unwrap();
+
+        let req_copy2 = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/dest/file2.txt")
+            .header("x-amz-copy-source", "test-bucket/test/file2.txt")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_copy_body2 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <LastModified>2023-01-02T00:00:00Z</LastModified>
+            <ETag>"new-etag-2"</ETag>
+        </CopyObjectResult>"#;
+
+        let resp_copy2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_copy_body2))
+            .unwrap();
+
+        let req_delete = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/?delete")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_delete_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Deleted>
+                <Key>test/file1.txt</Key>
+            </Deleted>
+            <Deleted>
+                <Key>test/file2.txt</Key>
+            </Deleted>
+        </DeleteResult>"#;
+
+        let resp_delete = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_delete_body))
+            .unwrap();
+
+        let events = vec![
+            ReplayEvent::new(req_copy1, resp_copy1),
+            ReplayEvent::new(req_copy2, resp_copy2),
+            ReplayEvent::new(req_delete, resp_delete),
+        ];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let destination = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: Some("dest/".to_owned()),
+            region: Region::from_static("us-east-1"),
+        };
+
+        let cmd = S3Move {
+            destination,
+            flat: true,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
     }
 }

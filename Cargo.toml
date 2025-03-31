@@ -9,19 +9,10 @@ s3find is an analog of find for Amazon S3.
 documentation = "https://github.com/AnderEnder/s3find-rs"
 homepage = "https://github.com/AnderEnder/s3find-rs"
 repository = "https://github.com/AnderEnder/s3find-rs"
-keywords = [
-    "find",
-    "aws",
-    "s3",
-    "pattern",
-    "regex",
-]
+keywords = ["find", "aws", "s3", "pattern", "regex"]
 categories = ["command-line-utilities"]
 license = "BSD-2-Clause"
-exclude = [
-    ".travis.yml",
-    "ci/*",
-]
+exclude = [".travis.yml", "ci/*"]
 edition = "2024"
 
 [[bin]]
@@ -29,7 +20,7 @@ name = "s3find"
 path = "src/bin/s3find.rs"
 
 [badges]
-travis-ci = { repository = "AnderEnder/s3find-rs"}
+travis-ci = { repository = "AnderEnder/s3find-rs" }
 codecov = { repository = "AnderEnder/s3find-rs" }
 
 [dependencies]
@@ -42,7 +33,7 @@ futures = "0.3"
 indicatif = "0.17"
 humansize = "2"
 itertools = "0.14"
-tokio = { version = "1", features=["full"] }
+tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 aws-types = "1.3"
 aws-config = "1.6.1"
@@ -52,10 +43,12 @@ aws-smithy-types = "1.2"
 [dependencies.clap]
 version = "4"
 default-features = false
-features = [ "suggestions", "color", "derive", "std", "usage", "help", "env" ]
+features = ["suggestions", "color", "derive", "std", "usage", "help", "env"]
 
 [dev-dependencies]
+aws-smithy-runtime = { version = "1.8.1", features = ["test-util"] }
 tempfile = "3"
+http = "1"
 
 [build-dependencies]
 version_check = "0.9"
@@ -69,7 +62,7 @@ clap_complete = "4"
 [build-dependencies.clap]
 version = "4"
 default-features = false
-features = [ "suggestions", "color", "derive", "std", "usage", "help", "env" ]
+features = ["suggestions", "color", "derive", "std", "usage", "help", "env"]
 
 [profile.release]
 lto = "fat"
