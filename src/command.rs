@@ -5,10 +5,9 @@ use aws_config::BehaviorVersion;
 use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::types::Object;
 use futures::Stream;
-use glob::Pattern;
 use humansize::*;
-use regex::Regex;
 
 use crate::arg::*;
 use crate::filter::Filter;
@@ -22,7 +21,7 @@ pub struct AWSPair {
 pub struct FilterList<'a>(pub Vec<&'a dyn Filter>);
 
 impl<'a> FilterList<'a> {
-    pub async fn test_match(&self, object: aws_sdk_s3::types::Object) -> bool {
+    pub async fn test_match(&self, object: Object) -> bool {
         for item in &self.0 {
             if !item.filter(&object) {
                 return false;
@@ -32,36 +31,28 @@ impl<'a> FilterList<'a> {
         true
     }
 
-    pub fn new(
-        name: &'a [Pattern],
-        iname: &'a [InameGlob],
-        regex: &'a [Regex],
-        size: &'a [FindSize],
-        mtime: &'a [FindTime],
-    ) -> FilterList<'a> {
-        let mut list: Vec<&dyn Filter> = Vec::new();
+    #[inline]
+    pub fn add_filter(mut self, filter: &'a dyn Filter) -> Self {
+        self.0.push(filter);
+        self
+    }
 
-        for filter in name {
-            list.push(filter);
+    #[inline]
+    pub fn add_filters<F: Filter>(mut self, filters: &'a [F]) -> Self {
+        for filter in filters {
+            self.0.push(filter);
         }
+        self
+    }
 
-        for filter in iname {
-            list.push(filter);
-        }
+    pub fn new() -> FilterList<'a> {
+        FilterList(Vec::new())
+    }
+}
 
-        for filter in regex {
-            list.push(filter);
-        }
-
-        for filter in size {
-            list.push(filter);
-        }
-
-        for filter in mtime {
-            list.push(filter);
-        }
-
-        FilterList(list)
+impl Default for FilterList<'_> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -104,11 +95,7 @@ impl Find {
         }
     }
 
-    pub async fn exec(
-        &self,
-        acc: Option<FindStat>,
-        list: Vec<aws_sdk_s3::types::Object>,
-    ) -> Option<FindStat> {
+    pub async fn exec(&self, acc: Option<FindStat>, list: Vec<Object>) -> Option<FindStat> {
         let status = acc.map(|stat| stat + &list);
 
         self.command
@@ -165,7 +152,12 @@ impl Find {
         )
         .await;
 
-        let filters = FilterList::new(name, iname, regex, size, mtime);
+        let filters = FilterList::new()
+            .add_filters(name)
+            .add_filters(iname)
+            .add_filters(mtime)
+            .add_filters(regex)
+            .add_filters(size);
 
         (find, filters)
     }
@@ -188,7 +180,7 @@ pub struct FindStream {
 }
 
 impl FindStream {
-    async fn list(mut self) -> Option<(Vec<aws_sdk_s3::types::Object>, Self)> {
+    async fn list(mut self) -> Option<(Vec<Object>, Self)> {
         if !self.initial && self.token.is_none() {
             return None;
         }
@@ -210,7 +202,7 @@ impl FindStream {
         objects.map(|x| (x, self))
     }
 
-    pub fn stream(self) -> impl Stream<Item = Vec<aws_sdk_s3::types::Object>> {
+    pub fn stream(self) -> impl Stream<Item = Vec<Object>> {
         futures::stream::unfold(self, |s| async { s.list().await })
     }
 }
@@ -316,11 +308,11 @@ pub struct FindStat {
     pub average_size: i64,
 }
 
-impl Add<&[aws_sdk_s3::types::Object]> for FindStat {
+impl Add<&[Object]> for FindStat {
     type Output = FindStat;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
-    fn add(mut self: FindStat, list: &[aws_sdk_s3::types::Object]) -> Self {
+    fn add(mut self: FindStat, list: &[Object]) -> Self {
         for x in list {
             self.total_files += 1;
             let size = x.size;
@@ -367,5 +359,242 @@ impl Default for FindStat {
             min_key: "".to_owned(),
             average_size: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glob::Pattern;
+    use regex::Regex;
+
+    #[tokio::test]
+    async fn test_filter_list_test_match() {
+        let object = Object::builder().key("test-object.txt").size(100).build();
+
+        struct AlwaysTrueFilter;
+        impl Filter for AlwaysTrueFilter {
+            fn filter(&self, _: &Object) -> bool {
+                true
+            }
+        }
+
+        struct AlwaysFalseFilter;
+        impl Filter for AlwaysFalseFilter {
+            fn filter(&self, _: &Object) -> bool {
+                false
+            }
+        }
+
+        let true_filter = AlwaysTrueFilter;
+        let filter_list = FilterList::new()
+            .add_filter(&true_filter)
+            .add_filter(&true_filter);
+
+        assert!(
+            filter_list.test_match(object.clone()).await,
+            "all true filters failed"
+        );
+
+        let false_filter = AlwaysFalseFilter;
+        let filter_list = FilterList::new()
+            .add_filter(&true_filter)
+            .add_filter(&false_filter);
+
+        assert!(
+            !filter_list.test_match(object.clone()).await,
+            "one false filter failed"
+        );
+    }
+
+    #[test]
+    fn test_filter_list_new() {
+        let name_patterns = vec![Pattern::new("*.txt").unwrap()];
+        let iname_globs = vec![InameGlob(Pattern::new("*.TXT").unwrap())];
+        let regexs = vec![Regex::new(r"test.*\.txt").unwrap()];
+        let sizes = vec![FindSize::Bigger(100)];
+        let mtimes = vec![FindTime::Lower(3600 * 24)];
+
+        let filter_list = FilterList::new()
+            .add_filters(&name_patterns)
+            .add_filters(&iname_globs)
+            .add_filters(&regexs)
+            .add_filters(&sizes)
+            .add_filters(&mtimes);
+
+        assert_eq!(filter_list.0.len(), 5, "it should contains 5 filters");
+    }
+
+    #[test]
+    fn test_default_stats() {
+        let stats = default_stats(true);
+        assert!(stats.is_some());
+
+        let stats = default_stats(false);
+        assert!(stats.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_s3_client() {
+        let client_with_creds = get_s3_client(
+            Some("mock_access".to_string()),
+            Some("mock_secret".to_string()),
+            Region::new("mock-region"),
+        )
+        .await;
+
+        let client_without_creds = get_s3_client(None, None, Region::new("mock-region")).await;
+
+        assert!(client_with_creds.config().region().is_some());
+        assert!(client_without_creds.config().region().is_some());
+    }
+
+    #[test]
+    fn test_filter_list_default() {
+        let filter_list = FilterList::default();
+
+        assert_eq!(
+            filter_list.0.len(),
+            0,
+            "default filter list should be empty"
+        );
+
+        let test_filter = Pattern::new("*.txt").unwrap();
+        let filter_list = filter_list.add_filter(&test_filter);
+
+        assert_eq!(
+            filter_list.0.len(),
+            1,
+            "should be able to add filters to default list"
+        );
+    }
+
+    #[test]
+    fn test_find_stat_display() {
+        let find_stat = FindStat {
+            total_files: 42,
+            total_space: 1234567890,
+            max_size: Some(987654321),
+            min_size: Some(123),
+            max_key: "largest-file.txt".to_owned(),
+            min_key: "smallest-file.txt".to_owned(),
+            average_size: 29394474,
+        };
+
+        let display_output = find_stat.to_string();
+
+        assert!(display_output.contains("Summary"), "Missing Summary header");
+        assert!(
+            display_output.contains("Total files:        42"),
+            "Incorrect total files count"
+        );
+        assert!(
+            display_output.contains("Total space:"),
+            "Missing total space"
+        );
+        assert!(
+            display_output.contains("Largest file:       largest-file.txt"),
+            "Incorrect largest file name"
+        );
+        assert!(
+            display_output.contains("Largest file size:"),
+            "Missing largest file size"
+        );
+        assert!(
+            display_output.contains("Smallest file:      smallest-file.txt"),
+            "Incorrect smallest file name"
+        );
+        assert!(
+            display_output.contains("Smallest file size:"),
+            "Missing smallest file size"
+        );
+        assert!(
+            display_output.contains("Average file size:"),
+            "Missing average file size"
+        );
+
+        assert!(
+            display_output.contains("GiB"),
+            "Expected binary size format (MiB/GiB)"
+        );
+    }
+
+    #[test]
+    fn test_find_stat_add() {
+        let mut stat = FindStat::default();
+
+        let objects = vec![
+            Object::builder().key("file1.txt").size(100).build(),
+            Object::builder().key("file2.txt").size(200).build(),
+            Object::builder().key("file3.txt").size(50).build(),
+        ];
+
+        stat = stat + &objects;
+
+        assert_eq!(stat.total_files, 3, "Total files count incorrect");
+        assert_eq!(stat.total_space, 350, "Total space incorrect");
+        assert_eq!(stat.max_size, Some(200), "Max size incorrect");
+        assert_eq!(stat.max_key, "file2.txt", "Max key incorrect");
+        assert_eq!(stat.min_size, Some(50), "Min size incorrect");
+        assert_eq!(stat.min_key, "file3.txt", "Min key incorrect");
+        assert_eq!(stat.average_size, 116, "Average size incorrect");
+
+        let more_objects = vec![
+            Object::builder().key("file4.txt").size(500).build(),
+            Object::builder().key("file5.txt").size(10).build(),
+        ];
+
+        stat = stat + &more_objects;
+
+        assert_eq!(
+            stat.total_files, 5,
+            "Total files count incorrect after second add"
+        );
+        assert_eq!(
+            stat.total_space, 860,
+            "Total space incorrect after second add"
+        );
+        assert_eq!(
+            stat.max_size,
+            Some(500),
+            "Max size incorrect after second add"
+        );
+        assert_eq!(
+            stat.max_key, "file4.txt",
+            "Max key incorrect after second add"
+        );
+        assert_eq!(
+            stat.min_size,
+            Some(10),
+            "Min size incorrect after second add"
+        );
+        assert_eq!(
+            stat.min_key, "file5.txt",
+            "Min key incorrect after second add"
+        );
+        assert_eq!(
+            stat.average_size, 172,
+            "Average size incorrect after second add"
+        );
+
+        let object_without_size = vec![Object::builder().key("no-size.txt").build()];
+
+        let before_total_space = stat.total_space;
+        stat = stat + &object_without_size;
+
+        assert_eq!(
+            stat.total_files, 6,
+            "Total files should increase even for objects with no size"
+        );
+        assert_eq!(
+            stat.total_space, before_total_space,
+            "Total space shouldn't change for object with no size"
+        );
+
+        let empty_list: Vec<Object> = vec![];
+        let before = stat.clone();
+        stat = stat + &empty_list;
+
+        assert_eq!(stat, before, "Adding empty list should not change stats");
     }
 }
