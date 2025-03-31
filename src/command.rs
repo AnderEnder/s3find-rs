@@ -597,4 +597,126 @@ mod tests {
 
         assert_eq!(stat, before, "Adding empty list should not change stats");
     }
+
+    #[tokio::test]
+    async fn test_find_exec() {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: Region::new("mock-region"),
+        };
+
+        let command = DoNothing {};
+
+        let config = aws_sdk_s3::Config::builder()
+            .region(Region::new("mock-region"))
+            .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+            .behavior_version(BehaviorVersion::v2025_01_17())
+            .build();
+
+        let client = Client::from_conf(config);
+
+        let find = Find {
+            client,
+            path,
+            limit: None,
+            page_size: 1000,
+            stats: true,
+            summarize: true,
+            command: Box::new(command),
+        };
+
+        // Create test objects
+        let objects = vec![
+            Object::builder().key("object1").size(100).build(),
+            Object::builder().key("object2").size(200).build(),
+        ];
+
+        // Execute find with stats
+        let acc = Some(FindStat::default());
+        let result = find.exec(acc, objects).await;
+
+        // Verify stats were updated
+        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert_eq!(stats.total_files, 2);
+        assert_eq!(stats.total_space, 300);
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_list() {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: Region::new("mock-region"),
+        };
+
+        let config = aws_sdk_s3::Config::builder()
+            .region(Region::new("mock-region"))
+            .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+            .behavior_version(BehaviorVersion::v2025_01_17())
+            .build();
+
+        let client = Client::from_conf(config);
+
+        let find_stream = FindStream {
+            client: client.clone(),
+            path: path.clone(),
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        assert_eq!(find_stream.token, None);
+        assert_eq!(find_stream.page_size, 1000);
+        assert!(find_stream.initial);
+        assert_eq!(find_stream.path, path);
+
+        let same_stream = FindStream {
+            client: client.clone(),
+            path: path.clone(),
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        assert_eq!(find_stream, same_stream);
+
+        let different_stream = FindStream {
+            client,
+            path: path.clone(),
+            token: Some("token".to_string()),
+            page_size: 1000,
+            initial: true,
+        };
+
+        assert_ne!(find_stream, different_stream);
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_stream_compile() {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix".to_string()),
+            region: Region::new("mock-region"),
+        };
+
+        let config = aws_sdk_s3::Config::builder()
+            .region(Region::new("mock-region"))
+            .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+            .behavior_version(BehaviorVersion::v2025_01_17())
+            .build();
+
+        let client = Client::from_conf(config);
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let _stream = find_stream.stream();
+    }
 }
