@@ -365,7 +365,10 @@ impl Default for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_types::body::SdkBody;
     use glob::Pattern;
+    use http::{HeaderValue, StatusCode};
     use regex::Regex;
 
     #[tokio::test]
@@ -892,5 +895,156 @@ mod tests {
         assert_eq!(find.limit, limit);
 
         assert_eq!(filters.0.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_list_with_replay_client() -> Result<(), Box<dyn std::error::Error>> {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix/".to_string()),
+            region: Region::new("us-east-1"),
+        };
+
+        let req_initial = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?list-type=2&max-keys=1000&prefix=test-prefix%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_initial_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>test-prefix/</Prefix>
+            <MaxKeys>1000</MaxKeys>
+            <IsTruncated>true</IsTruncated>
+            <NextContinuationToken>1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=</NextContinuationToken>
+            <Contents>
+                <Key>test-prefix/file1.txt</Key>
+                <LastModified>2023-01-01T00:00:00.000Z</LastModified>
+                <ETag>&quot;d41d8cd98f00b204e9800998ecf8427e&quot;</ETag>
+                <Size>100</Size>
+                <StorageClass>STANDARD</StorageClass>
+            </Contents>
+            <Contents>
+                <Key>test-prefix/file2.txt</Key>
+                <LastModified>2023-01-01T00:00:00.000Z</LastModified>
+                <ETag>&quot;d41d8cd98f00b204e9800998ecf8427f&quot;</ETag>
+                <Size>200</Size>
+                <StorageClass>STANDARD</StorageClass>
+            </Contents>
+        </ListBucketResult>"#;
+
+        let resp_initial = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_initial_body))
+            .unwrap();
+
+        let req_continuation = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?continuation-token=1ueGcxLPRx1Tr%2FXYExHnhbYLgveDs2J%2Fwm36Hy4vbOwM%3D&list-type=2&max-keys=1000&prefix=test-prefix%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_continuation_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>test-prefix/</Prefix>
+            <MaxKeys>1000</MaxKeys>
+            <IsTruncated>false</IsTruncated>
+            <Contents>
+                <Key>test-prefix/file3.txt</Key>
+                <LastModified>2023-01-01T00:00:00.000Z</LastModified>
+                <ETag>&quot;d41d8cd98f00b204e9800998ecf8427g&quot;</ETag>
+                <Size>300</Size>
+                <StorageClass>STANDARD</StorageClass>
+            </Contents>
+        </ListBucketResult>"#;
+
+        let resp_continuation = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_continuation_body))
+            .unwrap();
+
+        let events = vec![
+            ReplayEvent::new(req_initial, resp_initial),
+            ReplayEvent::new(req_continuation, resp_continuation),
+        ];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "ATESTCLIENT",
+                    "astestsecretkey",
+                    Some("atestsessiontoken".to_string()),
+                    None,
+                    "",
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let result1 = find_stream.list().await;
+        assert!(
+            result1.is_some(),
+            "Initial list call should return a result"
+        );
+
+        let (objects1, find_stream2) = result1.unwrap();
+
+        assert_eq!(objects1.len(), 2, "First result should contain 2 objects");
+        assert_eq!(objects1[0].key.as_ref().unwrap(), "test-prefix/file1.txt");
+        assert_eq!(objects1[1].key.as_ref().unwrap(), "test-prefix/file2.txt");
+
+        assert!(
+            !find_stream2.initial,
+            "Initial flag should be set to false after first call"
+        );
+        assert!(
+            find_stream2.token.is_some(),
+            "Token should be set after first call"
+        );
+        assert_eq!(
+            find_stream2.token.clone().unwrap(),
+            "1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM="
+        );
+
+        let result2 = find_stream2.list().await;
+        assert!(
+            result2.is_some(),
+            "Second list call with token should return a result"
+        );
+
+        let (objects2, find_stream3) = result2.unwrap();
+
+        assert_eq!(objects2.len(), 1, "Second result should contain 1 object");
+        assert_eq!(objects2[0].key.as_ref().unwrap(), "test-prefix/file3.txt");
+
+        assert!(!find_stream3.initial, "Initial flag should still be false");
+        assert!(
+            find_stream3.token.is_none(),
+            "Token should be None after last page"
+        );
+
+        let result3 = find_stream3.list().await;
+        assert!(
+            result3.is_none(),
+            "List call with no token and initial=false should return None"
+        );
+
+        Ok(())
     }
 }

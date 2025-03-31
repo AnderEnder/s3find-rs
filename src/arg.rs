@@ -5,11 +5,10 @@ use regex::Regex;
 use std::str::FromStr;
 use thiserror::Error;
 
-// use crate::command;
-
 fn region(s: &str) -> std::result::Result<Region, Error> {
     Ok(Region::new(s.to_owned()))
 }
+
 /// Walk an Amazon S3 path hierarchy
 #[derive(Parser)]
 #[command(
@@ -279,7 +278,7 @@ impl FromStr for S3Path {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let regex = Regex::new(r#"s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#)?;
+        let regex = Regex::new(r#"^s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#)?;
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
         let bucket = captures
@@ -307,7 +306,7 @@ impl FromStr for FindSize {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"([+-]?)(\d*)([kMGTP]?)$")?;
+        let re = Regex::new(r"^([+-]?)(\d*)([kMGTP]?)$")?;
         let m = re.captures(s).ok_or(FindError::SizeParse)?;
 
         let sign = m
@@ -356,7 +355,7 @@ impl FromStr for FindTime {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"([+-]?)(\d*)([smhdw]?)$")?;
+        let re = Regex::new(r"^([+-]?)(\d*)([smhdw]?)$")?;
         let m = re.captures(s).ok_or(FindError::TimeParse)?;
 
         let sign = m
@@ -416,7 +415,7 @@ impl FromStr for FindTag {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"(\w+):(\w+)$")?;
+        let re = Regex::new(r"^(\w+):(\w+)$")?;
         let m = re.captures(s).ok_or(FindError::TagParseError)?;
 
         let key = m.get(1).ok_or(FindError::TagKeyParseError)?.as_str();
@@ -432,6 +431,21 @@ impl FromStr for FindTag {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_correct() {
+        let region_result = region("us-west-2");
+        assert!(region_result.is_ok());
+
+        let r = region_result.unwrap();
+        assert_eq!(r.as_ref(), "us-west-2");
+
+        let region_result = region("eu-central-1");
+        assert!(region_result.is_ok());
+
+        let r = region_result.unwrap();
+        assert_eq!(r.as_ref(), "eu-central-1");
+    }
 
     #[test]
     fn s3path_correct() {
@@ -478,6 +492,7 @@ mod tests {
         assert!("s3://".parse::<S3Path>().is_err());
         assert!("s3:/testbucket".parse::<S3Path>().is_err());
         assert!("://testbucket".parse::<S3Path>().is_err());
+        assert!("as3://testbucket".parse::<S3Path>().is_err());
     }
 
     #[test]
@@ -510,6 +525,11 @@ mod tests {
     fn size_incorect() {
         assert!("-".parse::<FindSize>().is_err());
         assert!("-123w".parse::<FindSize>().is_err());
+        assert!(FindSize::from_str("").is_err());
+        assert!(FindSize::from_str("*5").is_err());
+        assert!(FindSize::from_str("+k").is_err());
+        assert!(FindSize::from_str("10Z").is_err());
+        assert!(FindSize::from_str("10a5k").is_err());
     }
 
     #[test]
@@ -535,6 +555,11 @@ mod tests {
         assert!("-10t".parse::<FindTime>().is_err());
         assert!("+".parse::<FindTime>().is_err());
         assert!("+10t".parse::<FindTime>().is_err());
+        assert!(FindTime::from_str("").is_err());
+        assert!(FindTime::from_str("*5").is_err());
+        assert!(FindTime::from_str("+d").is_err());
+        assert!(FindTime::from_str("10y").is_err());
+        assert!(FindTime::from_str("10a5d").is_err());
     }
 
     #[test]
@@ -553,5 +578,30 @@ mod tests {
         assert!("tag1value2".parse::<FindTag>().is_err());
         assert!("tag1:value2:".parse::<FindTag>().is_err());
         assert!(":".parse::<FindTag>().is_err());
+        assert!(FindTag::from_str(":value").is_err());
+        assert!(FindTag::from_str("key:").is_err());
+        assert!(FindTag::from_str("key-:value").is_err());
+        assert!(FindTag::from_str("key:value-").is_err());
+        assert!(FindTag::from_str("key:value:extra").is_err(),);
+        assert!(FindTag::from_str("").is_err());
+        assert!(FindTag::from_str("keyvalue").is_err());
+    }
+
+    #[test]
+    fn iname_glob_correct() {
+        let glob = InameGlob::from_str("*.txt").unwrap();
+        assert!(glob.0.matches("file.txt"));
+        assert!(!glob.0.matches("file.png"));
+
+        let glob = InameGlob::from_str("file-?.txt").unwrap();
+        assert!(glob.0.matches("file-1.txt"));
+        assert!(!glob.0.matches("file-12.txt"));
+    }
+
+    #[test]
+    fn iname_glob_incorrect() {
+        // Test for invalid bracket expression which is a syntax error in glob patterns
+        assert!(InameGlob::from_str("[a-").is_err());
+        assert!(InameGlob::from_str("[!").is_err());
     }
 }
