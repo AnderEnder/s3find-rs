@@ -7,11 +7,13 @@ use std::process::ExitStatus;
 
 use anyhow::Error;
 use async_trait::async_trait;
-use aws_smithy_types::date_time::Format;
+use csv::WriterBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::Serialize;
 
 use aws_sdk_s3::Client;
 use aws_sdk_s3::types::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
+use aws_smithy_types::date_time::Format;
 
 use crate::arg::*;
 use crate::error::*;
@@ -75,6 +77,40 @@ impl RunCommand for FastPrint {
     }
 }
 
+#[derive(Serialize)]
+struct ObjectRecord {
+    e_tag: String,
+    owner: String,
+    size: i64,
+    last_modified: String,
+    key: String,
+    storage_class: String,
+}
+
+impl From<&Object> for ObjectRecord {
+    fn from(object: &Object) -> Self {
+        ObjectRecord {
+            e_tag: object.e_tag.clone().unwrap_or_default(),
+            owner: object
+                .owner
+                .clone()
+                .and_then(|x| x.display_name.clone())
+                .unwrap_or_default(),
+            size: object.size.unwrap_or_default(),
+            last_modified: object
+                .last_modified
+                .and_then(|x| x.fmt(Format::DateTime).ok())
+                .unwrap_or_default(),
+            key: object.key.clone().unwrap_or_default(),
+            storage_class: object
+                .storage_class
+                .clone()
+                .map(|x| x.to_string())
+                .unwrap_or_default(),
+        }
+    }
+}
+
 impl AdvancedPrint {
     #[inline]
     fn print_object<I: Write>(
@@ -87,9 +123,16 @@ impl AdvancedPrint {
             io,
             "{0} {1:?} {2} {3:?} s3://{4}/{5} {6:?}",
             object.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
-            object.owner.as_ref().map(|x| x.display_name.as_ref()),
+            object
+                .owner
+                .as_ref()
+                .and_then(|x| x.display_name.as_ref())
+                .unwrap_or(&"None".to_string()),
             object.size.unwrap_or_default(),
-            object.last_modified.unwrap().fmt(Format::DateTime),
+            object
+                .last_modified
+                .and_then(|x| x.fmt(Format::DateTime).ok())
+                .unwrap_or("None".to_string()),
             bucket,
             object.key.as_ref().unwrap_or(&"".to_string()),
             object.storage_class,
@@ -101,8 +144,28 @@ impl AdvancedPrint {
 impl RunCommand for AdvancedPrint {
     async fn execute(&self, _c: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
-        for x in list {
-            self.print_object(&mut stdout, &path.bucket, x)?
+
+        match self.format {
+            PrintFormat::Json => {
+                for x in list {
+                    let record: ObjectRecord = x.into();
+                    println!("{}", serde_json::to_string(&record)?);
+                }
+            }
+            PrintFormat::Text => {
+                for x in list {
+                    self.print_object(&mut stdout, &path.bucket, x)?;
+                }
+            }
+            PrintFormat::Csv => {
+                let mut wtr: csv::Writer<&std::io::Stdout> =
+                    WriterBuilder::new().has_headers(false).from_writer(&stdout);
+                for x in list {
+                    let record: ObjectRecord = x.into();
+                    wtr.serialize(record)?;
+                }
+                wtr.flush()?;
+            }
         }
         Ok(())
     }
@@ -429,7 +492,7 @@ mod tests {
     #[test]
     fn test_advanced_print_object() -> Result<(), Error> {
         let mut buf = Vec::new();
-        let cmd = AdvancedPrint {};
+        let cmd = AdvancedPrint::default();
         let bucket = "test";
 
         let object = Object::builder()
@@ -509,7 +572,7 @@ mod tests {
             )?)
             .build();
 
-        let cmd = Cmd::Print(AdvancedPrint {}).downcast();
+        let cmd = Cmd::Print(AdvancedPrint::default()).downcast();
         let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let client = Client::new(&config);
 
