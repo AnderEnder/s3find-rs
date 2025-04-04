@@ -60,13 +60,13 @@ Options:
       --aws-region <aws-region>
           [default: us-east-1]
 
-      --name <npatern>
+      --name <pattern>
           Glob pattern for match, can be multiple
 
-      --iname <ipatern>
+      --iname <ipattern>
           Case-insensitive glob pattern for match, can be multiple
 
-      --regex <rpatern>
+      --regex <rpattern>
           Regex pattern for match, can be multiple
 
       --mtime <time>

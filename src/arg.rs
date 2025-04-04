@@ -56,15 +56,15 @@ pub struct FindOpt {
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
-    #[arg(name = "npatern", long = "name", number_of_values = 1)]
+    #[arg(name = "pattern", long = "name", number_of_values = 1)]
     pub name: Vec<NameGlob>,
 
     /// Case-insensitive glob pattern for match, can be multiple
-    #[arg(name = "ipatern", long = "iname", number_of_values = 1)]
+    #[arg(name = "ipattern", long = "iname", number_of_values = 1)]
     pub iname: Vec<InameGlob>,
 
     /// Regex pattern for match, can be multiple
-    #[arg(name = "rpatern", long = "regex", number_of_values = 1)]
+    #[arg(name = "rpattern", long = "regex", number_of_values = 1)]
     pub regex: Vec<Regex>,
 
     /// Modification time for match
