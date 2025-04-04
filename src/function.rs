@@ -9,6 +9,7 @@ use anyhow::Error;
 use async_trait::async_trait;
 use csv::WriterBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::Deserialize;
 use serde::Serialize;
 
 use aws_sdk_s3::Client;
@@ -33,7 +34,6 @@ impl Cmd {
             Cmd::Copy(l) => Box::new(l),
             Cmd::Move(l) => Box::new(l),
             Cmd::Nothing(l) => Box::new(l),
-            // _ => Box::new(FastPrint {}),
         }
     }
 }
@@ -77,7 +77,7 @@ impl RunCommand for FastPrint {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct ObjectRecord {
     e_tag: String,
     owner: String,
@@ -138,6 +138,24 @@ impl AdvancedPrint {
             object.storage_class,
         )
     }
+
+    #[inline]
+    fn print_json_object<I: Write>(&self, io: &mut I, object: &Object) -> Result<(), Error> {
+        let record: ObjectRecord = object.into();
+        writeln!(io, "{}", serde_json::to_string(&record)?)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn print_csv_objects<I: Write>(&self, io: &mut I, objects: &[Object]) -> Result<(), Error> {
+        let mut wtr = WriterBuilder::new().has_headers(false).from_writer(io);
+        for object in objects {
+            let record: ObjectRecord = object.into();
+            wtr.serialize(record)?;
+        }
+        wtr.flush()?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -148,8 +166,7 @@ impl RunCommand for AdvancedPrint {
         match self.format {
             PrintFormat::Json => {
                 for x in list {
-                    let record: ObjectRecord = x.into();
-                    println!("{}", serde_json::to_string(&record)?);
+                    self.print_json_object(&mut stdout, x)?;
                 }
             }
             PrintFormat::Text => {
@@ -158,13 +175,7 @@ impl RunCommand for AdvancedPrint {
                 }
             }
             PrintFormat::Csv => {
-                let mut wtr: csv::Writer<&std::io::Stdout> =
-                    WriterBuilder::new().has_headers(false).from_writer(&stdout);
-                for x in list {
-                    let record: ObjectRecord = x.into();
-                    wtr.serialize(record)?;
-                }
-                wtr.flush()?;
+                self.print_csv_objects(&mut stdout, list)?;
             }
         }
         Ok(())
@@ -556,6 +567,107 @@ mod tests {
 
         assert!(out.contains("test"));
         assert!(out.contains("s3://test/somepath/otherpath"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_advanced_print_json() -> Result<(), Error> {
+        let object = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
+
+        let mut buf = Vec::<u8>::new();
+        let cmd = AdvancedPrint {
+            format: PrintFormat::Json,
+        };
+
+        cmd.print_json_object(&mut buf, &object)?;
+
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&output)?;
+
+        assert_eq!(
+            parsed["e_tag"].as_str().unwrap(),
+            "9d48114aa7c18f9d68aa20086dbb7756"
+        );
+        assert_eq!(parsed["key"].as_str().unwrap(), "somepath/otherpath");
+        assert_eq!(parsed["size"].as_i64().unwrap(), 4_997_288);
+        assert_eq!(parsed["storage_class"].as_str().unwrap(), "STANDARD");
+        assert_eq!(
+            parsed["last_modified"].as_str().unwrap(),
+            "2017-07-19T19:04:17Z"
+        );
+        assert_eq!(parsed["owner"].as_str().unwrap(), "");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_advanced_print_csv() -> Result<(), Error> {
+        let object1 = Object::builder()
+            .e_tag("9d48114aa7c18f9d68aa20086dbb7756")
+            .key("somepath/otherpath")
+            .size(4_997_288)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(DateTime::from_str(
+                "2017-07-19T19:04:17.000Z",
+                Format::DateTime,
+            )?)
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("abcdef1234567890")
+            .key("another/path")
+            .size(1024)
+            .storage_class(ObjectStorageClass::ReducedRedundancy)
+            .last_modified(DateTime::from_str(
+                "2020-01-01T12:30:45.000Z",
+                Format::DateTime,
+            )?)
+            .build();
+
+        let mut buf = Vec::<u8>::new();
+        let cmd = AdvancedPrint {
+            format: PrintFormat::Csv,
+        };
+
+        cmd.print_csv_objects(&mut buf, &[object1.clone(), object2.clone()])?;
+
+        let output = String::from_utf8(buf.clone()).unwrap();
+        println!("CSV Output:\n{}", output);
+
+        let record1: ObjectRecord = (&object1).into();
+        let record2: ObjectRecord = (&object2).into();
+
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(&*buf);
+
+        let records: Vec<ObjectRecord> = reader
+            .deserialize()
+            .collect::<Result<Vec<ObjectRecord>, _>>()?;
+
+        assert_eq!(records.len(), 2, "Should have exactly two records");
+
+        assert_eq!(records[0].e_tag, record1.e_tag);
+        assert_eq!(records[0].key, record1.key);
+        assert_eq!(records[0].size, record1.size);
+        assert_eq!(records[0].storage_class, record1.storage_class);
+        assert_eq!(records[0].last_modified, record1.last_modified);
+
+        assert_eq!(records[1].e_tag, record2.e_tag);
+        assert_eq!(records[1].key, record2.key);
+        assert_eq!(records[1].size, record2.size);
+        assert_eq!(records[1].storage_class, record2.storage_class);
+        assert_eq!(records[1].last_modified, record2.last_modified);
+
         Ok(())
     }
 
