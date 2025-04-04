@@ -531,6 +531,37 @@ mod tests {
     }
 
     #[test]
+    fn test_advanced_print_object_with_owner_no_date_no_storage() -> Result<(), Error> {
+        let mut buf = Vec::new();
+        let cmd = AdvancedPrint::default();
+        let bucket = "test";
+
+        let owner = aws_sdk_s3::types::Owner::builder()
+            .display_name("test-owner")
+            .id("owner-id-123456789")
+            .build();
+
+        let object = Object::builder()
+            .e_tag("abc123456789")
+            .key("some/test/file.txt")
+            .size(1_234_567)
+            .set_owner(Some(owner))
+            .build();
+
+        cmd.print_object(&mut buf, bucket, &object)?;
+        let out = std::str::from_utf8(&buf)?;
+
+        println!("Output with owner, no date, no storage: {}", out);
+        assert!(out.contains("abc123456789"));
+        assert!(out.contains("test-owner"));
+        assert!(out.contains("1234567"));
+        assert!(out.contains("None"));
+        assert!(out.contains("s3://test/some/test/file.txt"));
+        assert!(out.contains("None"));
+        Ok(())
+    }
+
+    #[test]
     fn test_fast_print_object() -> Result<(), Error> {
         let mut buf = Vec::new();
         let cmd = FastPrint {};
@@ -695,6 +726,84 @@ mod tests {
         };
 
         cmd.execute(&client, &path, &[object]).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_advanced_print_json_execute() -> Result<(), Error> {
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key("folder/file1.txt")
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key("folder/file2.txt")
+            .size(200)
+            .storage_class(ObjectStorageClass::IntelligentTiering)
+            .last_modified(
+                DateTime::from_str("2023-02-15T12:30:45.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let cmd = Cmd::Print(AdvancedPrint {
+            format: PrintFormat::Json,
+        })
+        .downcast();
+
+        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let client = Client::new(&config);
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn smoke_advanced_print_csv_execute() -> Result<(), Error> {
+        let object1 = Object::builder()
+            .e_tag("csv-etag-1")
+            .key("data/report.csv")
+            .size(5000)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("csv-etag-2")
+            .key("data/archive.zip")
+            .size(10000)
+            .storage_class(ObjectStorageClass::DeepArchive)
+            .last_modified(
+                DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let cmd = Cmd::Print(AdvancedPrint {
+            format: PrintFormat::Csv,
+        })
+        .downcast();
+
+        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let client = Client::new(&config);
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+            region: Region::from_static("us-east-1"),
+        };
+
+        cmd.execute(&client, &path, &[object1, object2]).await?;
         Ok(())
     }
 
