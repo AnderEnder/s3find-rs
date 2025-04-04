@@ -12,7 +12,7 @@ repository = "https://github.com/AnderEnder/s3find-rs"
 keywords = ["find", "aws", "s3", "pattern", "regex"]
 categories = ["command-line-utilities"]
 license = "BSD-2-Clause"
-exclude = [".travis.yml", "ci/*"]
+exclude = [".gitignore", ".github"]
 edition = "2024"
 
 [[bin]]
@@ -20,8 +20,8 @@ name = "s3find"
 path = "src/bin/s3find.rs"
 
 [badges]
-travis-ci = { repository = "AnderEnder/s3find-rs" }
 codecov = { repository = "AnderEnder/s3find-rs" }
+github-actions = { repository = "AnderEnder/s3find-rs", label = "CI" }
 
 [dependencies]
 glob = "0.3"
