@@ -37,6 +37,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  release-linux-arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: static build release
+        run: |
+          docker run --rm -t \
+            -v "$(pwd)":/volume \
+            clux/muslrust:stable cargo build --release
+      - name: archive
+        run: |
+          sudo strip target/aarch64-unknown-linux-musl/release/s3find
+          sudo tar -C target/aarch64-unknown-linux-musl/release -czf  $(pwd)/s3find-aarch64-linux.tar.gz s3find
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: s3find-aarch64-linux.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   release-osx:
     runs-on: macOS-latest
     steps:
@@ -51,6 +72,23 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: s3find-aarch64-osx.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-osx-x86_64:
+    runs-on: macos-13
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: build release
+        run: cargo build --release --verbose
+      - name: archive
+        run: tar -C target/release -czf $(pwd)/s3find-x86_64-osx.tar.gz s3find
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: s3find-x86_64-osx.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
