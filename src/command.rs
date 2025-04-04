@@ -5,7 +5,11 @@ use aws_config::BehaviorVersion;
 use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Credentials, Region};
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
 use aws_sdk_s3::types::Object;
+use aws_smithy_async::future::pagination_stream::PaginationStream;
+use aws_smithy_runtime_api::http::Response;
 use futures::Stream;
 use humansize::*;
 
@@ -180,30 +184,31 @@ pub struct FindStream {
 }
 
 impl FindStream {
-    async fn list(mut self) -> Option<(Vec<Object>, Self)> {
-        if !self.initial && self.token.is_none() {
-            return None;
-        }
-
-        let (token, objects) = self
-            .client
+    async fn paginator(
+        self,
+    ) -> PaginationStream<Result<ListObjectsV2Output, SdkError<ListObjectsV2Error, Response>>> {
+        self.client
             .list_objects_v2()
             .bucket(self.path.bucket.clone())
             .prefix(self.path.prefix.clone().unwrap_or_else(|| "".to_owned()))
             .max_keys(self.page_size as i32)
-            .set_continuation_token(self.token)
+            .into_paginator()
             .send()
-            .await
-            .map(|x| (x.next_continuation_token, x.contents))
-            .unwrap();
-
-        self.initial = false;
-        self.token = token;
-        objects.map(|x| (x, self))
     }
 
-    pub fn stream(self) -> impl Stream<Item = Vec<Object>> {
-        futures::stream::unfold(self, |s| async { s.list().await })
+    pub async fn stream(self) -> impl Stream<Item = Vec<Object>> {
+        let ps = self.paginator().await;
+        futures::stream::unfold(ps, |mut p| async {
+            let next_page = p.next().await;
+
+            match next_page {
+                Some(Ok(output)) => {
+                    let objects = output.contents.unwrap_or(Vec::new());
+                    Some((objects, p))
+                }
+                _ => None,
+            }
+        })
     }
 }
 
@@ -367,6 +372,7 @@ mod tests {
     use super::*;
     use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
     use aws_smithy_types::body::SdkBody;
+    use futures::StreamExt;
     use glob::Pattern;
     use http::{HeaderValue, StatusCode};
     use regex::Regex;
@@ -997,53 +1003,299 @@ mod tests {
             initial: true,
         };
 
-        let result1 = find_stream.list().await;
-        assert!(
-            result1.is_some(),
-            "Initial list call should return a result"
-        );
-
-        let (objects1, find_stream2) = result1.unwrap();
+        let mut paginator = find_stream.paginator().await;
+        let objects1 = paginator.next().await.unwrap().unwrap().contents.unwrap();
 
         assert_eq!(objects1.len(), 2, "First result should contain 2 objects");
         assert_eq!(objects1[0].key.as_ref().unwrap(), "test-prefix/file1.txt");
         assert_eq!(objects1[1].key.as_ref().unwrap(), "test-prefix/file2.txt");
 
-        assert!(
-            !find_stream2.initial,
-            "Initial flag should be set to false after first call"
-        );
-        assert!(
-            find_stream2.token.is_some(),
-            "Token should be set after first call"
-        );
-        assert_eq!(
-            find_stream2.token.clone().unwrap(),
-            "1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM="
-        );
-
-        let result2 = find_stream2.list().await;
-        assert!(
-            result2.is_some(),
-            "Second list call with token should return a result"
-        );
-
-        let (objects2, find_stream3) = result2.unwrap();
+        let objects2 = paginator.next().await.unwrap().unwrap().contents.unwrap();
 
         assert_eq!(objects2.len(), 1, "Second result should contain 1 object");
         assert_eq!(objects2[0].key.as_ref().unwrap(), "test-prefix/file3.txt");
 
-        assert!(!find_stream3.initial, "Initial flag should still be false");
-        assert!(
-            find_stream3.token.is_none(),
-            "Token should be None after last page"
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_with_error_response() -> Result<(), Box<dyn std::error::Error>> {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix/".to_string()),
+            region: Region::new("us-east-1"),
+        };
+
+        let req_error = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?list-type=2&max-keys=1000&prefix=test-prefix%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_error = http::Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <Error>
+                    <Code>AccessDenied</Code>
+                    <Message>Access Denied</Message>
+                    <RequestId>1D5H9EXAMPLE</RequestId>
+                    <HostId>nh8QbPEXAMPLE</HostId>
+                </Error>"#,
+            ))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req_error, resp_error)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "ATESTCLIENT",
+                    "astestsecretkey",
+                    Some("atestsessiontoken".to_string()),
+                    None,
+                    "",
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
         );
 
-        let result3 = find_stream3.list().await;
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let mut paginator = find_stream.paginator().await;
+        let result = paginator.next().await;
+
+        assert!(result.is_some(), "Expected Some result from paginator");
+        let err = result.unwrap();
+        assert!(err.is_err(), "Expected error response");
+
+        if let Err(SdkError::ServiceError(service_error)) = err {
+            assert_eq!(service_error.err().meta().code(), Some("AccessDenied"));
+        }
+
         assert!(
-            result3.is_none(),
-            "List call with no token and initial=false should return None"
+            paginator.next().await.is_none(),
+            "Expected None after error"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_paginator_with_empty_page() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("empty-prefix/".to_string()),
+            region: Region::new("us-east-1"),
+        };
+
+        let req_empty = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?list-type=2&max-keys=1000&prefix=empty-prefix%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_empty_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                <Name>test-bucket</Name>
+                <Prefix>empty-prefix/</Prefix>
+                <MaxKeys>1000</MaxKeys>
+                <IsTruncated>false</IsTruncated>
+            </ListBucketResult>"#;
+
+        let resp_empty = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_empty_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req_empty, resp_empty)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "ATESTCLIENT",
+                    "astestsecretkey",
+                    Some("atestsessiontoken".to_string()),
+                    None,
+                    "",
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let mut paginator = find_stream.paginator().await;
+        let result = paginator.next().await;
+
+        assert!(result.is_some(), "Expected Some result from paginator");
+        let output = result.unwrap().expect("Expected successful response");
+
+        if let Some(contents) = output.contents {
+            assert!(contents.is_empty(), "Expected empty contents list");
+        }
+
+        assert!(
+            paginator.next().await.is_none(),
+            "Expected None for next page"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_stream_with_empty_results() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("empty-prefix/".to_string()),
+            region: Region::new("us-east-1"),
+        };
+
+        let req_empty = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?list-type=2&max-keys=1000&prefix=empty-prefix%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_empty_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                <Name>test-bucket</Name>
+                <Prefix>empty-prefix/</Prefix>
+                <MaxKeys>1000</MaxKeys>
+                <IsTruncated>false</IsTruncated>
+                <Contents></Contents>
+            </ListBucketResult>"#;
+
+        let resp_empty = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_empty_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req_empty, resp_empty)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "ATESTCLIENT",
+                    "astestsecretkey",
+                    Some("atestsessiontoken".to_string()),
+                    None,
+                    "",
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let stream = find_stream.stream().await;
+
+        let objects = stream
+            .map(|x| futures::stream::iter(x.into_iter()))
+            .flatten()
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(objects.len(), 1, "Expected vector with 1 empty object");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_stream_with_empty_page() -> Result<(), Box<dyn std::error::Error>> {
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("empty-prefix/".to_string()),
+            region: Region::new("us-east-1"),
+        };
+
+        let req_empty = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?list-type=2&max-keys=1000&prefix=empty-prefix%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_empty_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                <Name>test-bucket</Name>
+                <Prefix>empty-prefix/</Prefix>
+                <MaxKeys>1000</MaxKeys>
+                <IsTruncated>false</IsTruncated>
+            </ListBucketResult>"#;
+
+        let resp_empty = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_empty_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req_empty, resp_empty)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "ATESTCLIENT",
+                    "astestsecretkey",
+                    Some("atestsessiontoken".to_string()),
+                    None,
+                    "",
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+        };
+
+        let stream = find_stream.stream().await;
+
+        let objects = stream
+            .map(|x| futures::stream::iter(x.into_iter()))
+            .flatten()
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(objects.len(), 0, "Expected vector without object");
 
         Ok(())
     }
