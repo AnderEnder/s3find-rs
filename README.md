@@ -19,92 +19,7 @@ Github Release page provides binaries for:
 ## Usage
 
 ```sh
-USAGE:
-    s3find [FLAGS] [OPTIONS] <path> [SUBCOMMAND]
-
-FLAGS:
-    -h, --help
-            Prints help information
-
-        --summarize
-            Print summary statistic
-
-    -V, --version
-            Prints version information
-
-
-OPTIONS:
-        --aws-access-key <aws-access-key>
-            AWS access key. Unrequired.
-
-        --aws-region <aws-region>
-            The region to use. Default value is us-east-1 [default: us-east-1]
-
-        --aws-secret-key <aws-secret-key>
-            AWS secret key. Unrequired
-
-        --size <bytes-size>...
-            File size for match:
-                5k - exact match 5k,
-                +5k - bigger than 5k,
-                -5k - smaller than 5k,
-
-            Possible file size units are as follows:
-                k - kilobytes (1024 bytes)
-                M - megabytes (1024 kilobytes)
-                G - gigabytes (1024 megabytes)
-                T - terabytes (1024 gigabytes)
-                P - petabytes (1024 terabytes)
-        --iname <ipatern>...
-            Case-insensitive glob pattern for match, can be multiple
-
-        --limit <limit>
-            Limit result
-
-        --name <npatern>...
-            Glob pattern for match, can be multiple
-
-        --page-size <number>
-            The number of results to return in each response to a
-            list operation. The default value is 1000 (the maximum
-            allowed). Using a lower value may help if an operation
-            times out. [default: 1000]
-        --regex <rpatern>...
-            Regex pattern for match, can be multiple
-
-        --mtime <time>...
-            Modification time for match, a time period:
-                -5d - for period from now-5d to now
-                +5d - for period before now-5d
-
-            Possible time units are as follows:
-                s - seconds
-                m - minutes
-                h - hours
-                d - days
-                w - weeks
-
-            Can be multiple, but should be overlaping
-
-ARGS:
-    <path>
-            S3 path to walk through. It should be s3://bucket/path
-
-
-SUBCOMMANDS:
-    copy        Copy matched keys to a s3 destination
-    delete      Delete matched keys
-    download    Download matched keys
-    exec        Exec any shell program with every key
-    help        Prints this message or the help of the given subcommand(s)
-    ls          Print the list of matched keys
-    lstags      Print the list of matched keys with tags
-    move        Move matched keys to a s3 destination
-    nothing     Do not do anything with keys, do not print them as well
-    print       Extended print with detail information
-    public      Make the matched keys public available (readonly)
-    tags        Set the tags(overwrite) for the matched keys
-
+Walk an Amazon S3 path hierarchy
 
 The authorization flow is the following chain:
   * use credentials from arguments provided by users
@@ -114,16 +29,114 @@ The authorization flow is the following chain:
     Profile file can be set via environment variable AWS_SHARED_CREDENTIALS_FILE
   * use AWS instance IAM profile
   * use AWS container IAM profile
+
+Usage: s3find [OPTIONS] <path> [COMMAND]
+
+Commands:
+  exec      Exec any shell program with every key
+  print     Extended print with detail information
+  delete    Delete matched keys
+  download  Download matched keys
+  copy      Copy matched keys to a s3 destination
+  move      Move matched keys to a s3 destination
+  ls        Print the list of matched keys
+  lstags    Print the list of matched keys with tags
+  tags      Set the tags(overwrite) for the matched keys
+  public    Make the matched keys public available (readonly)
+  nothing   Do not do anything with keys, do not print them as well
+  help      Print this message or the help of the given subcommand(s)
+
+Arguments:
+  <path>
+          S3 path to walk through. It should be s3://bucket/path
+
+Options:
+      --aws-access-key <aws-access-key>
+          AWS access key. Unrequired
+
+      --aws-secret-key <aws-secret-key>
+          AWS secret key from AWS credential pair. Required only for the credential based authentication
+
+      --aws-region <aws-region>
+          [default: us-east-1]
+
+      --name <pattern>
+          Glob pattern for match, can be multiple
+
+      --iname <ipattern>
+          Case-insensitive glob pattern for match, can be multiple
+
+      --regex <rpattern>
+          Regex pattern for match, can be multiple
+
+      --mtime <time>
+          Modification time for match, a time period:
+              -5d - for period from now-5d to now
+              +5d - for period before now-5d
+
+          Possible time units are as follows:
+              s - seconds
+              m - minutes
+              h - hours
+              d - days
+              w - weeks
+
+          Can be multiple, but should be overlaping
+
+      --bytes-size <bytes-size>
+          File size for match:
+              5k - exact match 5k,
+              +5k - bigger than 5k,
+              -5k - smaller than 5k,
+
+          Possible file size units are as follows:
+              k - kilobytes (1024 bytes)
+              M - megabytes (1024 kilobytes)
+              G - gigabytes (1024 megabytes)
+              T - terabytes (1024 gigabytes)
+              P - petabytes (1024 terabytes)
+
+      --limit <limit>
+          Limit result
+
+      --number <number>
+          The number of results to return in each response to a
+          list operation. The default value is 1000 (the maximum
+          allowed). Using a lower value may help if an operation
+          times out.
+
+          [default: 1000]
+
+  -s, --summarize
+          Print summary statistic
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
 ## Examples
 
 ### Find path by glob pattern
 
-#### Print
+#### Print keys with extended information and different formats
 
 ```sh
 s3find 's3://example-bucket/example-path' --name '*' print
+```
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*' print --format text
+```
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*' print --format json
+```
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*' print --format csv
 ```
 
 #### Delete

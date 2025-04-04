@@ -1,5 +1,5 @@
 use aws_types::region::Region;
-use clap::{Args, Error, Parser, Subcommand};
+use clap::{Args, Error, Parser, Subcommand, ValueEnum};
 use glob::Pattern;
 use regex::Regex;
 use std::str::FromStr;
@@ -15,9 +15,10 @@ fn region(s: &str) -> std::result::Result<Region, Error> {
     name = "s3find",
     arg_required_else_help = true,
     version,
-    about,
     long_about(
         r#"
+Walk an Amazon S3 path hierarchy
+
 The authorization flow is the following chain:
   * use credentials from arguments provided by users
   * use environment variable credentials: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
@@ -55,15 +56,15 @@ pub struct FindOpt {
     pub aws_region: Region,
 
     /// Glob pattern for match, can be multiple
-    #[arg(name = "npatern", long = "name", number_of_values = 1)]
+    #[arg(name = "pattern", long = "name", number_of_values = 1)]
     pub name: Vec<NameGlob>,
 
     /// Case-insensitive glob pattern for match, can be multiple
-    #[arg(name = "ipatern", long = "iname", number_of_values = 1)]
+    #[arg(name = "ipattern", long = "iname", number_of_values = 1)]
     pub iname: Vec<InameGlob>,
 
     /// Regex pattern for match, can be multiple
-    #[arg(name = "rpatern", long = "regex", number_of_values = 1)]
+    #[arg(name = "rpattern", long = "regex", number_of_values = 1)]
     pub regex: Vec<Regex>,
 
     /// Modification time for match
@@ -188,8 +189,23 @@ impl Default for Cmd {
 #[derive(Args, Clone)]
 pub struct FastPrint {}
 
-#[derive(Args, Clone)]
-pub struct AdvancedPrint {}
+#[derive(ValueEnum, Clone, Default)]
+pub enum PrintFormat {
+    /// default human-readable format with all object metadata
+    #[default]
+    Text,
+    /// JSON format with all object metadata
+    Json,
+    /// CSV format with all object metadata
+    Csv,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct AdvancedPrint {
+    /// format for print subcommand
+    #[arg(name = "format", long, default_value = "text")]
+    pub format: PrintFormat,
+}
 
 #[derive(Args, Clone)]
 pub struct MultipleDelete {}
@@ -204,7 +220,7 @@ pub struct SetPublic {}
 #[derive(Args, Clone)]
 pub struct Exec {
     /// Utility(program) to run
-    #[arg(name = "utility")]
+    #[arg(name = "utility", long)]
     pub utility: String,
 }
 
