@@ -63,6 +63,7 @@ regex = "1"
 anyhow = "1"
 aws-types = "1"
 clap_complete = "4"
+aws-sdk-s3 = "1"
 
 [build-dependencies.clap]
 version = "4"

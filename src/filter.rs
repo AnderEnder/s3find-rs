@@ -1,4 +1,4 @@
-use aws_sdk_s3::types::Object;
+use aws_sdk_s3::types::{Object, ObjectStorageClass};
 use chrono::prelude::*;
 use glob::MatchOptions;
 use regex::Regex;
@@ -58,6 +58,12 @@ impl Filter for Regex {
     fn filter(&self, object: &Object) -> bool {
         let object_key = object.key.clone().unwrap_or_default();
         self.is_match(&object_key)
+    }
+}
+
+impl Filter for ObjectStorageClass {
+    fn filter(&self, object: &Object) -> bool {
+        Some(self) == object.storage_class()
     }
 }
 
@@ -134,5 +140,25 @@ mod tests {
         assert!(!Regex::from_str("other").unwrap().filter(&object));
         assert!(!Regex::from_str("Ome").unwrap().filter(&object));
         assert!(!Regex::from_str("some_Key").unwrap().filter(&object));
+    }
+
+    #[test]
+    fn object_storage_class_filter() {
+        let standard_object = Object::builder()
+            .storage_class(ObjectStorageClass::Standard)
+            .build();
+
+        let glacier_object = Object::builder()
+            .storage_class(ObjectStorageClass::Glacier)
+            .build();
+
+        assert!(ObjectStorageClass::Standard.filter(&standard_object));
+        assert!(ObjectStorageClass::Glacier.filter(&glacier_object));
+
+        assert!(!ObjectStorageClass::Standard.filter(&glacier_object));
+        assert!(!ObjectStorageClass::Glacier.filter(&standard_object));
+
+        let no_class_object = Object::builder().build();
+        assert!(!ObjectStorageClass::Standard.filter(&no_class_object));
     }
 }

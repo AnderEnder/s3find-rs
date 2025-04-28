@@ -1,3 +1,4 @@
+use aws_sdk_s3::types::ObjectStorageClass;
 use aws_types::region::Region;
 use clap::{Args, Error, Parser, Subcommand, ValueEnum};
 use glob::Pattern;
@@ -66,6 +67,10 @@ pub struct FindOpt {
     /// Regex pattern for match, can be multiple
     #[arg(name = "rpattern", long = "regex", number_of_values = 1)]
     pub regex: Vec<Regex>,
+
+    /// Regex pattern for match, can be multiple
+    #[arg(name = "storage-class", long = "storage_class")]
+    pub storage_class: Option<ObjectStorageClass>,
 
     /// Modification time for match
     #[arg(
