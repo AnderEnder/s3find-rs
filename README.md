@@ -246,6 +246,17 @@ s3find 's3://example-bucket/example-path' --mtime +10m print
 s3find 's3://example-bucket/example-path' --mtime -10h print
 ```
 
+### Object Storage Class Filter
+
+You can filter objects based on their storage class using the `storage-class` filter. This allows you to match objects stored in specific S3 storage classes, such as `STANDARD` or `GLACIER`.
+
+```bash
+s3find 's3://example-bucket/example-path' --storage-class STANDARD print
+s3find 's3://example-bucket/example-path' --storage-class GLACIER print
+```
+
+This feature is useful for identifying objects stored in different storage tiers and managing them accordingly.
+
 ### Multiple filters
 
 #### Same filters

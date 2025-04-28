@@ -42,6 +42,11 @@ impl<'a> FilterList<'a> {
     }
 
     #[inline]
+    pub fn add_single_filter(&mut self, filter: &'a dyn Filter) {
+        self.0.push(filter);
+    }
+
+    #[inline]
     pub fn add_filters<F: Filter>(mut self, filters: &'a [F]) -> Self {
         for filter in filters {
             self.0.push(filter);
@@ -134,7 +139,7 @@ impl Find {
             regex,
             size,
             mtime,
-            ..
+            storage_class,
         } = opts;
 
         let path = S3Path {
@@ -156,12 +161,16 @@ impl Find {
         )
         .await;
 
-        let filters = FilterList::new()
+        let mut filters = FilterList::new()
             .add_filters(name)
             .add_filters(iname)
             .add_filters(mtime)
             .add_filters(regex)
             .add_filters(size);
+
+        if let Some(storage_class) = storage_class {
+            filters.add_single_filter(storage_class);
+        }
 
         (find, filters)
     }
@@ -370,6 +379,7 @@ impl Default for FindStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_s3::types::ObjectStorageClass;
     use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
     use aws_smithy_types::body::SdkBody;
     use futures::StreamExt;
@@ -889,6 +899,7 @@ mod tests {
             regex: regexes,
             size: sizes,
             mtime: mtimes,
+            storage_class: Some(ObjectStorageClass::Standard),
         };
 
         let (find, filters) = Find::from_opts(&opts).await;
@@ -900,7 +911,7 @@ mod tests {
         assert_eq!(find.stats, summarize);
         assert_eq!(find.limit, limit);
 
-        assert_eq!(filters.0.len(), 5);
+        assert_eq!(filters.0.len(), 6);
     }
 
     #[tokio::test]
