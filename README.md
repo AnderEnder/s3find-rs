@@ -31,6 +31,7 @@ The authorization flow is the following chain:
   * use AWS instance IAM profile
   * use AWS container IAM profile
 
+
 Usage: s3find [OPTIONS] <path> [COMMAND]
 
 Commands:
@@ -69,6 +70,22 @@ Options:
 
       --regex <rpattern>
           Regex pattern for match, can be multiple
+
+      --storage-class <storage-class>
+          Object storage class for match
+          Valid values are:
+              DEEP_ARCHIVE
+              EXPRESS_ONEZONE
+              GLACIER
+              GLACIER_IR
+              INTELLIGENT_TIERING
+              ONEZONE_IA
+              OUTPOSTS
+              REDUCED_REDUNDANCY
+              SNOW
+              STANDARD
+              STANDARD_IA
+              Unknown values are also supported
 
       --mtime <time>
           Modification time for match, a time period:

@@ -68,8 +68,25 @@ pub struct FindOpt {
     #[arg(name = "rpattern", long = "regex", number_of_values = 1)]
     pub regex: Vec<Regex>,
 
-    /// Regex pattern for match, can be multiple
-    #[arg(name = "storage-class", long = "storage_class")]
+    /// Object storage class for match
+    #[arg(
+        name = "storage-class",
+        long = "storage-class",
+        long_help = r#"Object storage class for match
+Valid values are:
+    DEEP_ARCHIVE
+    EXPRESS_ONEZONE
+    GLACIER
+    GLACIER_IR
+    INTELLIGENT_TIERING
+    ONEZONE_IA
+    OUTPOSTS
+    REDUCED_REDUNDANCY
+    SNOW
+    STANDARD
+    STANDARD_IA
+    Unknown values are also supported"#
+    )]
     pub storage_class: Option<ObjectStorageClass>,
 
     /// Modification time for match
