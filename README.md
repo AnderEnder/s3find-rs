@@ -28,9 +28,11 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
 
 Github Release page provides ready-to-use binaries for:
 
-* Windows
-* Linux
-* macOS
+* Windows (x86_64)
+* Linux (x86_64 and ARM)
+* macOS (x86_64 and ARM)
+
+Binaries for both architectures allow you to run s3find natively on Intel-based and ARM-based machines (like Apple M1/M2/M3/M4, AWS Graviton, and Raspberry Pi).
 
 ### Build from Source
 
