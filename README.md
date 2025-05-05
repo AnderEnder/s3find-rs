@@ -4,20 +4,76 @@
 [![codecov](https://codecov.io/gh/AnderEnder/s3find-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/AnderEnder/s3find-rs)
 [![crates.io](https://img.shields.io/crates/v/s3find.svg)](https://crates.io/crates/s3find)
 
+A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as the `find` command but specifically designed for Amazon S3.
 
-A command line utility to walk an Amazon S3 hierarchy. An analog of find for Amazon S3.
+## Table of Contents
+- [Installation](#installation)
+  - [Pre-built Binaries](#pre-built-binaries)
+  - [Build from Source](#build-from-source)
+- [Usage](#usage)
+  - [Basic Syntax](#basic-syntax)
+  - [Authentication Methods](#authentication-methods)
+- [Examples](#examples)
+  - [Finding Files](#finding-files-by-glob-pattern)
+  - [Filter by Size](#find-path-by-size)
+  - [Filter by Time](#find-path-by-time)
+  - [Filter by Storage Class](#object-storage-class-filter)
+  - [Multiple Filters](#multiple-filters)
+  - [Actions and Operations](#actions-and-operations)
+- [Advanced Options](#additional-control)
 
-## Distribution
+## Installation
 
-### Release page distributions
+### Pre-built Binaries
 
-Github Release page provides binaries for:
+Github Release page provides ready-to-use binaries for:
 
 * Windows
 * Linux
 * macOS
 
+### Build from Source
+
+Requirements: Rust and Cargo
+
+```sh
+# Build
+cargo build --release
+
+# Install from local source
+cargo install --path .
+
+# Install latest from git
+cargo install --git https://github.com/AnderEnder/s3find-rs
+
+# Install from crates.io
+cargo install s3find
+```
+
 ## Usage
+
+### Basic Syntax
+
+```sh
+s3find [OPTIONS] <s3-path> [COMMAND]
+```
+
+Where:
+- `<s3-path>` is formatted as `s3://bucket/path`
+- `[OPTIONS]` are filters and controls
+- `[COMMAND]` is the action to perform on matched objects
+
+### Authentication Methods
+
+s3find supports multiple AWS authentication methods in the following priority:
+
+1. Command-line credentials (`--aws-access-key` and `--aws-secret-key`)
+2. Environment variables (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
+3. AWS profile credentials file (configurable via `AWS_PROFILE` and `AWS_SHARED_CREDENTIALS_FILE`)
+4. AWS instance IAM profile
+5. AWS container IAM profile
+
+### Command Line Reference
 
 ```sh
 Walk an Amazon S3 path hierarchy
@@ -30,6 +86,7 @@ The authorization flow is the following chain:
     Profile file can be set via environment variable AWS_SHARED_CREDENTIALS_FILE
   * use AWS instance IAM profile
   * use AWS container IAM profile
+
 
 Usage: s3find [OPTIONS] <path> [COMMAND]
 
@@ -69,6 +126,22 @@ Options:
 
       --regex <rpattern>
           Regex pattern for match, can be multiple
+
+      --storage-class <storage-class>
+          Object storage class for match
+          Valid values are:
+              DEEP_ARCHIVE
+              EXPRESS_ONEZONE
+              GLACIER
+              GLACIER_IR
+              INTELLIGENT_TIERING
+              ONEZONE_IA
+              OUTPOSTS
+              REDUCED_REDUNDANCY
+              SNOW
+              STANDARD
+              STANDARD_IA
+              Unknown values are also supported
 
       --mtime <time>
           Modification time for match, a time period:
@@ -120,187 +193,165 @@ Options:
 
 ## Examples
 
-### Find path by glob pattern
+### Finding Files by Glob Pattern
 
-#### Print keys with extended information and different formats
+Use the `--name` option with glob patterns to match objects:
 
 ```sh
+# Find all objects in a path
+s3find 's3://example-bucket/example-path' --name '*' ls
+
+# Find objects with specific extension
+s3find 's3://example-bucket/example-path' --name '*.json' ls
+```
+
+### Output Formats
+
+The `print` command supports different output formats:
+
+```sh
+# Default format
 s3find 's3://example-bucket/example-path' --name '*' print
-```
 
-```sh
+# Text format
 s3find 's3://example-bucket/example-path' --name '*' print --format text
-```
 
-```sh
+# JSON format
 s3find 's3://example-bucket/example-path' --name '*' print --format json
-```
 
-```sh
+# CSV format
 s3find 's3://example-bucket/example-path' --name '*' print --format csv
 ```
 
-#### Delete
+### Case Insensitive Search
+
+Use `--iname` for case-insensitive glob pattern matching:
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' delete
+s3find 's3://example-bucket/example-path' --iname '*data*' ls
 ```
 
-#### List
+### Regex Pattern Matching
+
+Use `--regex` for regular expression pattern matching:
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' ls
+# Find objects ending with a number
+s3find 's3://example-bucket/example-path' --regex '[0-9]$' print
 ```
 
-#### List keys with tags
+### Find Path by Size
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' lstags
-```
-
-#### Exec
-
-```sh
-s3find 's3://example-bucket/example-path' --name '*' exec 'echo {}'
-```
-
-#### Download
-
-```sh
-s3find 's3://example-bucket/example-path' --name '*' download
-```
-
-#### Copy files to another s3 location
-
-```sh
-s3find 's3://example-bucket/example-path' --name '*.dat' copy -f 's3://example-bucket/example-path2'
-```
-
-#### Move files to another s3 location
-
-```sh
-s3find 's3://example-bucket/example-path' --name '*.dat' move -f 's3://example-bucket/example-path2'
-```
-
-#### Set tags
-
-```sh
-s3find 's3://example-bucket/example-path' --name '*9*' tags 'key:value' 'env:staging'
-```
-
-#### Make public available
-
-```sh
-s3find 's3://example-bucket/example-path' --name '*9*' public
-```
-
-### Find path by case insensitive glob pattern
-
-```sh
-s3find 's3://example-bucket/example-path' --iname '*s*' ls
-```
-
-### Find path by regex pattern
-
-```sh
-s3find 's3://example-bucket/example-path' --regex '1$' print
-```
-
-### Find path by size
-
-#### Exact match
-
-```sh
+# Exact match - files exactly 0 bytes
 s3find 's3://example-bucket/example-path' --size 0 print
-```
 
-#### Larger
-
-```sh
+# Larger than 10 megabytes
 s3find 's3://example-bucket/example-path' --size +10M print
-```
 
-#### Smaller
-
-```sh
+# Smaller than 10 kilobytes
 s3find 's3://example-bucket/example-path' --size -10k print
 ```
 
-### Find path by time
-
-#### Files modified for the period before last 10 seconds
+### Find Path by Time
 
 ```sh
-s3find 's3://example-bucket/example-path' --mtime 10 print
-```
+# Files modified in the last 10 seconds
+s3find 's3://example-bucket/example-path' --mtime -10s print
 
-#### Files modified for the period before last 10 minutes
-
-```sh
+# Files modified more than 10 minutes ago
 s3find 's3://example-bucket/example-path' --mtime +10m print
-```
 
-#### Files modified since last 10 hours
-
-```sh
+# Files modified in the last 10 hours
 s3find 's3://example-bucket/example-path' --mtime -10h print
 ```
 
 ### Object Storage Class Filter
 
-You can filter objects based on their storage class using the `storage-class` filter. This allows you to match objects stored in specific S3 storage classes, such as `STANDARD` or `GLACIER`.
+Filter objects by their storage class:
 
 ```bash
+# Find objects in STANDARD storage class
 s3find 's3://example-bucket/example-path' --storage-class STANDARD print
+
+# Find objects in GLACIER storage class
 s3find 's3://example-bucket/example-path' --storage-class GLACIER print
 ```
 
-This feature is useful for identifying objects stored in different storage tiers and managing them accordingly.
+### Multiple Filters
 
-### Multiple filters
-
-#### Same filters
-
-Files with size between 10 and 20 bytes
+Combine filters to create more specific queries:
 
 ```sh
+# Files between 10 and 20 bytes
 s3find 's3://example-bucket/example-path' --size +10 --size -20 print
+
+# Combine different filter types
+s3find 's3://example-bucket/example-path' --size +10M --name '*backup*' print
 ```
 
-#### Different filters
+### Actions and Operations
+
+#### Delete Objects
 
 ```sh
-s3find 's3://example-bucket/example-path' --size +10 --name '*file*' print
+s3find 's3://example-bucket/example-path' --name '*.tmp' delete
 ```
 
-### Additional control
-
-#### Select limited number of keys
+#### List Objects and Tags
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' --limit 10
+# List objects
+s3find 's3://example-bucket/example-path' --name '*' ls
+
+# List objects with their tags
+s3find 's3://example-bucket/example-path' --name '*' lstags
 ```
 
-#### Limit page size of the request
+#### Execute Commands on Objects
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' --page-size 100
+s3find 's3://example-bucket/example-path' --name '*' exec 'echo {}'
 ```
 
-## How to build and install
-
-Requirements: rust and cargo
+#### Download Objects
 
 ```sh
-# Build
-cargo build --release
-
-# Install from local source
-cargo install
-
-# Install latest from git
-cargo install --git https://github.com/AnderEnder/s3find-rs
-
-# Install from crate package
-cargo install s3find
+s3find 's3://example-bucket/example-path' --name '*.pdf' download
 ```
+
+#### Copy and Move Operations
+
+```sh
+# Copy files to another location
+s3find 's3://example-bucket/example-path' --name '*.dat' copy -f 's3://example-bucket/example-path2'
+
+# Move files to another location
+s3find 's3://example-bucket/example-path' --name '*.dat' move -f 's3://example-bucket/example-path2'
+```
+
+#### Tag Management
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*archive*' tags 'key:value' 'env:staging'
+```
+
+#### Make Objects Public
+
+```sh
+s3find 's3://example-bucket/example-path' --name '*.public.html' public
+```
+
+## Additional Control
+
+Control the number of results and request behavior:
+
+```sh
+# Limit to first 10 matching objects
+s3find 's3://example-bucket/example-path' --name '*' --limit 10 ls
+
+# Control page size for S3 API requests
+s3find 's3://example-bucket/example-path' --name '*' --number 100 ls
+```
+
+For more information, see the [GitHub repository](https://github.com/AnderEnder/s3find-rs).

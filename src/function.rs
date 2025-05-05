@@ -121,7 +121,7 @@ impl AdvancedPrint {
     ) -> std::io::Result<()> {
         writeln!(
             io,
-            "{0} {1:?} {2} {3:?} s3://{4}/{5} {6:?}",
+            "{0} {1} {2} {3} \"s3://{4}/{5}\" {6}",
             object.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
             object
                 .owner
@@ -135,7 +135,11 @@ impl AdvancedPrint {
                 .unwrap_or("None".to_string()),
             bucket,
             object.key.as_ref().unwrap_or(&"".to_string()),
-            object.storage_class,
+            object
+                .storage_class
+                .as_ref()
+                .map(|x| x.as_str())
+                .unwrap_or("NONE"),
         )
     }
 
@@ -526,7 +530,7 @@ mod tests {
         assert!(out.contains("4997288"));
         assert!(out.contains("2017-07-19T19:04:17Z"));
         assert!(out.contains("s3://test/somepath/otherpath"));
-        assert!(out.contains("Standard"));
+        assert!(out.contains("STANDARD"));
         Ok(())
     }
 
