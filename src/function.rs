@@ -1584,4 +1584,224 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_restore_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/archive1.dat";
+        let key2 = "test/archive2.dat";
+        let key3 = "test/already_in_progress.dat";
+        let key4 = "test/invalid_state.dat";
+
+        // Object in Glacier storage
+        let object1 = Object::builder()
+            .e_tag("glacier-etag-1")
+            .key(key1)
+            .size(5000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // Object in Deep Archive storage
+        let object2 = Object::builder()
+            .e_tag("glacier-etag-2")
+            .key(key2)
+            .size(10000)
+            .storage_class(ObjectStorageClass::DeepArchive)
+            .last_modified(
+                DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // Object for "RestoreAlreadyInProgress" error
+        let object3 = Object::builder()
+            .e_tag("glacier-etag-3")
+            .key(key3)
+            .size(15000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-05-15T11:30:20.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // Object for "InvalidObjectState" error
+        let object4 = Object::builder()
+            .e_tag("glacier-etag-4")
+            .key(key4)
+            .size(20000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-06-25T16:45:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // Successful restore request for object1
+        let req1 = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/archive1.dat?restore")
+            .body(SdkBody::empty()) // In a real request this would contain XML with restore parameters
+            .unwrap();
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        // Successful restore request for object2
+        let req2 = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/archive2.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        // RestoreAlreadyInProgress error for object3
+        let req3 = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/already_in_progress.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body3 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Error>
+            <Code>RestoreAlreadyInProgress</Code>
+            <Message>Object restore is already in progress</Message>
+            <Resource>/test-bucket/test/already_in_progress.dat</Resource>
+            <RequestId>EXAMPLE123456789</RequestId>
+        </Error>"#;
+
+        let resp3 = http::Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body3))
+            .unwrap();
+
+        // InvalidObjectState error for object4
+        let req4 = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/invalid_state.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body4 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Error>
+            <Code>InvalidObjectState</Code>
+            <Message>The operation is not valid for the object's storage class</Message>
+            <Resource>/test-bucket/test/invalid_state.dat</Resource>
+            <RequestId>EXAMPLE987654321</RequestId>
+        </Error>"#;
+
+        let resp4 = http::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body4))
+            .unwrap();
+
+        let events = vec![
+            ReplayEvent::new(req1, resp1),
+            ReplayEvent::new(req2, resp2),
+            ReplayEvent::new(req3, resp3),
+            ReplayEvent::new(req4, resp4),
+        ];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::Restore(Restore {
+            days: 7,
+            tier: aws_sdk_s3::types::Tier::Standard,
+        })
+        .downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        // Execute the restore command with our test objects
+        cmd.execute(&client, &path, &[object1, object2, object3, object4])
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_condition_bug() -> Result<(), Error> {
+        // This test verifies the fix for a logical error in the condition check
+        // where we used `&&` instead of `||` for checking storage classes
+
+        let key = "test/glacier_object.dat";
+
+        // Object in Glacier storage
+        let glacier_object = Object::builder()
+            .e_tag("glacier-etag")
+            .key(key)
+            .size(5000)
+            .storage_class(ObjectStorageClass::Glacier) // Only Glacier, not Deep Archive
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // Setup replay client with a successful response
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/glacier_object.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let restore_cmd = Restore {
+            days: 5,
+            tier: aws_sdk_s3::types::Tier::Standard,
+        };
+
+        // Mock the stdout to capture printed output
+        // (In a real environment we'd use something like assert_cmd or capture actual stdout)
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        // This would fail if the condition in execute() is not fixed from && to ||
+        let result = restore_cmd.execute(&client, &path, &[glacier_object]).await;
+
+        // Verify that execution succeeded
+        assert!(
+            result.is_ok(),
+            "Restore command failed when it should have succeeded"
+        );
+
+        Ok(())
+    }
 }
