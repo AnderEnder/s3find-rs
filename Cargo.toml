@@ -12,7 +12,7 @@ repository = "https://github.com/AnderEnder/s3find-rs"
 keywords = ["find", "aws", "s3", "pattern", "regex"]
 categories = ["command-line-utilities"]
 license = "BSD-2-Clause"
-exclude = [".gitignore", ".github"]
+exclude = [".gitignore", ".github", "codecov.yml"]
 edition = "2024"
 
 [[bin]]
