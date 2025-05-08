@@ -1,4 +1,5 @@
 use aws_sdk_s3::types::ObjectStorageClass;
+use aws_sdk_s3::types::Tier;
 use aws_types::region::Region;
 use clap::{Args, Error, Parser, Subcommand, ValueEnum};
 use glob::Pattern;
@@ -197,6 +198,10 @@ pub enum Cmd {
     #[command(name = "public")]
     Public(SetPublic),
 
+    /// Restore objects from Glacier storage
+    #[command(name = "restore")]
+    Restore(Restore),
+
     /// Do not do anything with keys, do not print them as well
     #[command(name = "nothing")]
     Nothing(DoNothing),
@@ -288,6 +293,26 @@ pub struct SetTags {
 
 #[derive(Args, Clone, PartialEq, Debug)]
 pub struct DoNothing {}
+
+#[derive(Args, Clone, PartialEq, Debug)]
+pub struct Restore {
+    /// Number of days to keep the restored objects
+    #[arg(long, default_value = "1")]
+    pub days: i32,
+
+    /// Retrieval tier for restoring objects
+    #[arg(long, default_value = "Standard")]
+    pub tier: Tier,
+}
+
+impl Default for Restore {
+    fn default() -> Self {
+        Self {
+            days: 1,
+            tier: Tier::Standard,
+        }
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum FindError {

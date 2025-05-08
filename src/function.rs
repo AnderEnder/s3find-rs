@@ -14,6 +14,8 @@ use serde::Serialize;
 
 use aws_sdk_s3::Client;
 use aws_sdk_s3::types::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
+use aws_sdk_s3::types::{GlacierJobParameters, ObjectStorageClass, RestoreRequest};
+use aws_smithy_runtime_api::client::result::SdkError;
 use aws_smithy_types::date_time::Format;
 
 use crate::arg::*;
@@ -34,6 +36,7 @@ impl Cmd {
             Cmd::Copy(l) => Box::new(l),
             Cmd::Move(l) => Box::new(l),
             Cmd::Nothing(l) => Box::new(l),
+            Cmd::Restore(l) => Box::new(l),
         }
     }
 }
@@ -492,6 +495,62 @@ impl RunCommand for S3Move {
 #[async_trait]
 impl RunCommand for DoNothing {
     async fn execute(&self, _c: &Client, _p: &S3Path, _l: &[Object]) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RunCommand for Restore {
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        objects: &[Object],
+    ) -> Result<(), Error> {
+        for object in objects {
+            if object.storage_class == Some(ObjectStorageClass::Glacier)
+                && object.storage_class == Some(ObjectStorageClass::DeepArchive)
+            {
+                if let Some(key) = &object.key {
+                    let restore_request = RestoreRequest::builder()
+                        .days(self.days)
+                        .set_glacier_job_parameters(Some(
+                            GlacierJobParameters::builder()
+                                .tier(self.tier.clone())
+                                .build()?,
+                        ))
+                        .build();
+
+                    let result = client
+                        .restore_object()
+                        .bucket(&path.bucket)
+                        .key(key)
+                        .restore_request(restore_request)
+                        .send()
+                        .await;
+
+                    match result {
+                        Ok(_) => println!("Restore initiated for: {}", key),
+                        Err(e) => match e {
+                            SdkError::ServiceError(err)
+                                if err.err().meta().code() == Some("RestoreAlreadyInProgress") =>
+                            {
+                                println!("Restore already in progress for: {}", key)
+                            }
+                            SdkError::ServiceError(err)
+                                if err.err().meta().code() == Some("InvalidObjectState") =>
+                            {
+                                println!(
+                                    "Object is not in Glacier storage or already restored: {}",
+                                    key
+                                )
+                            }
+                            err => return Err(err.into()),
+                        },
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
