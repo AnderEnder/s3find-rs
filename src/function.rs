@@ -509,7 +509,7 @@ impl RunCommand for Restore {
     ) -> Result<(), Error> {
         for object in objects {
             if object.storage_class == Some(ObjectStorageClass::Glacier)
-                && object.storage_class == Some(ObjectStorageClass::DeepArchive)
+                || object.storage_class == Some(ObjectStorageClass::DeepArchive)
             {
                 if let Some(key) = &object.key {
                     let restore_request = RestoreRequest::builder()
@@ -1581,6 +1581,423 @@ mod tests {
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_with_replay_client() -> Result<(), Error> {
+        let key1 = "test/archive1.dat";
+        let key2 = "test/archive2.dat";
+        let key3 = "test/already_in_progress.dat";
+        let key4 = "test/invalid_state.dat";
+
+        let glacier_object = Object::builder()
+            .e_tag("glacier-etag-1")
+            .key(key1)
+            .size(5000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let deeparchive_object = Object::builder()
+            .e_tag("glacier-etag-2")
+            .key(key2)
+            .size(10000)
+            .storage_class(ObjectStorageClass::DeepArchive)
+            .last_modified(
+                DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let restored_object = Object::builder()
+            .e_tag("glacier-etag-3")
+            .key(key3)
+            .size(15000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-05-15T11:30:20.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let invalid_state_object = Object::builder()
+            .e_tag("glacier-etag-4")
+            .key(key4)
+            .size(20000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-06-25T16:45:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let glacier_request = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/archive1.dat?restore")
+            .body(SdkBody::empty()) // In a real request this would contain XML with restore parameters
+            .unwrap();
+
+        let glacier_response = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let deeparchive_request = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/archive2.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let deeparchive_response = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let request_with_inprogress = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/already_in_progress.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let inprogress_response_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Error>
+            <Code>RestoreAlreadyInProgress</Code>
+            <Message>Object restore is already in progress</Message>
+            <Resource>/test-bucket/test/already_in_progress.dat</Resource>
+            <RequestId>EXAMPLE123456789</RequestId>
+        </Error>"#;
+
+        let response_with_inprogress_error = http::Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(inprogress_response_body))
+            .unwrap();
+
+        let request_with_objectstate_error = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/invalid_state.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let invalid_objectstate_response_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Error>
+            <Code>InvalidObjectState</Code>
+            <Message>The operation is not valid for the object's storage class</Message>
+            <Resource>/test-bucket/test/invalid_state.dat</Resource>
+            <RequestId>EXAMPLE987654321</RequestId>
+        </Error>"#;
+
+        let response_with_invalide_objectstate = http::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(invalid_objectstate_response_body))
+            .unwrap();
+
+        let events = vec![
+            ReplayEvent::new(glacier_request, glacier_response),
+            ReplayEvent::new(deeparchive_request, deeparchive_response),
+            ReplayEvent::new(request_with_inprogress, response_with_inprogress_error),
+            ReplayEvent::new(
+                request_with_objectstate_error,
+                response_with_invalide_objectstate,
+            ),
+        ];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::Restore(Restore {
+            days: 7,
+            tier: aws_sdk_s3::types::Tier::Standard,
+        })
+        .downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(
+            &client,
+            &path,
+            &[
+                glacier_object,
+                deeparchive_object,
+                restored_object,
+                invalid_state_object,
+            ],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_with_standard_tier() -> Result<(), Error> {
+        let key = "test/standard_retrieval.dat";
+
+        let glacier_object = Object::builder()
+            .e_tag("glacier-etag")
+            .key(key)
+            .size(5000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let request_successful = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/standard_retrieval.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(request_successful, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let restore_cmd = Restore {
+            days: 7,
+            tier: aws_sdk_s3::types::Tier::Standard,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        let result = restore_cmd.execute(&client, &path, &[glacier_object]).await;
+        assert!(result.is_ok(), "Standard tier restore should succeed");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_with_expedited_tier() -> Result<(), Error> {
+        let key = "test/expedited_retrieval.dat";
+
+        let glacier_object = Object::builder()
+            .e_tag("glacier-etag")
+            .key(key)
+            .size(5000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/expedited_retrieval.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let restore_cmd = Restore {
+            days: 2,
+            tier: aws_sdk_s3::types::Tier::Expedited,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        let result = restore_cmd.execute(&client, &path, &[glacier_object]).await;
+        assert!(result.is_ok(), "Expedited tier restore should succeed");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_with_bulk_tier() -> Result<(), Error> {
+        let key = "test/bulk_retrieval.dat";
+
+        let deep_archive_object = Object::builder()
+            .e_tag("deep-archive-etag")
+            .key(key)
+            .size(5000)
+            .storage_class(ObjectStorageClass::DeepArchive)
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/bulk_retrieval.dat?restore")
+            .body(SdkBody::empty()) // In a real request this would contain XML with Bulk tier
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let restore_cmd = Restore {
+            days: 30,
+            tier: aws_sdk_s3::types::Tier::Bulk,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        let result = restore_cmd
+            .execute(&client, &path, &[deep_archive_object])
+            .await;
+        assert!(result.is_ok(), "Bulk tier restore should succeed");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_with_non_glacier_objects() -> Result<(), Error> {
+        let key = "test/standard_object.dat";
+
+        let standard_object = Object::builder()
+            .e_tag("standard-etag")
+            .key(key)
+            .size(5000)
+            .storage_class(ObjectStorageClass::Standard) // Standard storage, not Glacier
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let events: Vec<ReplayEvent> = vec![];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let restore_cmd = Restore {
+            days: 7,
+            tier: aws_sdk_s3::types::Tier::Standard,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        let result = restore_cmd
+            .execute(&client, &path, &[standard_object])
+            .await;
+        assert!(
+            result.is_ok(),
+            "Non-Glacier objects should be skipped without error"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_with_maximum_days() -> Result<(), Error> {
+        let key = "test/long_term_retrieval.dat";
+
+        let glacier_object = Object::builder()
+            .e_tag("glacier-etag")
+            .key(key)
+            .size(5000)
+            .storage_class(ObjectStorageClass::Glacier)
+            .last_modified(
+                DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/test/long_term_retrieval.dat?restore")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let restore_cmd = Restore {
+            days: 365,
+            tier: aws_sdk_s3::types::Tier::Standard,
+        };
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        let result = restore_cmd.execute(&client, &path, &[glacier_object]).await;
+        assert!(result.is_ok(), "Restore with maximum days should succeed");
 
         Ok(())
     }

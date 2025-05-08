@@ -882,6 +882,103 @@ mod tests {
     }
 
     #[test]
+    fn test_restore_subcommand() {
+        let args_defaults = FindOpt::parse_from(["s3find", "s3://mybucket", "restore"]);
+
+        assert_eq!(
+            args_defaults.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 1,
+                tier: Tier::Standard,
+            }))
+        );
+
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "restore",
+            "--days",
+            "7",
+            "--tier",
+            "Bulk",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 7,
+                tier: Tier::Bulk,
+            }))
+        );
+
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "restore", "--days", "365"]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 365,
+                tier: Tier::Standard, // Default tier
+            }))
+        );
+
+        let args =
+            FindOpt::parse_from(["s3find", "s3://mybucket", "restore", "--tier", "Expedited"]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 1, // Default days
+                tier: Tier::Expedited,
+            }))
+        );
+
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/glacier-objects",
+            "--storage-class",
+            "GLACIER",
+            "--name",
+            "*.archive",
+            "restore",
+            "--days",
+            "30",
+            "--tier",
+            "Standard",
+        ]);
+
+        assert_eq!(args.storage_class, Some(ObjectStorageClass::Glacier));
+        assert_eq!(args.name.len(), 1);
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 30,
+                tier: Tier::Standard,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_restore_default() {
+        let restore_default = Restore::default();
+
+        assert_eq!(restore_default.days, 1, "Default days should be 1");
+        assert_eq!(
+            restore_default.tier,
+            Tier::Standard,
+            "Default tier should be Standard"
+        );
+
+        let default_trait = <Restore as Default>::default();
+        assert_eq!(
+            restore_default, default_trait,
+            "Both default methods should be equivalent"
+        );
+
+        let clone = restore_default.clone();
+        assert_eq!(clone, restore_default, "Clone should equal original");
+    }
+
+    #[test]
     fn test_complex_command() {
         let args = FindOpt::parse_from([
             "s3find",
@@ -914,6 +1011,50 @@ mod tests {
                     prefix: Some("logs/2023".to_string()),
                 },
                 flat: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_restore_with_multiple_filters() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/archives",
+            "--name",
+            "*.bak",
+            "--regex",
+            r"^backup_\d{8}\.bak$",
+            "--storage-class",
+            "DEEP_ARCHIVE",
+            "--mtime",
+            "-90d",
+            "--bytes-size",
+            "+100M",
+            "--limit",
+            "10",
+            "restore",
+            "--days",
+            "14",
+            "--tier",
+            "Standard",
+        ]);
+
+        assert_eq!(args.path.bucket, "mybucket");
+        assert_eq!(args.path.prefix, Some("archives".to_string()));
+        assert_eq!(args.name.len(), 1);
+        assert_eq!(args.regex.len(), 1);
+        assert_eq!(args.storage_class, Some(ObjectStorageClass::DeepArchive));
+        assert_eq!(args.mtime.len(), 1);
+        assert_eq!(args.mtime[0], FindTime::Upper(90 * 24 * 3600)); // -90d
+        assert_eq!(args.size.len(), 1);
+        assert_eq!(args.size[0], FindSize::Bigger(100 * 1024 * 1024)); // +100M
+        assert_eq!(args.limit, Some(10));
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 14,
+                tier: Tier::Standard,
             }))
         );
     }
