@@ -71,5 +71,6 @@ default-features = false
 features = ["suggestions", "color", "derive", "std", "usage", "help", "env"]
 
 [profile.release]
+strip = true
 lto = "fat"
 codegen-units = 1
