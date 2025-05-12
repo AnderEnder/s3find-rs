@@ -11,7 +11,7 @@ fn region(s: &str) -> std::result::Result<Region, Error> {
 }
 
 /// Walk an Amazon S3 path hierarchy
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(
     name = "s3find",
     arg_required_else_help = true,
@@ -309,7 +309,6 @@ pub enum FindError {
 pub struct S3Path {
     pub bucket: String,
     pub prefix: Option<String>,
-    pub region: Region,
 }
 
 impl FromStr for S3Path {
@@ -325,11 +324,7 @@ impl FromStr for S3Path {
             .ok_or(FindError::S3Parse)?;
         let prefix = captures.get(3).map(|x| x.as_str().to_owned());
 
-        Ok(S3Path {
-            bucket,
-            prefix,
-            region: Region::from_static("us-east-1"),
-        })
+        Ok(S3Path { bucket, prefix })
     }
 }
 
@@ -492,7 +487,6 @@ mod tests {
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: Some("".to_owned()),
-                region: Region::from_static("us-east-1"),
             })
         );
 
@@ -501,7 +495,6 @@ mod tests {
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: Some("path".to_owned()),
-                region: Region::from_static("us-east-1"),
             })
         );
 
@@ -510,7 +503,6 @@ mod tests {
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: Some("multi/path".to_owned()),
-                region: Region::from_static("us-east-1"),
             })
         );
 
@@ -519,7 +511,6 @@ mod tests {
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: None,
-                region: Region::from_static("us-east-1"),
             })
         );
     }
