@@ -1,15 +1,13 @@
 use std::fmt;
 use std::ops::Add;
 
-use aws_config::BehaviorVersion;
-use aws_config::meta::credentials::CredentialsProviderChain;
 use aws_sdk_s3::Client;
-use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
 use aws_sdk_s3::types::Object;
 use aws_smithy_async::future::pagination_stream::PaginationStream;
 use aws_smithy_runtime_api::http::Response;
+
 use futures::Stream;
 use humansize::*;
 
@@ -17,14 +15,33 @@ use crate::arg::*;
 use crate::filter::Filter;
 use crate::function::*;
 
-pub struct AWSPair {
-    access: Option<String>,
-    secret: Option<String>,
-}
-
 pub struct FilterList<'a>(pub Vec<&'a dyn Filter>);
 
 impl<'a> FilterList<'a> {
+    pub fn from_opts(opts: &'a FindOpt) -> Self {
+        let FindOpt {
+            name,
+            iname,
+            regex,
+            size,
+            mtime,
+            storage_class,
+            ..
+        } = opts;
+
+        let mut filters = FilterList::new()
+            .add_filters(name)
+            .add_filters(iname)
+            .add_filters(mtime)
+            .add_filters(regex)
+            .add_filters(size);
+
+        if let Some(storage_class) = storage_class {
+            filters.add_single_filter(storage_class);
+        }
+        filters
+    }
+
     pub async fn test_match(&self, object: Object) -> bool {
         for item in &self.0 {
             if !item.filter(&object) {
@@ -65,42 +82,20 @@ impl Default for FilterList<'_> {
     }
 }
 
-pub struct Find {
+pub struct FindCommand {
     pub client: Client,
     pub path: S3Path,
-    pub limit: Option<usize>,
-    pub page_size: i64,
-    pub stats: bool,
-    pub summarize: bool,
     pub command: Box<dyn RunCommand>,
 }
 
-impl Find {
-    pub async fn new(
-        aws_credentials: AWSPair,
-        aws_region: &Region,
-        cmd: Option<Cmd>,
-        path: S3Path,
-        page_size: i64,
-        summarize: bool,
-        limit: Option<usize>,
-    ) -> Self {
-        let client = get_s3_client(
-            aws_credentials.access,
-            aws_credentials.secret,
-            aws_region.to_owned(),
-        )
-        .await;
+impl FindCommand {
+    pub fn new(cmd: Option<Cmd>, path: S3Path, client: Client) -> Self {
         let command = cmd.unwrap_or_default().downcast();
 
-        Find {
+        FindCommand {
             client,
             path,
             command,
-            page_size,
-            summarize,
-            limit,
-            stats: summarize,
         }
     }
 
@@ -114,65 +109,12 @@ impl Find {
         status
     }
 
-    pub fn to_stream(&self) -> FindStream {
-        FindStream {
-            client: self.client.clone(),
-            path: self.path.clone(),
-            token: None,
-            page_size: self.page_size,
-            initial: true,
-        }
-    }
+    pub fn from_opts(opts: &FindOpt, client: Client) -> FindCommand {
+        let FindOpt { path, cmd, .. } = opts;
 
-    pub async fn from_opts(opts: &FindOpt) -> (Find, FilterList<'_>) {
-        let FindOpt {
-            aws_access_key,
-            aws_secret_key,
-            aws_region,
-            path,
-            cmd,
-            page_size,
-            summarize,
-            limit,
-            name,
-            iname,
-            regex,
-            size,
-            mtime,
-            storage_class,
-        } = opts;
+        let path = S3Path { ..path.clone() };
 
-        let path = S3Path {
-            region: aws_region.to_owned(),
-            ..path.clone()
-        };
-
-        let find = Find::new(
-            AWSPair {
-                access: aws_access_key.clone(),
-                secret: aws_secret_key.clone(),
-            },
-            aws_region,
-            cmd.clone(),
-            path,
-            *page_size,
-            *summarize,
-            *limit,
-        )
-        .await;
-
-        let mut filters = FilterList::new()
-            .add_filters(name)
-            .add_filters(iname)
-            .add_filters(mtime)
-            .add_filters(regex)
-            .add_filters(size);
-
-        if let Some(storage_class) = storage_class {
-            filters.add_single_filter(storage_class);
-        }
-
-        (find, filters)
+        FindCommand::new(cmd.clone(), path, client)
     }
 }
 
@@ -193,6 +135,18 @@ pub struct FindStream {
 }
 
 impl FindStream {
+    pub fn from_opts(opts: &FindOpt, client: Client) -> Self {
+        let path = opts.path.clone();
+
+        FindStream {
+            client,
+            path,
+            token: None,
+            page_size: opts.page_size,
+            initial: true,
+        }
+    }
+
     async fn paginator(
         self,
     ) -> PaginationStream<Result<ListObjectsV2Output, SdkError<ListObjectsV2Error, Response>>> {
@@ -245,40 +199,6 @@ FindStream {{
             self.path, self.token, self.page_size, self.initial
         )
     }
-}
-
-#[inline]
-async fn get_s3_client(
-    aws_access_key: Option<String>,
-    aws_secret_key: Option<String>,
-    region: Region,
-) -> Client {
-    let region_provider =
-        aws_config::meta::region::RegionProviderChain::first_try(region).or_default_provider();
-
-    let shared_config = match (aws_access_key, aws_secret_key) {
-        (Some(aws_access_key), Some(aws_secret_key)) => {
-            let credentials_provider =
-                Credentials::new(aws_access_key, aws_secret_key, None, None, "static");
-            aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::v2025_01_17())
-                .region(region_provider)
-                .credentials_provider(credentials_provider)
-                .load()
-                .await
-        }
-        _ => {
-            let credentials_provider = CredentialsProviderChain::default_provider().await;
-            aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::v2025_01_17())
-                .region(region_provider)
-                .credentials_provider(credentials_provider)
-                .load()
-                .await
-        }
-    };
-
-    Client::new(&shared_config)
 }
 
 impl fmt::Display for FindStat {
@@ -378,8 +298,12 @@ impl Default for FindStat {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::adapters::aws::setup_client;
+
     use super::*;
-    use aws_sdk_s3::types::ObjectStorageClass;
+    use aws_config::{BehaviorVersion, Region};
+    use aws_sdk_s3::{config::Credentials, types::ObjectStorageClass};
     use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
     use aws_smithy_types::body::SdkBody;
     use futures::StreamExt;
@@ -451,21 +375,6 @@ mod tests {
 
         let stats = default_stats(false);
         assert!(stats.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_s3_client() {
-        let client_with_creds = get_s3_client(
-            Some("mock_access".to_string()),
-            Some("mock_secret".to_string()),
-            Region::new("mock-region"),
-        )
-        .await;
-
-        let client_without_creds = get_s3_client(None, None, Region::new("mock-region")).await;
-
-        assert!(client_with_creds.config().region().is_some());
-        assert!(client_without_creds.config().region().is_some());
     }
 
     #[test]
@@ -622,7 +531,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("test-prefix".to_string()),
-            region: Region::new("mock-region"),
         };
 
         let command = DoNothing {};
@@ -635,13 +543,9 @@ mod tests {
 
         let client = Client::from_conf(config);
 
-        let find = Find {
+        let find = FindCommand {
             client,
             path,
-            limit: None,
-            page_size: 1000,
-            stats: true,
-            summarize: true,
             command: Box::new(command),
         };
 
@@ -667,7 +571,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("test-prefix".to_string()),
-            region: Region::new("mock-region"),
         };
 
         let config = aws_sdk_s3::Config::builder()
@@ -717,7 +620,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("test-prefix".to_string()),
-            region: Region::new("mock-region"),
         };
 
         let config = aws_sdk_s3::Config::builder()
@@ -744,7 +646,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("test-prefix/".to_string()),
-            region: Region::new("us-west-2"),
         };
 
         let config = aws_sdk_s3::Config::builder()
@@ -772,61 +673,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_new() {
-        let aws_credentials = AWSPair {
-            access: Some("test-access".to_string()),
-            secret: Some("test-secret".to_string()),
+        let args = FindOpt {
+            aws_access_key: Some("mock_access".to_string()),
+            aws_secret_key: Some("mock_secret".to_string()),
+            aws_region: Region::new("mock-region"),
+            path: S3Path {
+                bucket: "test-bucket".to_string(),
+                prefix: Some("test-prefix/".to_string()),
+            },
+            name: Vec::new(),
+            iname: Vec::new(),
+            mtime: Vec::new(),
+            regex: Vec::new(),
+            size: Default::default(),
+            cmd: None,
+            storage_class: None,
+            page_size: 500,
+            summarize: true,
+            limit: Some(100),
         };
+        let client = setup_client(&args).await;
 
-        let region = Region::new("test-region");
-
-        let cmd: Option<Cmd> = None;
-
-        let path = S3Path {
-            bucket: "test-bucket".to_string(),
-            prefix: Some("test-prefix/".to_string()),
-            region: region.clone(),
-        };
-
-        let page_size: i64 = 500;
-        let summarize = true;
-        let limit = Some(100);
-
-        let find = Find::new(
-            aws_credentials,
-            &region,
-            cmd,
-            path.clone(),
-            page_size,
-            summarize,
-            limit,
-        )
-        .await;
+        let find = FindCommand::new(args.cmd, args.path.clone(), client.clone());
 
         assert_eq!(find.path.bucket, "test-bucket");
         assert_eq!(find.path.prefix, Some("test-prefix/".to_string()));
-        assert_eq!(find.page_size, page_size);
-        assert_eq!(find.summarize, summarize);
-        assert_eq!(find.stats, summarize);
-        assert_eq!(find.limit, limit);
-
-        let find2 = Find::new(
-            AWSPair {
-                access: None,
-                secret: None,
-            },
-            &region,
-            Some(Cmd::default()),
-            path,
-            1000,
-            false,
-            None,
-        )
-        .await;
-
-        assert!(!find2.summarize);
-        assert!(!find2.stats);
-        assert_eq!(find2.page_size, 1000);
-        assert_eq!(find2.limit, None);
     }
 
     #[test]
@@ -834,7 +705,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("test-prefix".to_string()),
-            region: Region::new("mock-region"),
         };
 
         let config = aws_sdk_s3::Config::builder()
@@ -844,20 +714,15 @@ mod tests {
             .build();
 
         let client = Client::from_conf(config);
-        let command = Box::new(DoNothing {});
         let page_size = 1000;
 
-        let find = Find {
-            client,
+        let stream = FindStream {
             path: path.clone(),
-            limit: None,
+            token: None,
             page_size,
-            stats: true,
-            summarize: true,
-            command,
+            initial: true,
+            client,
         };
-
-        let stream = find.to_stream();
 
         assert_eq!(stream.path, path);
         assert_eq!(stream.token, None);
@@ -872,7 +737,6 @@ mod tests {
         let path = S3Path {
             bucket: bucket.clone(),
             prefix: Some("test-prefix/".to_string()),
-            region: region.clone(),
         };
 
         let name_patterns = vec![Pattern::new("*.txt").unwrap()];
@@ -902,16 +766,11 @@ mod tests {
             storage_class: Some(ObjectStorageClass::Standard),
         };
 
-        let (find, filters) = Find::from_opts(&opts).await;
+        let client = setup_client(&opts).await;
+
+        let find = FindCommand::from_opts(&opts, client);
 
         assert_eq!(find.path.bucket, bucket);
-        assert_eq!(find.path.region, region);
-        assert_eq!(find.page_size, page_size);
-        assert_eq!(find.summarize, summarize);
-        assert_eq!(find.stats, summarize);
-        assert_eq!(find.limit, limit);
-
-        assert_eq!(filters.0.len(), 6);
     }
 
     #[tokio::test]
@@ -919,7 +778,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("test-prefix/".to_string()),
-            region: Region::new("us-east-1"),
         };
 
         let req_initial = http::Request::builder()
@@ -1034,7 +892,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("test-prefix/".to_string()),
-            region: Region::new("us-east-1"),
         };
 
         let req_error = http::Request::builder()
@@ -1108,7 +965,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("empty-prefix/".to_string()),
-            region: Region::new("us-east-1"),
         };
 
         let req_empty = http::Request::builder()
@@ -1181,7 +1037,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("empty-prefix/".to_string()),
-            region: Region::new("us-east-1"),
         };
 
         let req_empty = http::Request::builder()
@@ -1249,7 +1104,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_string(),
             prefix: Some("empty-prefix/".to_string()),
-            region: Region::new("us-east-1"),
         };
 
         let req_empty = http::Request::builder()

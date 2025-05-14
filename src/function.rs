@@ -354,7 +354,12 @@ impl RunCommand for SetPublic {
                 .await?;
 
             let key = object.key.clone().unwrap();
-            let url = generate_s3_url(path.region.as_ref(), &path.bucket, &key);
+            let region = client
+                .config()
+                .region()
+                .map(|x| x.as_ref())
+                .unwrap_or("us-east-1");
+            let url = generate_s3_url(region, &path.bucket, &key);
             println!("{} {}", key, url);
         }
         Ok(())
@@ -499,7 +504,6 @@ mod tests {
     use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
     use aws_smithy_types::body::SdkBody;
     use aws_smithy_types::date_time::Format;
-    use aws_types::region::Region;
     use http::{HeaderValue, StatusCode};
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -726,7 +730,6 @@ mod tests {
         let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object]).await?;
@@ -765,7 +768,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
@@ -804,7 +806,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
@@ -831,7 +832,6 @@ mod tests {
         let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object]).await?;
@@ -858,7 +858,6 @@ mod tests {
         let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object]).await
@@ -888,7 +887,6 @@ mod tests {
         let path = S3Path {
             bucket: "test".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object]).await
@@ -970,7 +968,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object]).await?;
@@ -1049,7 +1046,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
@@ -1122,7 +1118,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
@@ -1206,7 +1201,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
@@ -1305,7 +1299,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
@@ -1392,7 +1385,6 @@ mod tests {
         let destination = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: Some("dest/".to_owned()),
-            region: Region::from_static("us-east-1"),
         };
 
         let cmd = Cmd::Copy(S3Copy {
@@ -1404,7 +1396,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
@@ -1517,7 +1508,6 @@ mod tests {
         let destination = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: Some("dest/".to_owned()),
-            region: Region::from_static("us-east-1"),
         };
 
         let cmd = Cmd::Move(S3Move {
@@ -1529,7 +1519,6 @@ mod tests {
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
             prefix: None,
-            region: Region::from_static("us-east-1"),
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;

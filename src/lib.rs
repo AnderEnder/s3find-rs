@@ -1,4 +1,5 @@
 #![recursion_limit = "256"]
+pub mod adapters;
 pub mod arg;
 pub mod command;
 pub mod error;
