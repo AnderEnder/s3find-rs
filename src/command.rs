@@ -1010,4 +1010,67 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_find_stream_from_opts() {
+        let path1 = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("test-prefix/".to_string()),
+        };
+
+        let opts1 = FindOpt {
+            aws_access_key: Some("test-access".to_string()),
+            aws_secret_key: Some("test-secret".to_string()),
+            aws_region: Region::new("test-region"),
+            path: path1.clone(),
+            cmd: None,
+            page_size: 500,
+            summarize: true,
+            limit: Some(100),
+            name: vec![],
+            iname: vec![],
+            regex: vec![],
+            size: vec![],
+            mtime: vec![],
+            storage_class: None,
+        };
+
+        let client1 = setup_client(&opts1).await;
+        let find_stream1 = FindStream::from_opts(&opts1, client1);
+
+        assert_eq!(find_stream1.path, path1);
+        assert_eq!(find_stream1.page_size, 500);
+        assert_eq!(find_stream1.token, None);
+        assert!(find_stream1.initial);
+
+        let path_without_prefix = S3Path {
+            bucket: "another-bucket".to_string(),
+            prefix: None,
+        };
+
+        let opts_withour_prefix = FindOpt {
+            aws_access_key: None,
+            aws_secret_key: None,
+            aws_region: Region::new("us-west-2"),
+            path: path_without_prefix.clone(),
+            cmd: Some(Cmd::Ls(FastPrint {})),
+            page_size: 1000,
+            summarize: false,
+            limit: None,
+            name: vec![],
+            iname: vec![],
+            regex: vec![],
+            size: vec![],
+            mtime: vec![],
+            storage_class: None,
+        };
+
+        let client2 = setup_client(&opts_withour_prefix).await;
+        let find_stream2 = FindStream::from_opts(&opts_withour_prefix, client2);
+
+        assert_eq!(find_stream2.path, path_without_prefix);
+        assert_eq!(find_stream2.page_size, 1000);
+        assert_eq!(find_stream2.token, None);
+        assert!(find_stream2.initial);
+    }
 }
