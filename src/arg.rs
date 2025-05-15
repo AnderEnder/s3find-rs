@@ -155,7 +155,7 @@ times out."#
     pub cmd: Option<Cmd>,
 }
 
-#[derive(Subcommand, Clone)]
+#[derive(Subcommand, Clone, PartialEq, Debug)]
 pub enum Cmd {
     /// Exec any shell program with every key
     #[command(name = "exec")]
@@ -208,10 +208,10 @@ impl Default for Cmd {
     }
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct FastPrint {}
 
-#[derive(ValueEnum, Clone, Default)]
+#[derive(ValueEnum, Clone, Default, PartialEq, Debug)]
 pub enum PrintFormat {
     /// default human-readable format with all object metadata
     #[default]
@@ -222,31 +222,31 @@ pub enum PrintFormat {
     Csv,
 }
 
-#[derive(Args, Clone, Default)]
+#[derive(Args, Clone, Default, PartialEq, Debug)]
 pub struct AdvancedPrint {
     /// format for print subcommand
     #[arg(name = "format", long, default_value = "text")]
     pub format: PrintFormat,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct MultipleDelete {}
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct ListTags {}
 
 // region ?
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct SetPublic {}
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct Exec {
     /// Utility(program) to run
     #[arg(name = "utility", long)]
     pub utility: String,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct Download {
     /// Force download files(overwrite) even if the target files are already present
     #[arg(long = "force")]
@@ -257,7 +257,7 @@ pub struct Download {
     pub destination: String,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct S3Copy {
     /// S3 path destination to copy files to
     #[arg(name = "destination")]
@@ -268,7 +268,7 @@ pub struct S3Copy {
     pub flat: bool,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct S3Move {
     /// S3 path destination to copy files to
     #[arg(name = "destination")]
@@ -279,14 +279,14 @@ pub struct S3Move {
     pub flat: bool,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct SetTags {
     /// List of the tags to set
     #[arg(name = "key:value", number_of_values = 1)]
     pub tags: Vec<FindTag>,
 }
 
-#[derive(Args, Clone)]
+#[derive(Args, Clone, PartialEq, Debug)]
 pub struct DoNothing {}
 
 #[derive(Error, Debug)]
@@ -464,6 +464,7 @@ impl FromStr for FindTag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     #[test]
     fn region_correct() {
@@ -632,5 +633,263 @@ mod tests {
         // Test for invalid bracket expression which is a syntax error in glob patterns
         assert!(InameGlob::from_str("[a-").is_err());
         assert!(InameGlob::from_str("[!").is_err());
+    }
+
+    #[test]
+    fn test_basic_path_parsing() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket/path"]);
+        assert_eq!(args.path.bucket, "mybucket");
+        assert_eq!(args.path.prefix, Some("path".to_string()));
+
+        // Default values
+        assert_eq!(args.aws_region.as_ref(), "us-east-1");
+        assert_eq!(args.page_size, 1000);
+        assert!(!args.summarize);
+        assert!(args.cmd.is_none());
+    }
+
+    #[test]
+    fn test_aws_credentials() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--aws-access-key",
+            "AKIAIOSFODNN7EXAMPLE",
+            "--aws-secret-key",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        ]);
+
+        assert_eq!(
+            args.aws_access_key,
+            Some("AKIAIOSFODNN7EXAMPLE".to_string())
+        );
+        assert_eq!(
+            args.aws_secret_key,
+            Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string())
+        );
+    }
+
+    #[test]
+    fn test_aws_region() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--aws-region", "eu-west-1"]);
+
+        assert_eq!(args.aws_region.as_ref(), "eu-west-1");
+    }
+
+    #[test]
+    fn test_name_filters() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--name",
+            "*.txt",
+            "--name",
+            "file?.doc",
+        ]);
+
+        assert_eq!(args.name.len(), 2);
+        assert!(args.name[0].matches("file.txt"));
+        assert!(!args.name[0].matches("file.jpg"));
+        assert!(args.name[1].matches("file1.doc"));
+        assert!(!args.name[1].matches("file12.doc"));
+    }
+
+    #[test]
+    fn test_iname_filters() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--iname", "*.txt"]);
+
+        assert_eq!(args.iname.len(), 1);
+        assert!(args.iname[0].0.matches("file.txt"));
+        assert!(!args.iname[0].0.matches("file.jpg"));
+    }
+
+    #[test]
+    fn test_regex_filters() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--regex", r"^file_\d+\.txt$"]);
+
+        assert_eq!(args.regex.len(), 1);
+        assert!(args.regex[0].is_match("file_123.txt"));
+        assert!(!args.regex[0].is_match("document_123.txt"));
+    }
+
+    #[test]
+    fn test_storage_class_filter() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--storage-class", "STANDARD"]);
+
+        assert_eq!(args.storage_class, Some(ObjectStorageClass::Standard));
+    }
+
+    #[test]
+    fn test_mtime_filter() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--mtime",
+            "-7d",
+            "--mtime",
+            "+1h",
+        ]);
+
+        assert_eq!(args.mtime.len(), 2);
+        assert_eq!(args.mtime[0], FindTime::Upper(7 * 24 * 3600)); // -7d
+        assert_eq!(args.mtime[1], FindTime::Lower(3600)); // +1h
+    }
+
+    #[test]
+    fn test_size_filter() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--bytes-size",
+            "+1M",
+            "--bytes-size",
+            "-10k",
+        ]);
+
+        assert_eq!(args.size.len(), 2);
+        assert_eq!(args.size[0], FindSize::Bigger(1024 * 1024)); // +1M
+        assert_eq!(args.size[1], FindSize::Lower(10 * 1024)); // -10k
+    }
+
+    #[test]
+    fn test_limit_and_page_size() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--limit",
+            "100",
+            "--number",
+            "500",
+        ]);
+
+        assert_eq!(args.limit, Some(100));
+        assert_eq!(args.page_size, 500);
+    }
+
+    #[test]
+    fn test_summarize_flag() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--summarize"]);
+
+        assert!(args.summarize);
+
+        // Also test short form
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "-s"]);
+
+        assert!(args.summarize);
+    }
+
+    #[test]
+    fn test_ls_subcommand() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "ls"]);
+        assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint {})));
+    }
+
+    #[test]
+    fn test_print_subcommand() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "print", "--format", "json"]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Print(AdvancedPrint {
+                format: PrintFormat::Json
+            }))
+        );
+    }
+
+    #[test]
+    fn test_copy_subcommand() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/source",
+            "copy",
+            "s3://otherbucket/dest",
+            "--flat",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Copy(S3Copy {
+                destination: S3Path {
+                    bucket: "otherbucket".to_string(),
+                    prefix: Some("dest".to_string()),
+                },
+                flat: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_delete_subcommand() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "delete"]);
+
+        assert_eq!(args.cmd, Some(Cmd::Delete(MultipleDelete {})));
+    }
+
+    #[test]
+    fn test_download_subcommand() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "download",
+            "/tmp/downloads",
+            "--force",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Download(Download {
+                destination: "/tmp/downloads".to_string(),
+                force: true,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_exec_subcommand() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "exec", "--utility", "echo {}"]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Exec(Exec {
+                utility: "echo {}".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_complex_command() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/logs",
+            "--name",
+            "*.log",
+            "--mtime",
+            "-30d",
+            "--bytes-size",
+            "+1M",
+            "--limit",
+            "50",
+            "--summarize",
+            "copy",
+            "s3://archivebucket/logs/2023",
+        ]);
+
+        assert_eq!(args.path.bucket, "mybucket");
+        assert_eq!(args.path.prefix, Some("logs".to_string()));
+        assert_eq!(args.name.len(), 1);
+        assert_eq!(args.mtime.len(), 1);
+        assert_eq!(args.size.len(), 1);
+        assert_eq!(args.limit, Some(50));
+        assert!(args.summarize);
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Copy(S3Copy {
+                destination: S3Path {
+                    bucket: "archivebucket".to_string(),
+                    prefix: Some("logs/2023".to_string()),
+                },
+                flat: false,
+            }))
+        );
     }
 }
