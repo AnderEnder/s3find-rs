@@ -4,6 +4,7 @@ use clap::Parser;
 use s3find::adapters::aws;
 use s3find::arg::*;
 use s3find::command::*;
+use s3find::filter_list::FilterList;
 use s3find::run::*;
 
 #[tokio::main]
