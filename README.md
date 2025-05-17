@@ -103,6 +103,7 @@ Commands:
   lstags    Print the list of matched keys with tags
   tags      Set the tags(overwrite) for the matched keys
   public    Make the matched keys public available (readonly)
+  restore   Restore objects from Glacier storage
   nothing   Do not do anything with keys, do not print them as well
   help      Print this message or the help of the given subcommand(s)
 
