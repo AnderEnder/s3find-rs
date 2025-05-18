@@ -1,14 +1,27 @@
 use aws_sdk_s3::types::ObjectStorageClass;
 use aws_sdk_s3::types::Tier;
 use aws_types::region::Region;
-use clap::{Args, Error, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::Pattern;
 use regex::Regex;
 use std::str::FromStr;
 use thiserror::Error;
 
-fn region(s: &str) -> std::result::Result<Region, Error> {
+fn region(s: &str) -> std::result::Result<Region, clap::Error> {
     Ok(Region::new(s.to_owned()))
+}
+
+fn parse_restore_days(s: &str) -> std::result::Result<i32, clap::Error> {
+    let days = s
+        .parse::<i32>()
+        .map_err(|_| clap::Error::raw(ErrorKind::InvalidValue, "Invalid number"))?;
+    if !(1..=365).contains(&days) {
+        return Err(clap::Error::raw(
+            ErrorKind::InvalidValue,
+            "Days should be between 1 and 365",
+        ));
+    }
+    Ok(days)
 }
 
 /// Walk an Amazon S3 path hierarchy
@@ -297,7 +310,7 @@ pub struct DoNothing {}
 #[derive(Args, Clone, PartialEq, Debug)]
 pub struct Restore {
     /// Number of days to keep the restored objects
-    #[arg(long, default_value = "1")]
+    #[arg(long, default_value = "1", value_parser = parse_restore_days)]
     pub days: i32,
 
     /// Retrieval tier for restoring objects
@@ -328,6 +341,8 @@ pub enum FindError {
     TagKeyParseError,
     #[error("Cannot parse tag value")]
     TagValueParseError,
+    #[error("Invalid days value: it should be in between 1 and 365")]
+    RestoreDaysParseError,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1056,6 +1071,32 @@ mod tests {
                 days: 14,
                 tier: Tier::Standard,
             }))
+        );
+    }
+
+    #[test]
+    fn test_parse_restore_days() {
+        assert_eq!(parse_restore_days("1").unwrap(), 1);
+        assert_eq!(parse_restore_days("7").unwrap(), 7);
+        assert_eq!(parse_restore_days("30").unwrap(), 30);
+        assert_eq!(parse_restore_days("365").unwrap(), 365);
+
+        assert!(parse_restore_days("0").is_err(), "0 days should be invalid");
+        assert!(
+            parse_restore_days("366").is_err(),
+            "366 days should be invalid"
+        );
+        assert!(
+            parse_restore_days("-1").is_err(),
+            "Negative days should be invalid"
+        );
+        assert!(
+            parse_restore_days("abc").is_err(),
+            "Non-numeric input should be invalid"
+        );
+        assert!(
+            parse_restore_days("").is_err(),
+            "Empty string should be invalid"
         );
     }
 }
