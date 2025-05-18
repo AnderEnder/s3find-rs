@@ -1,13 +1,27 @@
 use aws_sdk_s3::types::ObjectStorageClass;
+use aws_sdk_s3::types::Tier;
 use aws_types::region::Region;
-use clap::{Args, Error, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::Pattern;
 use regex::Regex;
 use std::str::FromStr;
 use thiserror::Error;
 
-fn region(s: &str) -> std::result::Result<Region, Error> {
+fn region(s: &str) -> std::result::Result<Region, clap::Error> {
     Ok(Region::new(s.to_owned()))
+}
+
+fn parse_restore_days(s: &str) -> std::result::Result<i32, clap::Error> {
+    let days = s
+        .parse::<i32>()
+        .map_err(|_| clap::Error::raw(ErrorKind::InvalidValue, "Invalid number"))?;
+    if !(1..=365).contains(&days) {
+        return Err(clap::Error::raw(
+            ErrorKind::InvalidValue,
+            "Days should be between 1 and 365",
+        ));
+    }
+    Ok(days)
 }
 
 /// Walk an Amazon S3 path hierarchy
@@ -197,6 +211,10 @@ pub enum Cmd {
     #[command(name = "public")]
     Public(SetPublic),
 
+    /// Restore objects from Glacier storage
+    #[command(name = "restore")]
+    Restore(Restore),
+
     /// Do not do anything with keys, do not print them as well
     #[command(name = "nothing")]
     Nothing(DoNothing),
@@ -289,6 +307,26 @@ pub struct SetTags {
 #[derive(Args, Clone, PartialEq, Debug)]
 pub struct DoNothing {}
 
+#[derive(Args, Clone, PartialEq, Debug)]
+pub struct Restore {
+    /// Number of days to keep the restored objects
+    #[arg(long, default_value = "1", value_parser = parse_restore_days)]
+    pub days: i32,
+
+    /// Retrieval tier for restoring objects
+    #[arg(long, default_value = "Standard")]
+    pub tier: Tier,
+}
+
+impl Default for Restore {
+    fn default() -> Self {
+        Self {
+            days: 1,
+            tier: Tier::Standard,
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum FindError {
     #[error("Invalid s3 path")]
@@ -303,6 +341,8 @@ pub enum FindError {
     TagKeyParseError,
     #[error("Cannot parse tag value")]
     TagValueParseError,
+    #[error("Invalid days value: it should be in between 1 and 365")]
+    RestoreDaysParseError,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -857,6 +897,103 @@ mod tests {
     }
 
     #[test]
+    fn test_restore_subcommand() {
+        let args_defaults = FindOpt::parse_from(["s3find", "s3://mybucket", "restore"]);
+
+        assert_eq!(
+            args_defaults.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 1,
+                tier: Tier::Standard,
+            }))
+        );
+
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "restore",
+            "--days",
+            "7",
+            "--tier",
+            "Bulk",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 7,
+                tier: Tier::Bulk,
+            }))
+        );
+
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "restore", "--days", "365"]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 365,
+                tier: Tier::Standard, // Default tier
+            }))
+        );
+
+        let args =
+            FindOpt::parse_from(["s3find", "s3://mybucket", "restore", "--tier", "Expedited"]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 1, // Default days
+                tier: Tier::Expedited,
+            }))
+        );
+
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/glacier-objects",
+            "--storage-class",
+            "GLACIER",
+            "--name",
+            "*.archive",
+            "restore",
+            "--days",
+            "30",
+            "--tier",
+            "Standard",
+        ]);
+
+        assert_eq!(args.storage_class, Some(ObjectStorageClass::Glacier));
+        assert_eq!(args.name.len(), 1);
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 30,
+                tier: Tier::Standard,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_restore_default() {
+        let restore_default = Restore::default();
+
+        assert_eq!(restore_default.days, 1, "Default days should be 1");
+        assert_eq!(
+            restore_default.tier,
+            Tier::Standard,
+            "Default tier should be Standard"
+        );
+
+        let default_trait = <Restore as Default>::default();
+        assert_eq!(
+            restore_default, default_trait,
+            "Both default methods should be equivalent"
+        );
+
+        let clone = restore_default.clone();
+        assert_eq!(clone, restore_default, "Clone should equal original");
+    }
+
+    #[test]
     fn test_complex_command() {
         let args = FindOpt::parse_from([
             "s3find",
@@ -890,6 +1027,76 @@ mod tests {
                 },
                 flat: false,
             }))
+        );
+    }
+
+    #[test]
+    fn test_restore_with_multiple_filters() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/archives",
+            "--name",
+            "*.bak",
+            "--regex",
+            r"^backup_\d{8}\.bak$",
+            "--storage-class",
+            "DEEP_ARCHIVE",
+            "--mtime",
+            "-90d",
+            "--bytes-size",
+            "+100M",
+            "--limit",
+            "10",
+            "restore",
+            "--days",
+            "14",
+            "--tier",
+            "Standard",
+        ]);
+
+        assert_eq!(args.path.bucket, "mybucket");
+        assert_eq!(args.path.prefix, Some("archives".to_string()));
+        assert_eq!(args.name.len(), 1);
+        assert_eq!(args.regex.len(), 1);
+        assert_eq!(args.storage_class, Some(ObjectStorageClass::DeepArchive));
+        assert_eq!(args.mtime.len(), 1);
+        assert_eq!(args.mtime[0], FindTime::Upper(90 * 24 * 3600)); // -90d
+        assert_eq!(args.size.len(), 1);
+        assert_eq!(args.size[0], FindSize::Bigger(100 * 1024 * 1024)); // +100M
+        assert_eq!(args.limit, Some(10));
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Restore(Restore {
+                days: 14,
+                tier: Tier::Standard,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_restore_days() {
+        assert_eq!(parse_restore_days("1").unwrap(), 1);
+        assert_eq!(parse_restore_days("7").unwrap(), 7);
+        assert_eq!(parse_restore_days("30").unwrap(), 30);
+        assert_eq!(parse_restore_days("365").unwrap(), 365);
+
+        assert!(parse_restore_days("0").is_err(), "0 days should be invalid");
+        assert!(
+            parse_restore_days("366").is_err(),
+            "366 days should be invalid"
+        );
+        assert!(
+            parse_restore_days("-1").is_err(),
+            "Negative days should be invalid"
+        );
+        assert!(
+            parse_restore_days("abc").is_err(),
+            "Non-numeric input should be invalid"
+        );
+        assert!(
+            parse_restore_days("").is_err(),
+            "Empty string should be invalid"
         );
     }
 }

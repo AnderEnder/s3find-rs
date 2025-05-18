@@ -5,6 +5,6 @@ pub mod command;
 pub mod error;
 pub mod filter;
 pub mod filter_list;
-pub mod function;
 pub mod run;
+pub mod run_command;
 pub mod utils;
