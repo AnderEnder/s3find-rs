@@ -12,7 +12,7 @@ use futures::Stream;
 use humansize::*;
 
 use crate::arg::*;
-use crate::function::*;
+use crate::run_command::*;
 
 pub struct FindCommand {
     pub client: Client,
