@@ -216,6 +216,10 @@ pub enum Cmd {
     #[command(name = "restore")]
     Restore(Restore),
 
+    /// Change storage class of matched objects and move objects to Glacier or Deep Archive
+    #[command(name = "change-storage")]
+    ChangeStorage(ChangeStorage),
+
     /// Do not do anything with keys, do not print them as well
     #[command(name = "nothing")]
     Nothing(DoNothing),
@@ -325,6 +329,13 @@ pub struct Restore {
     /// Retrieval tier for restoring objects
     #[arg(long, default_value = "Standard")]
     pub tier: Tier,
+}
+
+#[derive(Args, Clone, PartialEq, Debug)]
+pub struct ChangeStorage {
+    /// New storage class to apply to objects
+    #[arg(name = "class")]
+    pub storage_class: StorageClass,
 }
 
 impl Default for Restore {
@@ -1155,6 +1166,39 @@ mod tests {
                 },
                 flat: false,
                 storage_class: Some(StorageClass::IntelligentTiering),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_change_storage_class_command() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/data",
+            "--mtime",
+            "-30d",
+            "change-storage",
+            "GLACIER",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::ChangeStorage(ChangeStorage {
+                storage_class: StorageClass::Glacier,
+            }))
+        );
+
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/data",
+            "change-storage",
+            "DEEP_ARCHIVE",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::ChangeStorage(ChangeStorage {
+                storage_class: StorageClass::DeepArchive,
             }))
         );
     }
