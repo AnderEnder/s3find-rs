@@ -440,6 +440,7 @@ impl RunCommand for S3Copy {
                 .bucket(&path.bucket)
                 .key(target)
                 .copy_source(source_path)
+                .set_storage_class(self.storage_class.clone())
                 .send()
                 .await?;
         }
@@ -466,6 +467,7 @@ impl RunCommand for S3Move {
                 .bucket(&path.bucket)
                 .key(target)
                 .copy_source(source_path)
+                .set_storage_class(self.storage_class.clone())
                 .send()
                 .await?;
         }
@@ -559,7 +561,10 @@ impl RunCommand for Restore {
 mod tests {
     use super::*;
     use aws_config::BehaviorVersion;
-    use aws_sdk_s3::{primitives::DateTime, types::ObjectStorageClass};
+    use aws_sdk_s3::{
+        primitives::DateTime,
+        types::{ObjectStorageClass, StorageClass},
+    };
     use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
     use aws_smithy_types::body::SdkBody;
     use aws_smithy_types::date_time::Format;
@@ -1449,6 +1454,7 @@ mod tests {
         let cmd = Cmd::Copy(S3Copy {
             destination,
             flat: true,
+            storage_class: None,
         })
         .downcast();
 
@@ -1458,6 +1464,165 @@ mod tests {
         };
 
         cmd.execute(&client, &path, &[object1, object2]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
+        let key = "test/file_to_copy.txt";
+
+        let object = Object::builder()
+            .e_tag("test-etag")
+            .key(key)
+            .size(1000)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/archive/file_to_copy.txt")
+            .header("x-amz-copy-source", "test-bucket/test/file_to_copy.txt")
+            .header("x-amz-storage-class", "GLACIER")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <LastModified>2023-01-02T00:00:00Z</LastModified>
+            <ETag>"new-etag"</ETag>
+        </CopyObjectResult>"#;
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let destination = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: Some("archive/".to_owned()),
+        };
+
+        let cmd = Cmd::Copy(S3Copy {
+            destination,
+            flat: true,
+            storage_class: Some(StorageClass::Glacier),
+        })
+        .downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, &path, &[object]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_s3_move_with_storage_class() -> Result<(), Error> {
+        let key = "test/file_to_move.txt";
+
+        let object = Object::builder()
+            .e_tag("test-etag")
+            .key(key)
+            .size(1000)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let req_copy = http::Request::builder()
+            .method("PUT")
+            .uri("https://test-bucket.s3.amazonaws.com/archive/file_to_move.txt")
+            .header("x-amz-copy-source", "test-bucket/test/file_to_move.txt")
+            .header("x-amz-storage-class", "INTELLIGENT_TIERING")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_copy_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <LastModified>2023-01-02T00:00:00Z</LastModified>
+            <ETag>"new-etag"</ETag>
+        </CopyObjectResult>"#;
+
+        let resp_copy = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_copy_body))
+            .unwrap();
+
+        let req_delete = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/?delete")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_delete_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Deleted>
+                <Key>test/file_to_move.txt</Key>
+            </Deleted>
+        </DeleteResult>"#;
+
+        let resp_delete = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_delete_body))
+            .unwrap();
+
+        let events = vec![
+            ReplayEvent::new(req_copy, resp_copy),
+            ReplayEvent::new(req_delete, resp_delete),
+        ];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let destination = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: Some("archive/".to_owned()),
+        };
+
+        let cmd = Cmd::Move(S3Move {
+            destination,
+            flat: true,
+            storage_class: Some(StorageClass::IntelligentTiering),
+        })
+        .downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, &path, &[object]).await?;
 
         Ok(())
     }
@@ -1572,6 +1737,7 @@ mod tests {
         let cmd = Cmd::Move(S3Move {
             destination,
             flat: true,
+            storage_class: None,
         })
         .downcast();
 
