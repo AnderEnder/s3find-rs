@@ -211,7 +211,7 @@ pub enum Cmd {
     #[command(name = "public")]
     Public(SetPublic),
 
-    /// Restore objects from Glacier storage
+    /// Restore objects from Glacier and Deep Archive storage
     #[command(name = "restore")]
     Restore(Restore),
 
