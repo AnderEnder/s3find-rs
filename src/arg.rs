@@ -1,4 +1,5 @@
 use aws_sdk_s3::types::ObjectStorageClass;
+use aws_sdk_s3::types::StorageClass;
 use aws_sdk_s3::types::Tier;
 use aws_types::region::Region;
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
@@ -215,6 +216,10 @@ pub enum Cmd {
     #[command(name = "restore")]
     Restore(Restore),
 
+    /// Change storage class of matched objects and move objects to Glacier or Deep Archive
+    #[command(name = "change-storage")]
+    ChangeStorage(ChangeStorage),
+
     /// Do not do anything with keys, do not print them as well
     #[command(name = "nothing")]
     Nothing(DoNothing),
@@ -284,6 +289,10 @@ pub struct S3Copy {
     /// Copy keys like files
     #[arg(long = "flat")]
     pub flat: bool,
+
+    /// Storage class for the copied objects
+    #[arg(long = "storage-class")]
+    pub storage_class: Option<StorageClass>,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
@@ -295,6 +304,10 @@ pub struct S3Move {
     /// Copy keys like files
     #[arg(long = "flat")]
     pub flat: bool,
+
+    /// Storage class for the moved objects
+    #[arg(long = "storage-class")]
+    pub storage_class: Option<StorageClass>,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
@@ -316,6 +329,13 @@ pub struct Restore {
     /// Retrieval tier for restoring objects
     #[arg(long, default_value = "Standard")]
     pub tier: Tier,
+}
+
+#[derive(Args, Clone, PartialEq, Debug)]
+pub struct ChangeStorage {
+    /// New storage class to apply to objects
+    #[arg(name = "class")]
+    pub storage_class: StorageClass,
 }
 
 impl Default for Restore {
@@ -854,6 +874,31 @@ mod tests {
                     prefix: Some("dest".to_string()),
                 },
                 flat: true,
+                storage_class: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn test_copy_with_storage_class() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/source",
+            "copy",
+            "s3://otherbucket/dest",
+            "--storage-class",
+            "GLACIER",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Copy(S3Copy {
+                destination: S3Path {
+                    bucket: "otherbucket".to_string(),
+                    prefix: Some("dest".to_string()),
+                },
+                flat: false,
+                storage_class: Some(StorageClass::Glacier),
             }))
         );
     }
@@ -1026,6 +1071,7 @@ mod tests {
                     prefix: Some("logs/2023".to_string()),
                 },
                 flat: false,
+                storage_class: None,
             }))
         );
     }
@@ -1097,6 +1143,63 @@ mod tests {
         assert!(
             parse_restore_days("").is_err(),
             "Empty string should be invalid"
+        );
+    }
+
+    #[test]
+    fn test_move_with_storage_class() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/source",
+            "move",
+            "s3://otherbucket/dest",
+            "--storage-class",
+            "INTELLIGENT_TIERING",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::Move(S3Move {
+                destination: S3Path {
+                    bucket: "otherbucket".to_string(),
+                    prefix: Some("dest".to_string()),
+                },
+                flat: false,
+                storage_class: Some(StorageClass::IntelligentTiering),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_change_storage_class_command() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/data",
+            "--mtime",
+            "-30d",
+            "change-storage",
+            "GLACIER",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::ChangeStorage(ChangeStorage {
+                storage_class: StorageClass::Glacier,
+            }))
+        );
+
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/data",
+            "change-storage",
+            "DEEP_ARCHIVE",
+        ]);
+
+        assert_eq!(
+            args.cmd,
+            Some(Cmd::ChangeStorage(ChangeStorage {
+                storage_class: StorageClass::DeepArchive,
+            }))
         );
     }
 }

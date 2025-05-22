@@ -104,6 +104,7 @@ Commands:
   tags      Set the tags(overwrite) for the matched keys
   public    Make the matched keys public available (readonly)
   restore   Restore objects from Glacier and Deep Archive storage
+  change-storage  Change storage class of matched objects and move objects to Glacier or Deep Archive
   nothing   Do not do anything with keys, do not print them as well
   help      Print this message or the help of the given subcommand(s)
 
