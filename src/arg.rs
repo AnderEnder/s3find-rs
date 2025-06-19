@@ -11,6 +11,9 @@ use thiserror::Error;
 const MIN_BUCKET_LENGTH: usize = 3;
 const MAX_BUCKET_LENGTH: usize = 63;
 
+const INVALID_PREFIXES: &[&str] = &["sthree-.", "amzn-s3-demo-", "xn--"];
+const INVALID_SUFFIXES: &[&str] = &["-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"];
+
 /// Validates an S3 bucket name according to AWS rules:
 /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
 fn validate_bucket_name(bucket: &str) -> bool {
@@ -29,7 +32,12 @@ fn validate_bucket_name(bucket: &str) -> bool {
         || bucket.contains("-.")
         || bucket.contains("__")
         || bucket.contains(' ')
-        || bucket.starts_with("xn--")
+        || INVALID_PREFIXES
+            .iter()
+            .any(|&prefix| bucket.starts_with(prefix))
+        || INVALID_SUFFIXES
+            .iter()
+            .any(|&suffix| bucket.ends_with(suffix))
         || bucket
             .chars()
             .any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '.')
@@ -411,13 +419,17 @@ impl FromStr for S3Path {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let regex = Regex::new(r#"^s3://([\d\w][a-z0-9.-]*[\d\w])(/([\d\w/ _-]*))?$"#)?;
+        let regex = Regex::new(r#"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/([\d\w/ _-]*))?$"#)?;
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
         let bucket = captures
             .get(1)
             .map(|x| x.as_str().to_owned())
             .ok_or(FindError::S3Parse)?;
+
+        if !validate_bucket_name(&bucket) {
+            return Err(FindError::S3Parse.into());
+        }
 
         if !validate_bucket_name(&bucket) {
             return Err(FindError::S3Parse.into());
@@ -1312,5 +1324,64 @@ mod tests {
         assert!(!validate_bucket_name("mybucket-")); // Ends with hyphen
         assert!(!validate_bucket_name(".mybucket")); // Starts with period
         assert!(!validate_bucket_name("mybucket.")); // Ends with period
+    }
+
+    #[test]
+    fn test_bucket_name_prefix_suffix_validation() {
+        // Test all invalid prefixes
+        for &prefix in INVALID_PREFIXES {
+            let test_bucket = format!("{}bucket", prefix);
+            assert!(
+                !validate_bucket_name(&test_bucket),
+                "Should reject bucket name with invalid prefix: {}",
+                prefix
+            );
+
+            // Test with additional valid characters after prefix
+            let test_bucket = format!("{}valid-bucket-name", prefix);
+            assert!(
+                !validate_bucket_name(&test_bucket),
+                "Should reject bucket name with invalid prefix even with valid suffix: {}",
+                prefix
+            );
+        }
+
+        // Test all invalid suffixes
+        for &suffix in INVALID_SUFFIXES {
+            let test_bucket = format!("bucket{}", suffix);
+            assert!(
+                !validate_bucket_name(&test_bucket),
+                "Should reject bucket name with invalid suffix: {}",
+                suffix
+            );
+
+            // Test with additional valid characters before suffix
+            let test_bucket = format!("valid-bucket-name{}", suffix);
+            assert!(
+                !validate_bucket_name(&test_bucket),
+                "Should reject bucket name with invalid suffix even with valid prefix: {}",
+                suffix
+            );
+        }
+
+        // Test valid cases that are similar to invalid ones but don't match exactly
+        let valid_cases = vec![
+            "mythree-bucket",        // Similar to "sthree-." but valid
+            "my-s3-demo-bucket",     // Similar to "amzn-s3-demo-" but valid
+            "bucket-s3",             // Similar to "-s3alias" but valid
+            "bucket-ol-s3",          // Similar to "--ol-s3" but valid
+            "bucket-wrap",           // Similar to ".mrap" but valid
+            "bucket-x-s3-extra",     // Similar to "--x-s3" but valid
+            "bucket-table-s3-extra", // Similar to "--table-s3" but valid
+            "xn-bucket",             // Similar to "xn--" but valid
+        ];
+
+        for case in valid_cases {
+            assert!(
+                validate_bucket_name(case),
+                "Should accept bucket name that is similar but valid: {}",
+                case
+            );
+        }
     }
 }
