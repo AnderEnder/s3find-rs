@@ -8,6 +8,42 @@ use regex::Regex;
 use std::str::FromStr;
 use thiserror::Error;
 
+const MIN_BUCKET_LENGTH: usize = 3;
+const MAX_BUCKET_LENGTH: usize = 63;
+
+/// Validates an S3 bucket name according to AWS rules:
+/// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+fn validate_bucket_name(bucket: &str) -> bool {
+    if bucket.len() < MIN_BUCKET_LENGTH || bucket.len() > MAX_BUCKET_LENGTH {
+        return false;
+    }
+
+    let first_char = bucket.chars().next().unwrap();
+    let last_char = bucket.chars().last().unwrap();
+    if !first_char.is_ascii_alphanumeric() || !last_char.is_ascii_alphanumeric() {
+        return false;
+    }
+
+    if bucket.contains("..")
+        || bucket.contains(".-")
+        || bucket.contains("-.")
+        || bucket.contains("__")
+        || bucket.contains(' ')
+        || bucket.starts_with("xn--")
+        || bucket
+            .chars()
+            .any(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '.')
+    {
+        return false;
+    }
+
+    if bucket.split('.').all(|part| part.parse::<u8>().is_ok()) {
+        return false;
+    }
+
+    true
+}
+
 fn region(s: &str) -> std::result::Result<Region, clap::Error> {
     Ok(Region::new(s.to_owned()))
 }
@@ -375,13 +411,18 @@ impl FromStr for S3Path {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let regex = Regex::new(r#"^s3://([\d\w _-]+)(/([\d\w/ _-]*))?"#)?;
+        let regex = Regex::new(r#"^s3://([\d\w][a-z0-9.-]*[\d\w])(/([\d\w/ _-]*))?$"#)?;
         let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
 
         let bucket = captures
             .get(1)
             .map(|x| x.as_str().to_owned())
             .ok_or(FindError::S3Parse)?;
+
+        if !validate_bucket_name(&bucket) {
+            return Err(FindError::S3Parse.into());
+        }
+
         let prefix = captures.get(3).map(|x| x.as_str().to_owned());
 
         Ok(S3Path { bucket, prefix })
@@ -583,6 +624,49 @@ mod tests {
         assert!("s3:/testbucket".parse::<S3Path>().is_err());
         assert!("://testbucket".parse::<S3Path>().is_err());
         assert!("as3://testbucket".parse::<S3Path>().is_err());
+    }
+
+    #[test]
+    fn s3path_validation_bypass() {
+        let invalid_cases = vec![
+            "s3://bucket..name",      // Double dots not allowed
+            "s3://bucket.-name",      // Can't start segment with dash
+            "s3://bucket-.name",      // Can't end segment with dash
+            "s3://my..bucket",        // Double dots between segments
+            "s3://UPPERCASE-BUCKET",  // Uppercase not allowed in new buckets
+            "s3://bucket_name",       // Underscores not allowed in new buckets
+            "s3://bucket.with space", // Spaces not allowed
+            "s3://192.168.1.1",       // IP address format not allowed
+            "s3://bucket.",           // Can't end with dot
+            "s3://bu",                // Too short (min 3 chars)
+            "s3://bucket@name",       // Special chars not allowed
+            "s3://xn--bucket",        // ACE/Punycode prefixes not allowed
+            "s3://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Too long (64 chars)
+        ];
+
+        for case in invalid_cases {
+            assert!(
+                case.parse::<S3Path>().is_err(),
+                "Should reject invalid bucket name: {}",
+                case
+            );
+        }
+
+        // Test valid cases
+        let valid_cases = vec![
+            "s3://my-bucket-name/path",
+            "s3://my.bucket.name/path",
+            "s3://mybucket123/path",
+            "s3://123-bucket-name/",
+        ];
+
+        for case in valid_cases {
+            assert!(
+                case.parse::<S3Path>().is_ok(),
+                "Should accept valid bucket name: {}",
+                case
+            );
+        }
     }
 
     #[test]
@@ -1201,5 +1285,32 @@ mod tests {
                 storage_class: StorageClass::DeepArchive,
             }))
         );
+    }
+
+    #[test]
+    fn test_bucket_name_validation_correct() {
+        assert!(validate_bucket_name("my-bucket-name"));
+        assert!(validate_bucket_name("my.bucket.name"));
+        assert!(validate_bucket_name("mybucket"));
+        assert!(validate_bucket_name("my-bucket-123"));
+        assert!(validate_bucket_name("123-bucket-name"));
+    }
+
+    #[test]
+    fn test_bucket_name_validation_incorrect() {
+        assert!(!validate_bucket_name("bu")); // Too short
+        assert!(!validate_bucket_name("a".repeat(64).as_str())); // Too long
+        assert!(!validate_bucket_name("my..bucket")); // Consecutive periods
+        assert!(!validate_bucket_name("my.-bucket")); // Period next to hyphen
+        assert!(!validate_bucket_name("my-.bucket")); // Hyphen next to period
+        assert!(!validate_bucket_name("my__bucket")); // Consecutive underscores
+        assert!(!validate_bucket_name("my bucket")); // Contains space
+        assert!(!validate_bucket_name("xn--bucket")); // ACE/Punycode prefix
+        assert!(!validate_bucket_name("my@bucket")); // Invalid character
+        assert!(!validate_bucket_name("192.168.1.1")); // IP address format
+        assert!(!validate_bucket_name("-mybucket")); // Starts with hyphen
+        assert!(!validate_bucket_name("mybucket-")); // Ends with hyphen
+        assert!(!validate_bucket_name(".mybucket")); // Starts with period
+        assert!(!validate_bucket_name("mybucket.")); // Ends with period
     }
 }
