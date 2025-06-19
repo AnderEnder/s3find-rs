@@ -358,14 +358,17 @@ impl RunCommand for SetPublic {
                 .send()
                 .await?;
 
-            let key = object.key.clone().unwrap();
-            let region = client
-                .config()
-                .region()
-                .map(|x| x.as_ref())
-                .unwrap_or("us-east-1");
-            let url = generate_s3_url(region, &path.bucket, &key);
-            println!("{} {}", key, url);
+            if let Some(key) = object.key.as_ref() {
+                let region = client
+                    .config()
+                    .region()
+                    .map(|x| x.as_ref())
+                    .unwrap_or("us-east-1");
+                let url = generate_s3_url(region, &path.bucket, key);
+                println!("{} {}", key, url);
+            } else {
+                println!("No key found for object");
+            }
         }
         Ok(())
     }
@@ -384,8 +387,7 @@ impl RunCommand for Download {
             let mut count: u64 = 0;
             let pb = ProgressBar::new(size);
             pb.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-            .unwrap()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
             .progress_chars("#>-"));
 
             println!(
@@ -394,8 +396,7 @@ impl RunCommand for Download {
                 &key,
                 file_path
                     .to_str()
-                    .ok_or(FunctionError::FileNameParseError)
-                    .unwrap()
+                    .ok_or(FunctionError::FileNameParseError)?
             );
 
             if file_path.exists() && !self.force {
@@ -414,7 +415,7 @@ impl RunCommand for Download {
             let mut output = File::create(&file_path)?;
 
             while let Some(bytes) = stream.try_next().await? {
-                output.write_all(&bytes).unwrap();
+                output.write_all(&bytes)?;
                 count += bytes.len() as u64;
                 pb.set_position(count);
             }
