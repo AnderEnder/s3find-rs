@@ -4,6 +4,7 @@ use aws_sdk_s3::types::Tier;
 use aws_types::region::Region;
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::Pattern;
+use lazy_static::lazy_static;
 use regex::Regex;
 use std::str::FromStr;
 use thiserror::Error;
@@ -14,6 +15,11 @@ const MAX_BUCKET_LENGTH: usize = 63;
 const INVALID_PREFIXES: &[&str] = &["sthree-.", "amzn-s3-demo-", "xn--"];
 const INVALID_SUFFIXES: &[&str] = &["-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"];
 
+lazy_static! {
+    static ref S3_PATH_REGEX: Regex =
+        Regex::new(r#"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/(.*))?$"#,).unwrap();
+}
+
 /// Validates an S3 bucket name according to AWS rules:
 /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
 fn validate_bucket_name(bucket: &str) -> bool {
@@ -23,7 +29,9 @@ fn validate_bucket_name(bucket: &str) -> bool {
 
     let first_char = bucket.chars().next().unwrap();
     let last_char = bucket.chars().last().unwrap();
-    if !first_char.is_ascii_alphanumeric() || !last_char.is_ascii_alphanumeric() {
+    if !first_char.is_ascii_lowercase() && !first_char.is_ascii_digit()
+        || !last_char.is_ascii_alphanumeric()
+    {
         return false;
     }
 
@@ -393,8 +401,8 @@ impl Default for Restore {
 
 #[derive(Error, Debug)]
 pub enum FindError {
-    #[error("Invalid s3 path")]
-    S3Parse,
+    #[error("Invalid s3 path: {0}")]
+    S3Parse(String),
     #[error("Invalid size parameter")]
     SizeParse,
     #[error("Invalid mtime parameter")]
@@ -419,20 +427,17 @@ impl FromStr for S3Path {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let regex = Regex::new(r#"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/([\d\w/ _-]*))?$"#)?;
-        let captures = regex.captures(s).ok_or(FindError::S3Parse)?;
+        let captures = S3_PATH_REGEX
+            .captures(s)
+            .ok_or(FindError::S3Parse(s.to_string()))?;
 
         let bucket = captures
             .get(1)
             .map(|x| x.as_str().to_owned())
-            .ok_or(FindError::S3Parse)?;
+            .ok_or(FindError::S3Parse(s.to_string()))?;
 
         if !validate_bucket_name(&bucket) {
-            return Err(FindError::S3Parse.into());
-        }
-
-        if !validate_bucket_name(&bucket) {
-            return Err(FindError::S3Parse.into());
+            return Err(FindError::S3Parse(s.to_string()).into());
         }
 
         let prefix = captures.get(3).map(|x| x.as_str().to_owned());
@@ -673,10 +678,12 @@ mod tests {
         ];
 
         for case in valid_cases {
+            let r = case.parse::<S3Path>();
             assert!(
-                case.parse::<S3Path>().is_ok(),
-                "Should accept valid bucket name: {}",
-                case
+                r.is_ok(),
+                "Should accept valid bucket name: {}, error: {}",
+                case,
+                r.unwrap_err()
             );
         }
     }
@@ -1328,7 +1335,6 @@ mod tests {
 
     #[test]
     fn test_bucket_name_prefix_suffix_validation() {
-        // Test all invalid prefixes
         for &prefix in INVALID_PREFIXES {
             let test_bucket = format!("{}bucket", prefix);
             assert!(
@@ -1337,7 +1343,6 @@ mod tests {
                 prefix
             );
 
-            // Test with additional valid characters after prefix
             let test_bucket = format!("{}valid-bucket-name", prefix);
             assert!(
                 !validate_bucket_name(&test_bucket),
@@ -1346,7 +1351,6 @@ mod tests {
             );
         }
 
-        // Test all invalid suffixes
         for &suffix in INVALID_SUFFIXES {
             let test_bucket = format!("bucket{}", suffix);
             assert!(
@@ -1355,7 +1359,6 @@ mod tests {
                 suffix
             );
 
-            // Test with additional valid characters before suffix
             let test_bucket = format!("valid-bucket-name{}", suffix);
             assert!(
                 !validate_bucket_name(&test_bucket),
@@ -1364,7 +1367,6 @@ mod tests {
             );
         }
 
-        // Test valid cases that are similar to invalid ones but don't match exactly
         let valid_cases = vec![
             "mythree-bucket",        // Similar to "sthree-." but valid
             "my-s3-demo-bucket",     // Similar to "amzn-s3-demo-" but valid
@@ -1383,5 +1385,34 @@ mod tests {
                 case
             );
         }
+    }
+
+    #[test]
+    fn test_validate_bucket_name_edge_cases() {
+        assert!(!validate_bucket_name(""));
+
+        assert!(!validate_bucket_name(&"a".repeat(64)));
+        assert!(validate_bucket_name(&"a".repeat(3)));
+        assert!(validate_bucket_name(&"a".repeat(63)));
+
+        assert!(!validate_bucket_name("-bucket"));
+        assert!(!validate_bucket_name("bucket-"));
+        assert!(!validate_bucket_name(".bucket"));
+        assert!(!validate_bucket_name("bucket."));
+
+        assert!(!validate_bucket_name("bucket..name"));
+        assert!(!validate_bucket_name("bucket.-name"));
+        assert!(!validate_bucket_name("bucket-.name"));
+        assert!(!validate_bucket_name("bucket__name"));
+
+        assert!(!validate_bucket_name("192.168.1.1"));
+        assert!(!validate_bucket_name("10.0.0.0"));
+        assert!(!validate_bucket_name("172.16.0.1"));
+
+        assert!(validate_bucket_name("1bucket2"));
+        assert!(validate_bucket_name("bucket.name"));
+        assert!(validate_bucket_name("bucket-name"));
+        assert!(validate_bucket_name("b.u.c.k.e.t"));
+        assert!(validate_bucket_name("b-u-c-k-e-t"));
     }
 }

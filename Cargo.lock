@@ -2467,6 +2467,7 @@ dependencies = [
  "humansize",
  "indicatif",
  "itertools 0.14.0",
+ "lazy_static",
  "regex",
  "serde",
  "serde_json",
