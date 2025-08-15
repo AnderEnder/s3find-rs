@@ -228,9 +228,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-s3"
-version = "1.101.0"
+version = "1.103.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b16efa59a199f5271bf21ab3e570c5297d819ce4f240e6cf0096d1dc0049c44"
+checksum = "af040a86ae4378b7ed2f62c83b36be1848709bbbf5757ec850d0e08596a26be9"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -368,9 +368,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-checksums"
-version = "0.63.6"
+version = "0.63.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9054b4cc5eda331cde3096b1576dec45365c5cbbca61d1fffa5f236e251dfce7"
+checksum = "4dbef71cd3cf607deb5c407df52f7e589e6849b296874ee448977efbb6d0832b"
 dependencies = [
  "aws-smithy-http",
  "aws-smithy-types",
@@ -935,16 +935,15 @@ checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
 name = "crc-fast"
-version = "1.4.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec9f79df9b0383475ae6df8fcf35d4e29528441706385339daf0fe3f4cce040b"
+checksum = "6bf62af4cc77d8fe1c22dde4e721d87f2f54056139d8c412e1366b740305f56f"
 dependencies = [
  "crc",
  "digest",
  "libc",
  "rand",
  "regex",
- "rustversion",
 ]
 
 [[package]]
