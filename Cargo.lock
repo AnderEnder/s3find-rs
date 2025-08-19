@@ -420,9 +420,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-http-client"
-version = "1.0.6"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f108f1ca850f3feef3009bdcc977be201bca9a91058864d9de0684e64514bee0"
+checksum = "4fdbad9bd9dbcc6c5e68c311a841b54b70def3ca3b674c42fbebb265980539f8"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-protocol-test",
@@ -449,6 +449,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls 0.26.2",
  "tower",
  "tracing",
 ]
@@ -502,9 +503,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.8.6"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e107ce0783019dbff59b3a244aa0c114e4a8c9d93498af9162608cd5474e796"
+checksum = "a3d57c8b53a72d15c8e190475743acf34e4996685e346a3448dd54ef696fc6e0"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
@@ -527,9 +528,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime-api"
-version = "1.8.7"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75d52251ed4b9776a3e8487b2a01ac915f73b2da3af8fc1e77e0fce697a550d4"
+checksum = "07f5e0fc8a6b3f2303f331b94504bbf754d85488f402d6f1dd7a6080f99afe56"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-types",
@@ -617,6 +618,12 @@ name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64-simd"
@@ -1571,6 +1578,7 @@ version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d9b05277c7e8da2c93a568989bb6207bef0112e8d17df7a6eda4a3cf143bc5e"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-core",
@@ -1578,7 +1586,9 @@ dependencies = [
  "http 1.3.1",
  "http-body 1.0.1",
  "hyper 1.6.0",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2 0.6.0",
  "tokio",
@@ -1751,6 +1761,12 @@ dependencies = [
  "cfg-if",
  "libc",
 ]
+
+[[package]]
+name = "ipnet"
+version = "2.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -2404,7 +2420,7 @@ version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
 dependencies = [
- "base64",
+ "base64 0.21.7",
 ]
 
 [[package]]
