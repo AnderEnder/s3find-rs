@@ -3,7 +3,6 @@ use aws_sdk_s3::{Client, config::Credentials};
 
 use crate::arg::{self, FindOpt};
 
-#[inline]
 pub async fn setup_client(args: &arg::FindOpt) -> Client {
     let FindOpt {
         aws_access_key,
@@ -12,16 +11,17 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
         ..
     } = args;
 
-    let region_provider =
-        aws_config::meta::region::RegionProviderChain::first_try(aws_region.to_owned())
-            .or_default_provider();
+    let region_provider = match aws_region {
+        Some(region) => aws_config::meta::region::RegionProviderChain::first_try(region.to_owned()),
+        None => aws_config::meta::region::RegionProviderChain::default_provider(),
+    };
 
     let shared_config = match (aws_access_key, aws_secret_key) {
         (Some(aws_access_key), Some(aws_secret_key)) => {
             let credentials_provider =
                 Credentials::new(aws_access_key, aws_secret_key, None, None, "static");
             aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::v2025_01_17())
+                .behavior_version(BehaviorVersion::latest())
                 .region(region_provider)
                 .credentials_provider(credentials_provider)
                 .load()
@@ -30,7 +30,7 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
         _ => {
             let credentials_provider = CredentialsProviderChain::default_provider().await;
             aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::v2025_01_17())
+                .behavior_version(BehaviorVersion::latest())
                 .region(region_provider)
                 .credentials_provider(credentials_provider)
                 .load()
@@ -50,12 +50,11 @@ mod tests {
 
     use std::str::FromStr;
 
-    #[tokio::test]
     async fn test_get_s3_client() {
         let args = FindOpt {
             aws_access_key: Some("mock_access".to_string()),
             aws_secret_key: Some("mock_secret".to_string()),
-            aws_region: Region::new("mock-region"),
+            aws_region: Some(Region::new("mock-region")),
             path: S3Path::from_str("s3://mock-bucket/mock-prefix").unwrap(),
             limit: Some(100),
             summarize: false,
@@ -73,7 +72,7 @@ mod tests {
         let args_without_creds = FindOpt {
             aws_access_key: None,
             aws_secret_key: None,
-            aws_region: Region::new("mock-region"),
+            aws_region: Some(Region::new("mock-region")),
             ..args
         };
         let client_without_creds = setup_client(&args_without_creds).await;

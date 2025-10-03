@@ -101,7 +101,11 @@ impl FindStream {
                     let objects = output.contents.unwrap_or(Vec::new());
                     Some((objects, p))
                 }
-                _ => None,
+                Some(Err(e)) => {
+                    eprintln!("Error listing objects: {:?}", e);
+                    None
+                }
+                None => None,
             }
         })
     }
@@ -384,7 +388,7 @@ mod tests {
         let config = aws_sdk_s3::Config::builder()
             .region(Region::new("mock-region"))
             .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
-            .behavior_version(BehaviorVersion::v2025_01_17())
+            .behavior_version(BehaviorVersion::latest())
             .build();
 
         let client = Client::from_conf(config);
@@ -422,7 +426,7 @@ mod tests {
         let config = aws_sdk_s3::Config::builder()
             .region(Region::new("mock-region"))
             .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
-            .behavior_version(BehaviorVersion::v2025_01_17())
+            .behavior_version(BehaviorVersion::latest())
             .build();
 
         let client = Client::from_conf(config);
@@ -471,7 +475,7 @@ mod tests {
         let config = aws_sdk_s3::Config::builder()
             .region(Region::new("mock-region"))
             .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
-            .behavior_version(BehaviorVersion::v2025_01_17())
+            .behavior_version(BehaviorVersion::latest())
             .build();
 
         let client = Client::from_conf(config);
@@ -497,7 +501,7 @@ mod tests {
         let config = aws_sdk_s3::Config::builder()
             .region(Region::new("us-west-2"))
             .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
-            .behavior_version(BehaviorVersion::v2025_01_17())
+            .behavior_version(BehaviorVersion::latest())
             .build();
 
         let find_stream = FindStream {
@@ -556,7 +560,7 @@ mod tests {
         let config = aws_sdk_s3::Config::builder()
             .region(Region::new("mock-region"))
             .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
-            .behavior_version(BehaviorVersion::v2025_01_17())
+            .behavior_version(BehaviorVersion::latest())
             .build();
 
         let client = Client::from_conf(config);

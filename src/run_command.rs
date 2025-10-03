@@ -823,7 +823,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Print(AdvancedPrint::default()).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -862,7 +862,7 @@ mod tests {
         })
         .downcast();
 
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let client = Client::new(&config);
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -900,7 +900,7 @@ mod tests {
         })
         .downcast();
 
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let client = Client::new(&config);
         let path = S3Path {
             bucket: "test-bucket".to_owned(),
@@ -925,7 +925,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Ls(FastPrint {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -951,7 +951,7 @@ mod tests {
             .build();
 
         let cmd = Cmd::Nothing(DoNothing {}).downcast();
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let client = Client::new(&config);
 
         let path = S3Path {
@@ -980,7 +980,7 @@ mod tests {
         })
         .downcast();
 
-        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+        let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
         let client = Client::new(&config);
 
         let path = S3Path {

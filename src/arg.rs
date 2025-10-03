@@ -119,9 +119,9 @@ pub struct FindOpt {
     )]
     pub aws_secret_key: Option<String>,
 
-    // The region to use. Default value is us-east-1
-    #[arg(name = "aws-region", long, default_value = "us-east-1", value_parser=region)]
-    pub aws_region: Region,
+    // The region to use. If not specified, will use the region from AWS profile or default to us-east-1
+    #[arg(name = "aws-region", long, value_parser=region)]
+    pub aws_region: Option<Region>,
 
     /// Glob pattern for match, can be multiple
     #[arg(name = "pattern", long = "name", number_of_values = 1)]
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(args.path.prefix, Some("path".to_string()));
 
         // Default values
-        assert_eq!(args.aws_region.as_ref(), "us-east-1");
+        assert_eq!(args.aws_region, None);
         assert_eq!(args.page_size, 1000);
         assert!(!args.summarize);
         assert!(args.cmd.is_none());
@@ -836,7 +836,7 @@ mod tests {
     fn test_aws_region() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--aws-region", "eu-west-1"]);
 
-        assert_eq!(args.aws_region.as_ref(), "eu-west-1");
+        assert_eq!(args.aws_region.as_ref().map(|r| r.as_ref()), Some("eu-west-1"));
     }
 
     #[test]
