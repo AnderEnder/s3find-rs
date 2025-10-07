@@ -526,7 +526,7 @@ mod tests {
         let args = FindOpt {
             aws_access_key: Some("mock_access".to_string()),
             aws_secret_key: Some("mock_secret".to_string()),
-            aws_region: Region::new("mock-region"),
+            aws_region: Some(Region::new("mock-region")),
             path: S3Path {
                 bucket: "test-bucket".to_string(),
                 prefix: Some("test-prefix/".to_string()),
@@ -602,7 +602,7 @@ mod tests {
         let opts = FindOpt {
             aws_access_key: Some("test-access".to_string()),
             aws_secret_key: Some("test-secret".to_string()),
-            aws_region: region.clone(),
+            aws_region: Some(region.clone()),
             path: path.clone(),
             cmd: None,
             page_size,
@@ -1025,7 +1025,7 @@ mod tests {
         let opts1 = FindOpt {
             aws_access_key: Some("test-access".to_string()),
             aws_secret_key: Some("test-secret".to_string()),
-            aws_region: Region::new("test-region"),
+            aws_region: Some(Region::new("test-region")),
             path: path1.clone(),
             cmd: None,
             page_size: 500,
@@ -1055,7 +1055,7 @@ mod tests {
         let opts_withour_prefix = FindOpt {
             aws_access_key: None,
             aws_secret_key: None,
-            aws_region: Region::new("us-west-2"),
+            aws_region: Some(Region::new("us-west-2")),
             path: path_without_prefix.clone(),
             cmd: Some(Cmd::Ls(FastPrint {})),
             page_size: 1000,

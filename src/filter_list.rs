@@ -174,7 +174,7 @@ mod tests {
             path: S3Path::from_str("s3://bucket/prefix").unwrap(),
             aws_access_key: Some("test_access_key".to_owned()),
             aws_secret_key: Some("test_secret_key".to_owned()),
-            aws_region: Region::from_static("us-east-2"),
+            aws_region: Some(Region::from_static("us-east-2")),
             storage_class: None,
             page_size: 100,
             limit: None,
