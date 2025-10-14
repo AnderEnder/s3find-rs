@@ -879,7 +879,10 @@ mod tests {
     fn test_aws_region() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--aws-region", "eu-west-1"]);
 
-        assert_eq!(args.aws_region.as_ref().map(|r| r.as_ref()), Some("eu-west-1"));
+        assert_eq!(
+            args.aws_region.as_ref().map(|r| r.as_ref()),
+            Some("eu-west-1")
+        );
     }
 
     #[test]
