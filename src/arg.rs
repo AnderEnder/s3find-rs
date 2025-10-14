@@ -440,7 +440,12 @@ impl FromStr for S3Path {
             return Err(FindError::S3Parse(s.to_string()).into());
         }
 
-        let prefix = captures.get(3).map(|x| x.as_str().to_owned());
+        let prefix = captures.get(3).map(|x| {
+            let s = x.as_str();
+            // Strip trailing slashes for consistent behavior
+            let trimmed = s.trim_end_matches('/');
+            trimmed.to_owned()
+        });
 
         Ok(S3Path { bucket, prefix })
     }
@@ -630,6 +635,44 @@ mod tests {
             Some(S3Path {
                 bucket: "testbucket".to_owned(),
                 prefix: None,
+            })
+        );
+    }
+
+    #[test]
+    fn s3path_trailing_slash_handling() {
+        // Trailing slashes should be stripped for consistent behavior
+        assert_eq!(
+            "s3://testbucket/path/".parse().ok(),
+            Some(S3Path {
+                bucket: "testbucket".to_owned(),
+                prefix: Some("path".to_owned()),
+            })
+        );
+
+        assert_eq!(
+            "s3://testbucket/multi/path/".parse().ok(),
+            Some(S3Path {
+                bucket: "testbucket".to_owned(),
+                prefix: Some("multi/path".to_owned()),
+            })
+        );
+
+        // Multiple trailing slashes should also be stripped
+        assert_eq!(
+            "s3://testbucket/path///".parse().ok(),
+            Some(S3Path {
+                bucket: "testbucket".to_owned(),
+                prefix: Some("path".to_owned()),
+            })
+        );
+
+        // s3://bucket/ should still result in empty prefix
+        assert_eq!(
+            "s3://testbucket/".parse().ok(),
+            Some(S3Path {
+                bucket: "testbucket".to_owned(),
+                prefix: Some("".to_owned()),
             })
         );
     }
@@ -836,7 +879,10 @@ mod tests {
     fn test_aws_region() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--aws-region", "eu-west-1"]);
 
-        assert_eq!(args.aws_region.as_ref().map(|r| r.as_ref()), Some("eu-west-1"));
+        assert_eq!(
+            args.aws_region.as_ref().map(|r| r.as_ref()),
+            Some("eu-west-1")
+        );
     }
 
     #[test]
