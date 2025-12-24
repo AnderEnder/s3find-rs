@@ -17,6 +17,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ubuntu-x86_64
       - name: publish package to crates
         run: |
           cargo package
@@ -72,6 +74,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-aarch64
       - name: build release
         run: cargo build --release --verbose
       - name: archive
@@ -91,6 +95,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-x86_64
       - name: build release
         run: cargo build --release --verbose
       - name: archive
@@ -111,6 +117,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-x86_64
       - name: build release
         run: cargo build --release --verbose
       - name: archive

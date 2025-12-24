@@ -16,6 +16,8 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     - name: cache
       uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ubuntu-x86_64-coverage
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
     - name: Generate code coverage
