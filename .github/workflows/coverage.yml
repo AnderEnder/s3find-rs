@@ -12,6 +12,10 @@ jobs:
     steps:
     - name: checkout
       uses: actions/checkout@v4
+    - name: toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: cache
+      uses: Swatinem/rust-cache@v2
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
     - name: Generate code coverage
