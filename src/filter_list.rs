@@ -175,6 +175,8 @@ mod tests {
             aws_access_key: Some("test_access_key".to_owned()),
             aws_secret_key: Some("test_secret_key".to_owned()),
             aws_region: Some(Region::from_static("us-east-2")),
+            endpoint_url: None,
+            force_path_style: false,
             storage_class: None,
             page_size: 100,
             limit: None,

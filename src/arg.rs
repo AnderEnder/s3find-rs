@@ -123,6 +123,14 @@ pub struct FindOpt {
     #[arg(name = "aws-region", long, value_parser=region)]
     pub aws_region: Option<Region>,
 
+    /// Custom S3 endpoint URL for non-AWS S3-compatible services (e.g., MinIO, Ceph)
+    #[arg(name = "endpoint-url", long)]
+    pub endpoint_url: Option<String>,
+
+    /// Force path-style bucket addressing (bucket.endpoint/key becomes endpoint/bucket/key)
+    #[arg(name = "force-path-style", long)]
+    pub force_path_style: bool,
+
     /// Glob pattern for match, can be multiple
     #[arg(name = "pattern", long = "name", number_of_values = 1)]
     pub name: Vec<NameGlob>,
@@ -849,6 +857,8 @@ mod tests {
 
         // Default values
         assert_eq!(args.aws_region, None);
+        assert_eq!(args.endpoint_url, None);
+        assert!(!args.force_path_style);
         assert_eq!(args.page_size, 1000);
         assert!(!args.summarize);
         assert!(args.cmd.is_none());
@@ -1460,5 +1470,76 @@ mod tests {
         assert!(validate_bucket_name("bucket-name"));
         assert!(validate_bucket_name("b.u.c.k.e.t"));
         assert!(validate_bucket_name("b-u-c-k-e-t"));
+    }
+
+    #[test]
+    fn test_endpoint_url_option() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--endpoint-url",
+            "http://localhost:9000",
+        ]);
+
+        assert_eq!(args.endpoint_url, Some("http://localhost:9000".to_string()));
+        assert!(!args.force_path_style);
+    }
+
+    #[test]
+    fn test_force_path_style_option() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--force-path-style"]);
+
+        assert!(args.force_path_style);
+        assert_eq!(args.endpoint_url, None);
+    }
+
+    #[test]
+    fn test_minio_configuration() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket/path",
+            "--endpoint-url",
+            "http://minio.local:9000",
+            "--force-path-style",
+            "--aws-access-key",
+            "minioadmin",
+            "--aws-secret-key",
+            "minioadmin",
+            "--aws-region",
+            "us-east-1",
+        ]);
+
+        assert_eq!(
+            args.endpoint_url,
+            Some("http://minio.local:9000".to_string())
+        );
+        assert!(args.force_path_style);
+        assert_eq!(args.aws_access_key, Some("minioadmin".to_string()));
+        assert_eq!(args.aws_secret_key, Some("minioadmin".to_string()));
+        assert_eq!(
+            args.aws_region.as_ref().map(|r| r.as_ref()),
+            Some("us-east-1")
+        );
+        assert_eq!(args.path.bucket, "mybucket");
+        assert_eq!(args.path.prefix, Some("path".to_string()));
+    }
+
+    #[test]
+    fn test_ceph_configuration() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--endpoint-url",
+            "https://ceph.example.com",
+            "--force-path-style",
+            "ls",
+        ]);
+
+        assert_eq!(
+            args.endpoint_url,
+            Some("https://ceph.example.com".to_string())
+        );
+        assert!(args.force_path_style);
+        assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint {})));
     }
 }
