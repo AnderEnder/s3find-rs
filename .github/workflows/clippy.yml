@@ -19,8 +19,6 @@ jobs:
           components: clippy
       - name: cache
         uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ubuntu-x86_64-clippy
       - name: clippy check
         uses: giraffate/clippy-action@v1
         with:
@@ -38,8 +36,6 @@ jobs:
           components: rustfmt
       - name: cache
         uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ubuntu-x86_64-fmt
       - name: fmt check
         uses: mbrobbel/rustfmt-check@master
         with:
