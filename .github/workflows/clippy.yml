@@ -17,6 +17,8 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - name: cache
+        uses: Swatinem/rust-cache@v2
       - name: clippy check
         uses: giraffate/clippy-action@v1
         with:
@@ -32,6 +34,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: cache
+        uses: Swatinem/rust-cache@v2
       - name: fmt check
         uses: mbrobbel/rustfmt-check@master
         with:
