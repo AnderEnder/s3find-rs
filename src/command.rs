@@ -132,8 +132,8 @@ impl FindStream {
     ///
     /// # Error Handling
     ///
-    /// Errors from S3 API calls are yielded through the stream and stop further traversal
-    /// of that branch. Errors in one subdirectory don't prevent traversal of siblings.
+    /// Errors from S3 API calls are yielded through the stream and stop further traversal.
+    /// When an error occurs, it is yielded to the consumer and the stream terminates.
     fn collect_objects_recursive<'a>(
         client: &'a Client,
         bucket: &'a str,
@@ -151,7 +151,7 @@ impl FindStream {
             // List objects at current level with delimiter for hierarchical traversal
             let mut paginator = client
                 .list_objects_v2()
-                .bucket(bucket.to_string())
+                .bucket(bucket)
                 .prefix(prefix.clone())
                 .delimiter(S3_PATH_DELIMITER)
                 .max_keys(page_size)
