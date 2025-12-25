@@ -676,7 +676,7 @@ mod tests {
             maxdepth: None,
         };
 
-        let _stream = find_stream.stream();  // Non-async, returns stream immediately
+        let _stream = find_stream.stream(); // Non-async, returns stream immediately
     }
 
     #[test]
@@ -1331,7 +1331,7 @@ mod tests {
             aws_sdk_s3::Config::builder()
                 .behavior_version(BehaviorVersion::latest())
                 .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                    "test", "test", None, None, "test"
+                    "test", "test", None, None, "test",
                 ))
                 .region(aws_sdk_s3::config::Region::new("us-east-1"))
                 .http_client(replay_client)
@@ -1425,17 +1425,14 @@ mod tests {
             .body(SdkBody::from(resp2_body))
             .unwrap();
 
-        let events = vec![
-            ReplayEvent::new(req1, resp1),
-            ReplayEvent::new(req2, resp2),
-        ];
+        let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
         let replay_client = StaticReplayClient::new(events);
 
         let client = aws_sdk_s3::Client::from_conf(
             aws_sdk_s3::Config::builder()
                 .behavior_version(BehaviorVersion::latest())
                 .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                    "test", "test", None, None, "test"
+                    "test", "test", None, None, "test",
                 ))
                 .region(aws_sdk_s3::config::Region::new("us-east-1"))
                 .http_client(replay_client)
@@ -1505,7 +1502,7 @@ mod tests {
             aws_sdk_s3::Config::builder()
                 .behavior_version(BehaviorVersion::latest())
                 .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                    "test", "test", None, None, "test"
+                    "test", "test", None, None, "test",
                 ))
                 .region(aws_sdk_s3::config::Region::new("us-east-1"))
                 .http_client(replay_client)
@@ -1518,7 +1515,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
-            maxdepth: None,  // No maxdepth - should use standard pagination
+            maxdepth: None, // No maxdepth - should use standard pagination
         };
 
         let stream = find_stream.stream();
@@ -1584,17 +1581,14 @@ mod tests {
             .body(SdkBody::from(resp2_body))
             .unwrap();
 
-        let events = vec![
-            ReplayEvent::new(req1, resp1),
-            ReplayEvent::new(req2, resp2),
-        ];
+        let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
         let replay_client = StaticReplayClient::new(events);
 
         let client = aws_sdk_s3::Client::from_conf(
             aws_sdk_s3::Config::builder()
                 .behavior_version(BehaviorVersion::latest())
                 .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                    "test", "test", None, None, "test"
+                    "test", "test", None, None, "test",
                 ))
                 .region(aws_sdk_s3::config::Region::new("us-east-1"))
                 .http_client(replay_client)
@@ -1622,4 +1616,3 @@ mod tests {
         Ok(())
     }
 }
-
