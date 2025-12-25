@@ -1,3 +1,5 @@
+use std::future::ready;
+
 use anyhow::Error;
 
 use clap::Parser;
@@ -22,7 +24,7 @@ async fn main() -> Result<(), Error> {
         stream,
         args.limit,
         stats,
-        |x| filters.test_match(x.clone()),
+        |x| ready(filters.test_match(x)),
         &mut |acc, x| command.exec(acc, x),
     )
     .await;
