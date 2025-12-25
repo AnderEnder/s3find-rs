@@ -14,6 +14,7 @@ impl<'a> FilterList<'a> {
             size,
             mtime,
             storage_class,
+            depth_filter,
             ..
         } = opts;
 
@@ -27,6 +28,11 @@ impl<'a> FilterList<'a> {
         if let Some(storage_class) = storage_class {
             filters.add_single_filter(storage_class);
         }
+
+        if let Some(depth_filter) = depth_filter {
+            filters.add_single_filter(depth_filter);
+        }
+
         filters
     }
 
@@ -172,6 +178,7 @@ mod tests {
     fn test_filter_list_from_opts() {
         let opts = FindOpt {
             path: S3Path::from_str("s3://bucket/prefix").unwrap(),
+            depth_filter: None,
             aws_access_key: Some("test_access_key".to_owned()),
             aws_secret_key: Some("test_secret_key".to_owned()),
             aws_region: Some(Region::from_static("us-east-2")),
@@ -186,6 +193,8 @@ mod tests {
             regex: Vec::new(),
             size: Vec::new(),
             mtime: Vec::new(),
+            maxdepth: None,
+            mindepth: None,
             cmd: None,
         };
 

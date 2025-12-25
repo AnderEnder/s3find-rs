@@ -9,7 +9,7 @@ use s3find::run::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let args = FindOpt::parse();
+    let args = FindOpt::parse().with_depth_filter();
 
     let client = aws::setup_client(&args).await;
 

@@ -103,6 +103,10 @@ pub struct FindOpt {
     #[arg(name = "path")]
     pub path: S3Path,
 
+    /// Computed depth filter (not a CLI argument, populated after parsing)
+    #[clap(skip)]
+    pub depth_filter: Option<FindDepth>,
+
     /// AWS access key. Unrequired.
     #[arg(
         name = "aws-access-key",
@@ -225,9 +229,51 @@ times out."#
     #[arg(name = "summarize", long, short)]
     pub summarize: bool,
 
+    /// Maximum depth to descend
+    #[arg(
+        name = "maxdepth",
+        long,
+        long_help = r#"Descend at most N levels below the starting prefix.
+Depth is calculated by counting '/' separators in object keys relative to the search prefix.
+
+Example: s3find s3://bucket/logs --maxdepth 2
+  logs/file.txt          → depth 1 (included)
+  logs/2024/file.txt     → depth 2 (included)
+  logs/2024/01/file.txt  → depth 3 (excluded)"#
+    )]
+    pub maxdepth: Option<usize>,
+
+    /// Minimum depth to descend
+    #[arg(
+        name = "mindepth",
+        long,
+        long_help = r#"Ignore objects less than N levels below the starting prefix.
+Depth is calculated by counting '/' separators in object keys relative to the search prefix.
+
+Example: s3find s3://bucket/logs --mindepth 2
+  logs/file.txt          → depth 1 (excluded)
+  logs/2024/file.txt     → depth 2 (included)
+  logs/2024/01/file.txt  → depth 3 (included)"#
+    )]
+    pub mindepth: Option<usize>,
+
     /// Action to be ran with matched list of paths
     #[command(subcommand)]
     pub cmd: Option<Cmd>,
+}
+
+impl FindOpt {
+    /// Populate the depth_filter field based on maxdepth and mindepth arguments
+    pub fn with_depth_filter(mut self) -> Self {
+        if self.maxdepth.is_some() || self.mindepth.is_some() {
+            self.depth_filter = Some(FindDepth::new(
+                self.path.prefix.clone(),
+                self.maxdepth,
+                self.mindepth,
+            ));
+        }
+        self
+    }
 }
 
 #[derive(Subcommand, Clone, PartialEq, Debug)]
@@ -559,6 +605,38 @@ pub type NameGlob = Pattern;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InameGlob(pub Pattern);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindDepth {
+    pub prefix: String,
+    pub maxdepth: Option<usize>,
+    pub mindepth: Option<usize>,
+}
+
+impl FindDepth {
+    pub fn new(prefix: Option<String>, maxdepth: Option<usize>, mindepth: Option<usize>) -> Self {
+        FindDepth {
+            prefix: prefix.unwrap_or_default(),
+            maxdepth,
+            mindepth,
+        }
+    }
+
+    pub fn calculate_depth(&self, object_key: &str) -> usize {
+        // Remove the prefix from the object key to get the relative path
+        let relative_key = if self.prefix.is_empty() {
+            object_key
+        } else {
+            object_key.strip_prefix(&self.prefix)
+                .and_then(|k| k.strip_prefix('/'))
+                .unwrap_or(object_key)
+        };
+
+        // Count the number of '/' separators in the relative path
+        // If the path doesn't end with '/', count non-empty segments
+        relative_key.trim_end_matches('/').matches('/').count() + 1
+    }
+}
 
 impl FromStr for InameGlob {
     type Err = anyhow::Error;

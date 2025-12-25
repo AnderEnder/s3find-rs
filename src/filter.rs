@@ -67,6 +67,19 @@ impl Filter for ObjectStorageClass {
     }
 }
 
+impl Filter for FindDepth {
+    fn filter(&self, object: &Object) -> bool {
+        let object_key = object.key.clone().unwrap_or_default();
+        let depth = self.calculate_depth(&object_key);
+
+        // Check if depth is within the specified range
+        let meets_min = self.mindepth.map_or(true, |min| depth >= min);
+        let meets_max = self.maxdepth.map_or(true, |max| depth <= max);
+
+        meets_min && meets_max
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +173,79 @@ mod tests {
 
         let no_class_object = Object::builder().build();
         assert!(!ObjectStorageClass::Standard.filter(&no_class_object));
+    }
+
+    #[test]
+    fn finddepth_filter_maxdepth() {
+        use crate::arg::FindDepth;
+
+        // Test with prefix "logs"
+        let depth_filter = FindDepth::new(Some("logs".to_string()), Some(2), None);
+
+        let depth1_object = Object::builder().key("logs/file.txt").build();
+        let depth2_object = Object::builder().key("logs/2024/file.txt").build();
+        let depth3_object = Object::builder().key("logs/2024/01/file.txt").build();
+
+        assert!(depth_filter.filter(&depth1_object), "depth 1 should pass maxdepth 2");
+        assert!(depth_filter.filter(&depth2_object), "depth 2 should pass maxdepth 2");
+        assert!(!depth_filter.filter(&depth3_object), "depth 3 should not pass maxdepth 2");
+    }
+
+    #[test]
+    fn finddepth_filter_mindepth() {
+        use crate::arg::FindDepth;
+
+        let depth_filter = FindDepth::new(Some("logs".to_string()), None, Some(2));
+
+        let depth1_object = Object::builder().key("logs/file.txt").build();
+        let depth2_object = Object::builder().key("logs/2024/file.txt").build();
+        let depth3_object = Object::builder().key("logs/2024/01/file.txt").build();
+
+        assert!(!depth_filter.filter(&depth1_object), "depth 1 should not pass mindepth 2");
+        assert!(depth_filter.filter(&depth2_object), "depth 2 should pass mindepth 2");
+        assert!(depth_filter.filter(&depth3_object), "depth 3 should pass mindepth 2");
+    }
+
+    #[test]
+    fn finddepth_filter_both() {
+        use crate::arg::FindDepth;
+
+        let depth_filter = FindDepth::new(Some("logs".to_string()), Some(3), Some(2));
+
+        let depth1_object = Object::builder().key("logs/file.txt").build();
+        let depth2_object = Object::builder().key("logs/2024/file.txt").build();
+        let depth3_object = Object::builder().key("logs/2024/01/file.txt").build();
+        let depth4_object = Object::builder().key("logs/2024/01/02/file.txt").build();
+
+        assert!(!depth_filter.filter(&depth1_object), "depth 1 should not pass mindepth 2");
+        assert!(depth_filter.filter(&depth2_object), "depth 2 should pass mindepth 2 and maxdepth 3");
+        assert!(depth_filter.filter(&depth3_object), "depth 3 should pass mindepth 2 and maxdepth 3");
+        assert!(!depth_filter.filter(&depth4_object), "depth 4 should not pass maxdepth 3");
+    }
+
+    #[test]
+    fn finddepth_filter_no_prefix() {
+        use crate::arg::FindDepth;
+
+        // Test with no prefix (root of bucket)
+        let depth_filter = FindDepth::new(None, Some(1), None);
+
+        let depth1_object = Object::builder().key("file.txt").build();
+        let depth2_object = Object::builder().key("dir/file.txt").build();
+
+        assert!(depth_filter.filter(&depth1_object), "depth 1 should pass maxdepth 1");
+        assert!(!depth_filter.filter(&depth2_object), "depth 2 should not pass maxdepth 1");
+    }
+
+    #[test]
+    fn finddepth_calculate_depth() {
+        use crate::arg::FindDepth;
+
+        let depth_filter = FindDepth::new(Some("logs".to_string()), None, None);
+
+        assert_eq!(depth_filter.calculate_depth("logs/file.txt"), 1);
+        assert_eq!(depth_filter.calculate_depth("logs/2024/file.txt"), 2);
+        assert_eq!(depth_filter.calculate_depth("logs/2024/01/file.txt"), 3);
+        assert_eq!(depth_filter.calculate_depth("logs/2024/01/02/file.txt"), 4);
     }
 }

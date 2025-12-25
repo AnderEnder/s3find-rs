@@ -533,6 +533,7 @@ mod tests {
                 bucket: "test-bucket".to_string(),
                 prefix: Some("test-prefix/".to_string()),
             },
+            depth_filter: None,
             name: Vec::new(),
             iname: Vec::new(),
             mtime: Vec::new(),
@@ -543,6 +544,8 @@ mod tests {
             page_size: 500,
             summarize: true,
             limit: Some(100),
+            maxdepth: None,
+            mindepth: None,
         };
         let client = setup_client(&args).await;
 
@@ -608,6 +611,7 @@ mod tests {
             endpoint_url: None,
             force_path_style: false,
             path: path.clone(),
+            depth_filter: None,
             cmd: None,
             page_size,
             summarize,
@@ -617,6 +621,8 @@ mod tests {
             regex: regexes,
             size: sizes,
             mtime: mtimes,
+            maxdepth: None,
+            mindepth: None,
             storage_class: Some(ObjectStorageClass::Standard),
         };
 
@@ -1033,6 +1039,7 @@ mod tests {
             endpoint_url: None,
             force_path_style: false,
             path: path1.clone(),
+            depth_filter: None,
             cmd: None,
             page_size: 500,
             summarize: true,
@@ -1042,6 +1049,8 @@ mod tests {
             regex: vec![],
             size: vec![],
             mtime: vec![],
+            maxdepth: None,
+            mindepth: None,
             storage_class: None,
         };
 
@@ -1065,6 +1074,7 @@ mod tests {
             endpoint_url: None,
             force_path_style: false,
             path: path_without_prefix.clone(),
+            depth_filter: None,
             cmd: Some(Cmd::Ls(FastPrint {})),
             page_size: 1000,
             summarize: false,
@@ -1074,6 +1084,8 @@ mod tests {
             regex: vec![],
             size: vec![],
             mtime: vec![],
+            maxdepth: None,
+            mindepth: None,
             storage_class: None,
         };
 
