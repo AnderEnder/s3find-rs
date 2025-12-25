@@ -121,6 +121,34 @@ async fn is_localstack_running() -> Option<String> {
     }
 }
 
+/// Wait for LocalStack to be ready by polling the health endpoint
+async fn wait_for_localstack_ready(_endpoint: &str, max_wait: Duration) -> Result<(), String> {
+    let start = std::time::Instant::now();
+
+    while start.elapsed() < max_wait {
+        // Try to make a simple HTTP request to the health endpoint
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio::net::TcpStream::connect(format!("localhost:{}", LOCALSTACK_PORT)),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {
+                eprintln!("LocalStack health check passed");
+                return Ok(());
+            }
+            _ => {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+
+    Err(format!(
+        "LocalStack did not become ready within {:?}",
+        max_wait
+    ))
+}
+
 /// Get or initialize the shared LocalStack container
 async fn get_localstack() -> &'static SharedLocalStack {
     LOCALSTACK
@@ -152,8 +180,10 @@ async fn get_localstack() -> &'static SharedLocalStack {
 
             let endpoint = format!("http://localhost:{}", host_port);
 
-            // Wait for LocalStack to be fully ready
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            // Wait for LocalStack to be fully ready with health check
+            wait_for_localstack_ready(&endpoint, Duration::from_secs(30))
+                .await
+                .expect("LocalStack failed to become ready");
 
             eprintln!("LocalStack ready at {}", endpoint);
 
@@ -198,13 +228,22 @@ impl LocalStackFixture {
 
         let client = Client::from_conf(s3_config);
 
-        // Create test bucket
-        client
-            .create_bucket()
-            .bucket(bucket_name)
-            .send()
-            .await
-            .expect("Failed to create bucket");
+        // Create test bucket with retry for robustness
+        let mut retries = 3;
+        loop {
+            match client.create_bucket().bucket(bucket_name).send().await {
+                Ok(_) => break,
+                Err(e) if retries > 0 => {
+                    eprintln!(
+                        "Bucket creation failed, retrying... ({} attempts left): {}",
+                        retries, e
+                    );
+                    retries -= 1;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Err(e) => panic!("Failed to create bucket after retries: {}", e),
+            }
+        }
 
         Self {
             endpoint,
