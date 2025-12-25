@@ -28,6 +28,16 @@
 //!   run: cargo test --test localstack_integration
 //! ```
 //!
+//! ## Test Isolation
+//!
+//! Each test creates its own bucket with a unique timestamp-based name to prevent
+//! test pollution. This ensures:
+//! - Tests can run in parallel without interfering with each other
+//! - Reusing a manually-started LocalStack container is safe across multiple test runs
+//! - Old test data doesn't affect new test results
+//!
+//! Example bucket names: `test-ls-basic-1735152341234`, `test-print-1735152341567`
+//!
 //! ## Container Reuse & Cleanup
 //!
 //! **Manual LocalStack Reuse:**
@@ -221,9 +231,18 @@ struct LocalStackFixture {
 
 impl LocalStackFixture {
     /// Creates a new test fixture with its own bucket in the shared LocalStack
+    /// The bucket name includes a timestamp to prevent conflicts across test runs
     async fn new(bucket_name: &str) -> Self {
         let localstack = get_localstack().await;
         let endpoint = localstack.endpoint.clone();
+
+        // Generate unique bucket name with timestamp to avoid test pollution
+        // when reusing manually-started LocalStack containers
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let unique_bucket_name = format!("{}-{}", bucket_name, timestamp);
 
         // Create S3 client pointing to LocalStack with path-style addressing
         let config = aws_config::defaults(BehaviorVersion::latest())
@@ -248,9 +267,14 @@ impl LocalStackFixture {
         // Create test bucket with retry for robustness
         let mut retries = 3;
         loop {
-            match client.create_bucket().bucket(bucket_name).send().await {
+            match client
+                .create_bucket()
+                .bucket(&unique_bucket_name)
+                .send()
+                .await
+            {
                 Ok(_) => {
-                    eprintln!("Created bucket: {}", bucket_name);
+                    eprintln!("Created bucket: {}", unique_bucket_name);
                     break;
                 }
                 Err(e) => {
@@ -259,7 +283,7 @@ impl LocalStackFixture {
                     if error_str.contains("BucketAlreadyOwnedByYou")
                         || error_str.contains("BucketAlreadyExists")
                     {
-                        eprintln!("Bucket already exists, reusing: {}", bucket_name);
+                        eprintln!("Bucket already exists, reusing: {}", unique_bucket_name);
                         break;
                     }
                     // Other errors - retry
@@ -280,7 +304,7 @@ impl LocalStackFixture {
         Self {
             endpoint,
             client,
-            bucket: bucket_name.to_string(),
+            bucket: unique_bucket_name,
         }
     }
 
