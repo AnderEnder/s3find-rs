@@ -30,12 +30,13 @@
 //!
 //! ## Container Reuse & Cleanup
 //!
-//! **Automatic Reuse:**
-//! Tests automatically detect and reuse a LocalStack container running on port 4566.
+//! **Manual LocalStack Reuse:**
+//! Tests can detect and reuse a manually-started LocalStack container on port 4566.
+//! Note: Containers started by testcontainers use random ports and won't be detected.
 //! To manually start LocalStack for faster repeated test runs:
 //! ```bash
-//! # Start LocalStack (tests will detect and reuse it)
-//! docker run -d -p 4566:4566 --name localstack localstack/localstack:latest
+//! # Start LocalStack on port 4566 (tests will detect and reuse it)
+//! docker run -d -p 4566:4566 --name localstack localstack/localstack:4.12
 //!
 //! # Run tests multiple times (instant startup!)
 //! cargo test --test localstack_integration
@@ -102,14 +103,16 @@ struct SharedLocalStack {
 
 /// LocalStack container configuration
 const LOCALSTACK_IMAGE: &str = "localstack/localstack";
-const LOCALSTACK_TAG: &str = "3.0";
+const LOCALSTACK_TAG: &str = "4.12";
 const LOCALSTACK_PORT: u16 = 4566;
 
-/// Check if LocalStack is already running on default port
+/// Check if LocalStack is already running on the default port 4566
+/// Note: This only detects manually-started LocalStack containers.
+/// Containers started by testcontainers use random ports and won't be detected here.
 async fn is_localstack_running() -> Option<String> {
     let endpoint = format!("http://localhost:{}", LOCALSTACK_PORT);
 
-    // Try to connect to LocalStack health endpoint
+    // Try to connect to LocalStack on port 4566
     match tokio::time::timeout(
         Duration::from_secs(1),
         tokio::net::TcpStream::connect(format!("localhost:{}", LOCALSTACK_PORT)),
@@ -246,16 +249,31 @@ impl LocalStackFixture {
         let mut retries = 3;
         loop {
             match client.create_bucket().bucket(bucket_name).send().await {
-                Ok(_) => break,
-                Err(e) if retries > 0 => {
-                    eprintln!(
-                        "Bucket creation failed, retrying... ({} attempts left): {}",
-                        retries, e
-                    );
-                    retries -= 1;
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(_) => {
+                    eprintln!("Created bucket: {}", bucket_name);
+                    break;
                 }
-                Err(e) => panic!("Failed to create bucket after retries: {}", e),
+                Err(e) => {
+                    let error_str = e.to_string();
+                    // Bucket already exists - this is fine, we can reuse it
+                    if error_str.contains("BucketAlreadyOwnedByYou")
+                        || error_str.contains("BucketAlreadyExists")
+                    {
+                        eprintln!("Bucket already exists, reusing: {}", bucket_name);
+                        break;
+                    }
+                    // Other errors - retry
+                    if retries > 0 {
+                        eprintln!(
+                            "Bucket creation failed, retrying... ({} attempts left): {}",
+                            retries, e
+                        );
+                        retries -= 1;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    } else {
+                        panic!("Failed to create bucket after retries: {}", e);
+                    }
+                }
             }
         }
 
@@ -431,7 +449,7 @@ async fn test_size_filter() {
     fixture
         .put_object("medium.txt", b"medium file content")
         .await; // 19 bytes
-    fixture.put_object("large.txt", &vec![b'x'; 1000]).await; // 1000 bytes
+    fixture.put_object("large.txt", &[b'x'; 1000]).await; // 1000 bytes
 
     // Find files larger than 100 bytes
     let mut cmd = fixture.s3find_command();
@@ -507,10 +525,10 @@ async fn test_combined_filters() {
     let fixture = LocalStackFixture::new("test-combined-filters").await;
 
     // Create various test files
-    fixture.put_object("data001.txt", &vec![b'x'; 200]).await;
-    fixture.put_object("data002.txt", &vec![b'x'; 50]).await;
-    fixture.put_object("info001.txt", &vec![b'x'; 300]).await;
-    fixture.put_object("readme.md", &vec![b'x'; 250]).await;
+    fixture.put_object("data001.txt", &[b'x'; 200]).await;
+    fixture.put_object("data002.txt", &[b'x'; 50]).await;
+    fixture.put_object("info001.txt", &[b'x'; 300]).await;
+    fixture.put_object("readme.md", &[b'x'; 250]).await;
 
     // Find .txt files matching data* pattern that are larger than 100 bytes
     let mut cmd = fixture.s3find_command();
