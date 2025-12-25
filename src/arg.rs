@@ -234,6 +234,9 @@ times out."#
 When enabled, s3find uses the ListObjectVersions API instead of ListObjectsV2.
 This shows all versions of each object, including delete markers.
 
+Note: This option is not compatible with --maxdepth. If both are specified,
+--all-versions takes precedence and --maxdepth is ignored.
+
 Example:
   s3find s3://bucket --all-versions ls           # List all versions
   s3find s3://bucket --all-versions --name "*.log" ls
