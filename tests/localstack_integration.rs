@@ -933,3 +933,60 @@ async fn test_all_versions_with_name_filter() {
         count
     );
 }
+
+#[tokio::test]
+async fn test_all_versions_with_maxdepth_warning() {
+    let bucket_name = unique_bucket_name("test-versions-maxdepth");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Enable versioning
+    fixture.enable_versioning().await;
+
+    // Create versioned objects at different depths
+    fixture.put_object("root.txt", b"v1").await;
+    fixture.put_object("root.txt", b"v2").await;
+    fixture.put_object("dir/nested.txt", b"v1").await;
+    fixture.put_object("dir/nested.txt", b"v2").await;
+
+    // When both --all-versions and --maxdepth are used, --all-versions takes precedence
+    // and a warning should be printed to stderr
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--all-versions")
+        .arg("--maxdepth")
+        .arg("0")
+        .arg("ls");
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should see all versions at all depths (maxdepth ignored)
+    assert!(
+        stdout.contains("root.txt"),
+        "Expected root.txt in output:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("dir/nested.txt"),
+        "Expected dir/nested.txt in output (maxdepth should be ignored):\n{}",
+        stdout
+    );
+
+    // Should see warning in stderr
+    assert!(
+        stderr.contains("--maxdepth is ignored when --all-versions is used"),
+        "Expected warning about maxdepth being ignored in stderr:\n{}",
+        stderr
+    );
+
+    // Count versions - should have at least 4 entries (2 versions each of 2 files)
+    let root_count = stdout.matches("root.txt").count();
+    let nested_count = stdout.matches("dir/nested.txt").count();
+    assert!(
+        root_count >= 2 && nested_count >= 2,
+        "Expected at least 2 versions of each file, found root.txt={}, nested.txt={}",
+        root_count,
+        nested_count
+    );
+}

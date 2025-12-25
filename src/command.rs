@@ -402,72 +402,6 @@ impl FindStream {
         })
     }
 
-    /// Creates a stream of ObjectInfo with version details using ListObjectVersions API.
-    ///
-    /// This method provides full version information including version_id, is_latest,
-    /// and delete marker status.
-    pub fn stream_versions(self) -> BoxedStream<'static, Vec<ObjectInfo>> {
-        let bucket = self.path.bucket.clone();
-        let prefix = self.path.prefix.clone().unwrap_or_default();
-        let page_size = self.page_size;
-
-        Box::pin(async_stream::stream! {
-            let mut key_marker: Option<String> = None;
-            let mut version_id_marker: Option<String> = None;
-
-            loop {
-                let mut request = self.client
-                    .list_object_versions()
-                    .bucket(&bucket)
-                    .prefix(&prefix)
-                    .max_keys(page_size as i32);
-
-                if let Some(ref km) = key_marker {
-                    request = request.key_marker(km);
-                }
-                if let Some(ref vim) = version_id_marker {
-                    request = request.version_id_marker(vim);
-                }
-
-                match request.send().await {
-                    Ok(output) => {
-                        let mut objects = Vec::new();
-
-                        // Convert ObjectVersions to ObjectInfo
-                        if let Some(versions) = output.versions {
-                            for version in versions {
-                                objects.push(ObjectInfo::from_version(version));
-                            }
-                        }
-
-                        // Include delete markers
-                        if let Some(markers) = output.delete_markers {
-                            for marker in markers {
-                                objects.push(ObjectInfo::from_delete_marker(marker));
-                            }
-                        }
-
-                        if !objects.is_empty() {
-                            yield objects;
-                        }
-
-                        // Check if there are more results
-                        if output.is_truncated.unwrap_or(false) {
-                            key_marker = output.next_key_marker;
-                            version_id_marker = output.next_version_id_marker;
-                        } else {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error listing object versions: {:?}", e);
-                        break;
-                    }
-                }
-            }
-        })
-    }
-
     /// Creates a stream of S3 objects, using delimiter-based depth limiting if maxdepth is set.
     ///
     /// This method is non-async and returns a stream immediately without starting any I/O,
@@ -476,12 +410,21 @@ impl FindStream {
     /// # Returns
     ///
     /// A pinned, boxed stream that yields batches of objects (`Vec<Object>`).
-    /// - If `all_versions` is set: Uses ListObjectVersions API
+    /// - If `all_versions` is set: Uses ListObjectVersions API (ignores maxdepth)
     /// - If `maxdepth` is set: Uses delimiter-based hierarchical traversal
     /// - Otherwise: Uses standard flat pagination
+    ///
+    /// # Note
+    ///
+    /// When both `all_versions` and `maxdepth` are set, `all_versions` takes precedence
+    /// and `maxdepth` is ignored. A warning is printed to stderr in this case.
     pub fn stream(self) -> BoxedStream<'static, Vec<Object>> {
         // Use version listing if all_versions is set
         if self.all_versions {
+            // Warn if maxdepth is also set (it will be ignored)
+            if self.maxdepth.is_some() {
+                eprintln!("Warning: --maxdepth is ignored when --all-versions is used");
+            }
             return self.versions_paginator();
         }
 
