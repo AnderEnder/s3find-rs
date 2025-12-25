@@ -13,6 +13,7 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
 - [Usage](#usage)
   - [Basic Syntax](#basic-syntax)
   - [Authentication Methods](#authentication-methods)
+  - [Using with Non-AWS S3-Compatible Services](#using-with-non-aws-s3-compatible-services)
 - [Examples](#examples)
   - [Finding Files](#finding-files-by-glob-pattern)
   - [Filter by Size](#find-path-by-size)
@@ -74,6 +75,37 @@ s3find supports multiple AWS authentication methods in the following priority:
 3. AWS profile credentials file (configurable via `AWS_PROFILE` and `AWS_SHARED_CREDENTIALS_FILE`)
 4. AWS instance IAM profile
 5. AWS container IAM profile
+
+### Using with Non-AWS S3-Compatible Services
+
+s3find supports self-hosted and third-party S3-compatible services such as MinIO, Ceph, and others. Use the following options to connect to these services:
+
+- `--endpoint-url <URL>` - Custom S3 endpoint URL
+- `--force-path-style` - Use path-style bucket addressing (required for most non-AWS S3 services)
+
+#### MinIO Example
+
+```sh
+s3find 's3://mybucket/path' \
+  --endpoint-url 'http://localhost:9000' \
+  --force-path-style \
+  --aws-access-key 'minioadmin' \
+  --aws-secret-key 'minioadmin' \
+  --aws-region 'us-east-1' \
+  ls
+```
+
+#### Ceph Example
+
+```sh
+s3find 's3://mybucket/data' \
+  --endpoint-url 'https://ceph.example.com' \
+  --force-path-style \
+  --aws-access-key 'your-access-key' \
+  --aws-secret-key 'your-secret-key' \
+  --name '*.log' \
+  print
+```
 
 ### Command Line Reference
 
