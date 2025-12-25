@@ -64,6 +64,7 @@ pub struct FindStream {
     pub token: Option<String>,
     pub page_size: i64,
     pub initial: bool,
+    pub maxdepth: Option<usize>,
 }
 
 impl FindStream {
@@ -76,6 +77,7 @@ impl FindStream {
             token: None,
             page_size: opts.page_size,
             initial: true,
+            maxdepth: opts.maxdepth,
         }
     }
 
@@ -91,9 +93,103 @@ impl FindStream {
             .send()
     }
 
-    pub async fn stream(self) -> impl Stream<Item = Vec<Object>> {
+    /// Recursively collects objects up to maxdepth using delimiter-based traversal
+    fn collect_objects_recursive(
+        client: &Client,
+        bucket: String,
+        prefix: String,
+        maxdepth: usize,
+        current_depth: usize,
+        page_size: i32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Object>> + '_>> {
+        Box::pin(async move {
+        let mut all_objects = Vec::new();
+
+        // List objects at current level with delimiter
+        let mut paginator = client
+            .list_objects_v2()
+            .bucket(bucket.clone())
+            .prefix(prefix.clone())
+            .delimiter("/")
+            .max_keys(page_size)
+            .into_paginator()
+            .send();
+
+        while let Some(result) = paginator.next().await {
+            match result {
+                Ok(output) => {
+                    // Add objects at this level
+                    if let Some(contents) = output.contents {
+                        all_objects.extend(contents);
+                    }
+
+                    // Recurse into subdirectories if we haven't reached maxdepth
+                    if current_depth < maxdepth
+                        && let Some(common_prefixes) = output.common_prefixes
+                    {
+                        for common_prefix in common_prefixes {
+                            if let Some(prefix_str) = common_prefix.prefix {
+                                let sub_objects = Self::collect_objects_recursive(
+                                    client,
+                                    bucket.clone(),
+                                    prefix_str,
+                                    maxdepth,
+                                    current_depth + 1,
+                                    page_size,
+                                )
+                                .await;
+                                all_objects.extend(sub_objects);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error listing objects: {:?}", e);
+                    break;
+                }
+            }
+        }
+
+        all_objects
+        })
+    }
+
+    /// Creates a stream with depth-limited traversal using S3 delimiter parameter
+    async fn paginator_with_depth(self) -> impl Stream<Item = Vec<Object>> {
+        let maxdepth = self.maxdepth.unwrap_or(usize::MAX);
+        let base_prefix = self.path.prefix.clone().unwrap_or_else(|| "".to_owned());
+
+        // Collect all objects up to maxdepth using delimiter-based recursion
+        let all_objects = Self::collect_objects_recursive(
+            &self.client,
+            self.path.bucket.clone(),
+            base_prefix,
+            maxdepth,
+            0,
+            self.page_size as i32,
+        )
+        .await;
+
+        // Yield objects in pages to maintain consistent interface
+        futures::stream::iter(
+            all_objects
+                .chunks(self.page_size as usize)
+                .map(|chunk| chunk.to_vec())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub async fn stream(
+        self,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = Vec<Object>> + Send>> {
+        // Use delimiter-based traversal if maxdepth is set
+        if self.maxdepth.is_some() {
+            return Box::pin(self.paginator_with_depth().await);
+        }
+
+        // Otherwise use standard pagination
         let ps = self.paginator().await;
-        futures::stream::unfold(ps, |mut p| async {
+        Box::pin(futures::stream::unfold(ps, |mut p| async {
             let next_page = p.next().await;
 
             match next_page {
@@ -107,7 +203,7 @@ impl FindStream {
                 }
                 None => None,
             }
-        })
+        }))
     }
 }
 
@@ -117,6 +213,7 @@ impl PartialEq for FindStream {
             && self.token == other.token
             && self.page_size == other.page_size
             && self.initial == other.initial
+            && self.maxdepth == other.maxdepth
     }
 }
 
@@ -131,8 +228,9 @@ FindStream {{
     token: {:?},
     page_size: {},
     initial: {},
+    maxdepth: {:?},
 }}",
-            self.path, self.token, self.page_size, self.initial
+            self.path, self.token, self.page_size, self.initial, self.maxdepth
         )
     }
 }
@@ -437,6 +535,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         assert_eq!(find_stream.token, None);
@@ -450,6 +549,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         assert_eq!(find_stream, same_stream);
@@ -460,6 +560,7 @@ mod tests {
             token: Some("token".to_string()),
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         assert_ne!(find_stream, different_stream);
@@ -486,6 +587,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         let _stream = find_stream.stream();
@@ -510,6 +612,7 @@ mod tests {
             token: Some("test-token".to_string()),
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         let debug_str = format!("{:?}", find_stream);
@@ -519,6 +622,7 @@ mod tests {
         assert!(debug_str.contains("token: Some(\"test-token\")"));
         assert!(debug_str.contains("page_size: 1000"));
         assert!(debug_str.contains("initial: true"));
+        assert!(debug_str.contains("maxdepth: None"));
     }
 
     #[tokio::test]
@@ -543,6 +647,7 @@ mod tests {
             page_size: 500,
             summarize: true,
             limit: Some(100),
+            maxdepth: None,
         };
         let client = setup_client(&args).await;
 
@@ -574,6 +679,7 @@ mod tests {
             page_size,
             initial: true,
             client,
+            maxdepth: None,
         };
 
         assert_eq!(stream.path, path);
@@ -618,6 +724,7 @@ mod tests {
             size: sizes,
             mtime: mtimes,
             storage_class: Some(ObjectStorageClass::Standard),
+            maxdepth: None,
         };
 
         let client = setup_client(&opts).await;
@@ -724,6 +831,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         let mut paginator = find_stream.paginator().await;
@@ -792,6 +900,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         let mut paginator = find_stream.paginator().await;
@@ -865,6 +974,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         let mut paginator = find_stream.paginator().await;
@@ -938,6 +1048,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         let stream = find_stream.stream().await;
@@ -1004,6 +1115,7 @@ mod tests {
             token: None,
             page_size: 1000,
             initial: true,
+            maxdepth: None,
         };
 
         let stream = find_stream.stream().await;
@@ -1043,6 +1155,7 @@ mod tests {
             size: vec![],
             mtime: vec![],
             storage_class: None,
+            maxdepth: None,
         };
 
         let client1 = setup_client(&opts1).await;
@@ -1075,6 +1188,7 @@ mod tests {
             size: vec![],
             mtime: vec![],
             storage_class: None,
+            maxdepth: None,
         };
 
         let client2 = setup_client(&opts_withour_prefix).await;
