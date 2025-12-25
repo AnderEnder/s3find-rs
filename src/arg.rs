@@ -225,6 +225,28 @@ times out."#
     #[arg(name = "summarize", long, short)]
     pub summarize: bool,
 
+    /// Maximum depth to descend (uses S3 delimiter for efficient traversal)
+    #[arg(
+        name = "maxdepth",
+        long,
+        long_help = r#"Descend at most N levels of subdirectories below the starting prefix.
+
+Depth is measured by subdirectory levels using S3's hierarchical structure:
+  - maxdepth 0: Only objects at the prefix level (no subdirectories)
+  - maxdepth 1: Prefix level + one subdirectory level
+  - maxdepth 2: Prefix level + two subdirectory levels
+
+Example: s3find s3://bucket/logs/ --maxdepth 1 ls
+  logs/file.txt          → depth 0 (included, at prefix level)
+  logs/2024/file.txt     → depth 1 (included, one subdirectory deep)
+  logs/2024/01/file.txt  → depth 2 (excluded, two subdirectories deep)
+
+Performance: Uses S3's Delimiter parameter for server-side filtering,
+significantly reducing data transfer for deep hierarchies compared to
+fetching all objects and filtering client-side."#
+    )]
+    pub maxdepth: Option<usize>,
+
     /// Action to be ran with matched list of paths
     #[command(subcommand)]
     pub cmd: Option<Cmd>,

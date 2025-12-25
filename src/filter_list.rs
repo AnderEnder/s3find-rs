@@ -187,6 +187,7 @@ mod tests {
             size: Vec::new(),
             mtime: Vec::new(),
             cmd: None,
+            maxdepth: None,
         };
 
         let filter_list = FilterList::from_opts(&opts);

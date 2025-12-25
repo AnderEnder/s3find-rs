@@ -84,6 +84,7 @@ mod tests {
             page_size: 100,
             cmd: Default::default(),
             storage_class: None,
+            maxdepth: None,
         };
         let client_with_creds = setup_client(&args).await;
 
@@ -118,6 +119,7 @@ mod tests {
             page_size: 1000,
             cmd: Default::default(),
             storage_class: None,
+            maxdepth: None,
         };
 
         let client = setup_client(&args).await;
@@ -146,6 +148,7 @@ mod tests {
             page_size: 1000,
             cmd: Default::default(),
             storage_class: None,
+            maxdepth: None,
         };
 
         let client = setup_client(&args).await;
@@ -174,6 +177,7 @@ mod tests {
             page_size: 1000,
             cmd: Default::default(),
             storage_class: None,
+            maxdepth: None,
         };
 
         let client = setup_client(&args).await;
@@ -202,6 +206,7 @@ mod tests {
             page_size: 1000,
             cmd: Default::default(),
             storage_class: None,
+            maxdepth: None,
         };
 
         let client = setup_client(&args).await;

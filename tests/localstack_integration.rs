@@ -606,3 +606,178 @@ async fn test_nonexistent_prefix() {
         .success()
         .stdout(predicate::str::contains("exists.txt").not());
 }
+
+#[tokio::test]
+async fn test_maxdepth_zero() {
+    let bucket_name = unique_bucket_name("test-maxdepth-zero");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create hierarchical structure
+    fixture.put_object("root.txt", b"root").await;
+    fixture.put_object("dir1/file.txt", b"level1").await;
+    fixture.put_object("dir2/file.txt", b"level1").await;
+    fixture.put_object("dir1/subdir/deep.txt", b"level2").await;
+
+    // maxdepth 0 should only return objects at root level (no subdirectories)
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--maxdepth")
+        .arg("0")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("root.txt"))
+        .stdout(predicate::str::contains("dir1/file.txt").not())
+        .stdout(predicate::str::contains("dir2/file.txt").not())
+        .stdout(predicate::str::contains("dir1/subdir/deep.txt").not());
+}
+
+#[tokio::test]
+async fn test_maxdepth_one() {
+    let bucket_name = unique_bucket_name("test-maxdepth-one");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create hierarchical structure
+    fixture.put_object("root.txt", b"root").await;
+    fixture.put_object("dir1/file.txt", b"level1").await;
+    fixture.put_object("dir2/file.txt", b"level1").await;
+    fixture.put_object("dir1/subdir/deep.txt", b"level2").await;
+    fixture
+        .put_object("dir2/subdir/another.txt", b"level2")
+        .await;
+
+    // maxdepth 1 should return root + one level of subdirectories
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--maxdepth")
+        .arg("1")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("root.txt"))
+        .stdout(predicate::str::contains("dir1/file.txt"))
+        .stdout(predicate::str::contains("dir2/file.txt"))
+        .stdout(predicate::str::contains("dir1/subdir/deep.txt").not())
+        .stdout(predicate::str::contains("dir2/subdir/another.txt").not());
+}
+
+#[tokio::test]
+async fn test_maxdepth_two() {
+    let bucket_name = unique_bucket_name("test-maxdepth-two");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create deep hierarchical structure
+    fixture.put_object("root.txt", b"root").await;
+    fixture.put_object("dir1/file.txt", b"level1").await;
+    fixture.put_object("dir1/subdir/deep.txt", b"level2").await;
+    fixture
+        .put_object("dir1/subdir/deeper/verydeep.txt", b"level3")
+        .await;
+
+    // maxdepth 2 should return up to two levels of subdirectories
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--maxdepth")
+        .arg("2")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("root.txt"))
+        .stdout(predicate::str::contains("dir1/file.txt"))
+        .stdout(predicate::str::contains("dir1/subdir/deep.txt"))
+        .stdout(predicate::str::contains("dir1/subdir/deeper/verydeep.txt").not());
+}
+
+#[tokio::test]
+async fn test_maxdepth_with_prefix() {
+    let bucket_name = unique_bucket_name("test-maxdepth-prefix");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create structure under a prefix
+    fixture.put_object("data/file.txt", b"data").await;
+    fixture
+        .put_object("data/subdir/nested.txt", b"nested")
+        .await;
+    fixture
+        .put_object("data/subdir/deep/verydeep.txt", b"deep")
+        .await;
+    fixture.put_object("other/file.txt", b"other").await;
+
+    // Depth is counted from bucket root, so from data/ prefix:
+    // - data/ is at depth 1
+    // - data/file.txt is at depth 1 (under data/)
+    // - data/subdir/nested.txt is at depth 2 (under data/subdir/)
+    // maxdepth 2 from data/ prefix includes up to depth 2
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path("data/"))
+        .arg("--maxdepth")
+        .arg("2")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("data/file.txt"))
+        .stdout(predicate::str::contains("data/subdir/nested.txt"))
+        .stdout(predicate::str::contains("data/subdir/deep/verydeep.txt").not())
+        .stdout(predicate::str::contains("other/file.txt").not());
+}
+
+#[tokio::test]
+async fn test_maxdepth_with_name_filter() {
+    let bucket_name = unique_bucket_name("test-maxdepth-filter");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create hierarchical structure with mixed file types
+    fixture.put_object("root.txt", b"root").await;
+    fixture.put_object("root.log", b"log").await;
+    fixture.put_object("dir1/file.txt", b"level1").await;
+    fixture.put_object("dir1/file.log", b"level1").await;
+    fixture.put_object("dir1/subdir/deep.txt", b"level2").await;
+
+    // maxdepth 1 + name filter for *.txt
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--maxdepth")
+        .arg("1")
+        .arg("--name")
+        .arg("*.txt")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("root.txt"))
+        .stdout(predicate::str::contains("dir1/file.txt"))
+        .stdout(predicate::str::contains("root.log").not())
+        .stdout(predicate::str::contains("dir1/file.log").not())
+        .stdout(predicate::str::contains("dir1/subdir/deep.txt").not());
+}
+
+#[tokio::test]
+async fn test_maxdepth_empty_subdirectories() {
+    let bucket_name = unique_bucket_name("test-maxdepth-empty");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create structure where some subdirectories are "empty" at certain depths
+    // (i.e., they only contain deeper objects, not objects at their level)
+    fixture.put_object("root.txt", b"root").await;
+    fixture
+        .put_object("empty_at_level1/subdir/file.txt", b"deep")
+        .await;
+    fixture.put_object("has_files/file.txt", b"level1").await;
+
+    // maxdepth 1 should still traverse empty_at_level1/ but find no objects there
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--maxdepth")
+        .arg("1")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("root.txt"))
+        .stdout(predicate::str::contains("has_files/file.txt"))
+        .stdout(predicate::str::contains("empty_at_level1/subdir/file.txt").not());
+}
