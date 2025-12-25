@@ -194,7 +194,8 @@ async fn get_localstack() -> &'static SharedLocalStack {
             let endpoint = format!("http://localhost:{}", host_port);
 
             // Wait for LocalStack to be fully ready with health check
-            wait_for_localstack_ready(&endpoint, Duration::from_secs(30))
+            // Longer timeout for CI environments where image pull may be slow
+            wait_for_localstack_ready(&endpoint, Duration::from_secs(120))
                 .await
                 .expect("LocalStack failed to become ready");
 
