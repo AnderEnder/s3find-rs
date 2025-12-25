@@ -16,6 +16,10 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     - name: cache
       uses: Swatinem/rust-cache@v2
+    - name: Start Docker
+      run: |
+        sudo systemctl start docker
+        sudo chmod 666 /var/run/docker.sock
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
     - name: Generate code coverage

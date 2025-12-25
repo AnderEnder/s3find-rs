@@ -102,7 +102,7 @@ struct SharedLocalStack {
 
 /// LocalStack container configuration
 const LOCALSTACK_IMAGE: &str = "localstack/localstack";
-const LOCALSTACK_TAG: &str = "latest";
+const LOCALSTACK_TAG: &str = "3.0";
 const LOCALSTACK_PORT: u16 = 4566;
 
 /// Check if LocalStack is already running on default port
@@ -122,14 +122,27 @@ async fn is_localstack_running() -> Option<String> {
 }
 
 /// Wait for LocalStack to be ready by polling the health endpoint
-async fn wait_for_localstack_ready(_endpoint: &str, max_wait: Duration) -> Result<(), String> {
+async fn wait_for_localstack_ready(endpoint: &str, max_wait: Duration) -> Result<(), String> {
     let start = std::time::Instant::now();
 
+    // Derive the host:port from the endpoint (e.g., "http://host:port[/...]" -> "host:port")
+    let addr = {
+        let without_scheme = endpoint
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(endpoint);
+        without_scheme
+            .split('/')
+            .next()
+            .unwrap_or(without_scheme)
+            .to_string()
+    };
+
     while start.elapsed() < max_wait {
-        // Try to make a simple HTTP request to the health endpoint
+        // Try to make a simple TCP connection to the derived address
         match tokio::time::timeout(
             Duration::from_secs(2),
-            tokio::net::TcpStream::connect(format!("localhost:{}", LOCALSTACK_PORT)),
+            tokio::net::TcpStream::connect(&addr),
         )
         .await
         {
