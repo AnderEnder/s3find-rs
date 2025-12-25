@@ -23,81 +23,69 @@ type S3Result<T> = Result<T, SdkError<ListObjectsV2Error, Response>>;
 // Delimiter used for hierarchical S3 listing
 const S3_PATH_DELIMITER: &str = "/";
 
-/// Extended object information that includes version details.
-/// This struct wraps the standard S3 Object with optional version metadata.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObjectInfo {
-    /// The underlying S3 object
-    pub object: Object,
-    /// Version ID (only present when listing versions)
-    pub version_id: Option<String>,
-    /// Whether this is the latest version
-    pub is_latest: Option<bool>,
-    /// Whether this is a delete marker
-    pub is_delete_marker: bool,
+/// Convert an ObjectVersion to a standard Object.
+///
+/// The version_id is appended to the key (e.g., "key?versionId=xxx") to make
+/// version information visible in the output. For the latest version, "(latest)"
+/// is also indicated.
+fn object_from_version(version: aws_sdk_s3::types::ObjectVersion) -> Object {
+    // Convert ObjectVersionStorageClass to ObjectStorageClass
+    let storage_class = version
+        .storage_class
+        .map(|sc| aws_sdk_s3::types::ObjectStorageClass::from(sc.as_str()));
+
+    // Append version info to key for visibility
+    let key = match (&version.key, &version.version_id) {
+        (Some(k), Some(vid)) => {
+            let latest_marker = if version.is_latest == Some(true) {
+                " (latest)"
+            } else {
+                ""
+            };
+            Some(format!("{}?versionId={}{}", k, vid, latest_marker))
+        }
+        (Some(k), None) => Some(k.clone()),
+        _ => None,
+    };
+
+    Object::builder()
+        .set_key(key)
+        .set_last_modified(version.last_modified)
+        .set_e_tag(version.e_tag)
+        .set_size(version.size)
+        .set_storage_class(storage_class)
+        .set_owner(version.owner)
+        .build()
 }
 
-impl ObjectInfo {
-    /// Create ObjectInfo from a standard Object (current version only)
-    pub fn from_object(object: Object) -> Self {
-        ObjectInfo {
-            object,
-            version_id: None,
-            is_latest: None,
-            is_delete_marker: false,
+/// Convert a DeleteMarkerEntry to a standard Object.
+///
+/// Delete markers are represented as Objects with size 0 and no storage class.
+/// The key includes the version_id and a "(delete marker)" indicator.
+fn object_from_delete_marker(marker: aws_sdk_s3::types::DeleteMarkerEntry) -> Object {
+    // Append version info and delete marker indicator to key
+    let key = match (&marker.key, &marker.version_id) {
+        (Some(k), Some(vid)) => {
+            let latest_marker = if marker.is_latest == Some(true) {
+                " (latest)"
+            } else {
+                ""
+            };
+            Some(format!(
+                "{}?versionId={}{} (delete marker)",
+                k, vid, latest_marker
+            ))
         }
-    }
+        (Some(k), None) => Some(format!("{} (delete marker)", k)),
+        _ => None,
+    };
 
-    /// Create ObjectInfo from an ObjectVersion
-    pub fn from_version(version: aws_sdk_s3::types::ObjectVersion) -> Self {
-        // Convert ObjectVersionStorageClass to ObjectStorageClass
-        let storage_class = version
-            .storage_class
-            .map(|sc| aws_sdk_s3::types::ObjectStorageClass::from(sc.as_str()));
-
-        let object = Object::builder()
-            .set_key(version.key.clone())
-            .set_last_modified(version.last_modified)
-            .set_e_tag(version.e_tag.clone())
-            .set_size(version.size)
-            .set_storage_class(storage_class)
-            .set_owner(version.owner)
-            .build();
-
-        ObjectInfo {
-            object,
-            version_id: version.version_id,
-            is_latest: version.is_latest,
-            is_delete_marker: false,
-        }
-    }
-
-    /// Create ObjectInfo from a DeleteMarker
-    pub fn from_delete_marker(marker: aws_sdk_s3::types::DeleteMarkerEntry) -> Self {
-        let object = Object::builder()
-            .set_key(marker.key.clone())
-            .set_last_modified(marker.last_modified)
-            .set_owner(marker.owner)
-            .set_size(Some(0))
-            .build();
-
-        ObjectInfo {
-            object,
-            version_id: marker.version_id,
-            is_latest: marker.is_latest,
-            is_delete_marker: true,
-        }
-    }
-
-    /// Get the object key
-    pub fn key(&self) -> Option<&str> {
-        self.object.key()
-    }
-
-    /// Get the object size
-    pub fn size(&self) -> Option<i64> {
-        self.object.size
-    }
+    Object::builder()
+        .set_key(key)
+        .set_last_modified(marker.last_modified)
+        .set_owner(marker.owner)
+        .set_size(Some(0))
+        .build()
 }
 
 pub struct FindCommand {
@@ -368,16 +356,14 @@ impl FindStream {
                         // Convert ObjectVersions to Objects
                         if let Some(versions) = output.versions {
                             for version in versions {
-                                let info = ObjectInfo::from_version(version);
-                                objects.push(info.object);
+                                objects.push(object_from_version(version));
                             }
                         }
 
                         // Include delete markers as well
                         if let Some(markers) = output.delete_markers {
                             for marker in markers {
-                                let info = ObjectInfo::from_delete_marker(marker);
-                                objects.push(info.object);
+                                objects.push(object_from_delete_marker(marker));
                             }
                         }
 
@@ -1880,11 +1866,20 @@ mod tests {
             .collect::<Vec<_>>()
             .await;
 
-        // Should get all versions and delete markers
+        // Should get all versions and delete markers with version info in keys
         assert_eq!(objects.len(), 3);
-        assert_eq!(objects[0].key.as_ref().unwrap(), "data/file1.txt");
-        assert_eq!(objects[1].key.as_ref().unwrap(), "data/file1.txt");
-        assert_eq!(objects[2].key.as_ref().unwrap(), "data/deleted.txt");
+        assert_eq!(
+            objects[0].key.as_ref().unwrap(),
+            "data/file1.txt?versionId=v1 (latest)"
+        );
+        assert_eq!(
+            objects[1].key.as_ref().unwrap(),
+            "data/file1.txt?versionId=v0"
+        );
+        assert_eq!(
+            objects[2].key.as_ref().unwrap(),
+            "data/deleted.txt?versionId=dm1 (latest) (delete marker)"
+        );
         // Delete marker has size 0
         assert_eq!(objects[2].size, Some(0));
 
@@ -1892,16 +1887,60 @@ mod tests {
     }
 
     #[test]
-    fn test_object_info_from_object() {
-        let object = Object::builder().key("test.txt").size(100).build();
+    fn test_object_from_version_with_version_id() {
+        use aws_sdk_s3::types::ObjectVersion;
+        use aws_sdk_s3::types::ObjectVersionStorageClass;
 
-        let info = ObjectInfo::from_object(object.clone());
+        let version = ObjectVersion::builder()
+            .key("test.txt")
+            .version_id("abc123")
+            .is_latest(true)
+            .size(100)
+            .storage_class(ObjectVersionStorageClass::Standard)
+            .build();
 
-        assert_eq!(info.object, object);
-        assert_eq!(info.version_id, None);
-        assert_eq!(info.is_latest, None);
-        assert!(!info.is_delete_marker);
-        assert_eq!(info.key(), Some("test.txt"));
-        assert_eq!(info.size(), Some(100));
+        let object = object_from_version(version);
+
+        // Key should include version_id and (latest) marker
+        assert_eq!(object.key(), Some("test.txt?versionId=abc123 (latest)"));
+        assert_eq!(object.size(), Some(100));
+    }
+
+    #[test]
+    fn test_object_from_version_not_latest() {
+        use aws_sdk_s3::types::ObjectVersion;
+
+        let version = ObjectVersion::builder()
+            .key("test.txt")
+            .version_id("old123")
+            .is_latest(false)
+            .size(50)
+            .build();
+
+        let object = object_from_version(version);
+
+        // Key should include version_id but not (latest)
+        assert_eq!(object.key(), Some("test.txt?versionId=old123"));
+        assert_eq!(object.size(), Some(50));
+    }
+
+    #[test]
+    fn test_object_from_delete_marker() {
+        use aws_sdk_s3::types::DeleteMarkerEntry;
+
+        let marker = DeleteMarkerEntry::builder()
+            .key("deleted.txt")
+            .version_id("del456")
+            .is_latest(true)
+            .build();
+
+        let object = object_from_delete_marker(marker);
+
+        // Key should include version_id and markers
+        assert_eq!(
+            object.key(),
+            Some("deleted.txt?versionId=del456 (latest) (delete marker)")
+        );
+        assert_eq!(object.size(), Some(0));
     }
 }
