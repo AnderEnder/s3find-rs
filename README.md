@@ -420,7 +420,7 @@ s3find 's3://example-bucket/' --all-versions ls
 # List all versions matching a pattern
 s3find 's3://example-bucket/' --all-versions --name '*.log' ls
 
-# Print detailed version information
+# Print all versions in JSON format
 s3find 's3://example-bucket/' --all-versions print --format json
 ```
 
@@ -428,6 +428,9 @@ When `--all-versions` is enabled:
 - Uses the S3 ListObjectVersions API instead of ListObjectsV2
 - Shows all versions of each object, not just the current version
 - Includes delete markers (shown with size 0)
+- Each entry includes the version ID in the key: `file.txt?versionId=abc123`
+- The latest version is marked with `(latest)`
+- Delete markers are marked with `(delete marker)`
 
 **Note:** `--all-versions` is not compatible with `--maxdepth`. If both are specified, `--all-versions` takes precedence and `--maxdepth` is ignored.
 
