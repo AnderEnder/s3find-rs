@@ -23,6 +23,83 @@ type S3Result<T> = Result<T, SdkError<ListObjectsV2Error, Response>>;
 // Delimiter used for hierarchical S3 listing
 const S3_PATH_DELIMITER: &str = "/";
 
+/// Extended object information that includes version details.
+/// This struct wraps the standard S3 Object with optional version metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectInfo {
+    /// The underlying S3 object
+    pub object: Object,
+    /// Version ID (only present when listing versions)
+    pub version_id: Option<String>,
+    /// Whether this is the latest version
+    pub is_latest: Option<bool>,
+    /// Whether this is a delete marker
+    pub is_delete_marker: bool,
+}
+
+impl ObjectInfo {
+    /// Create ObjectInfo from a standard Object (current version only)
+    pub fn from_object(object: Object) -> Self {
+        ObjectInfo {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+        }
+    }
+
+    /// Create ObjectInfo from an ObjectVersion
+    pub fn from_version(version: aws_sdk_s3::types::ObjectVersion) -> Self {
+        // Convert ObjectVersionStorageClass to ObjectStorageClass
+        let storage_class = version
+            .storage_class
+            .map(|sc| aws_sdk_s3::types::ObjectStorageClass::from(sc.as_str()));
+
+        let object = Object::builder()
+            .set_key(version.key.clone())
+            .set_last_modified(version.last_modified)
+            .set_e_tag(version.e_tag.clone())
+            .set_size(version.size)
+            .set_storage_class(storage_class)
+            .set_owner(version.owner)
+            .build();
+
+        ObjectInfo {
+            object,
+            version_id: version.version_id,
+            is_latest: version.is_latest,
+            is_delete_marker: false,
+        }
+    }
+
+    /// Create ObjectInfo from a DeleteMarker
+    pub fn from_delete_marker(marker: aws_sdk_s3::types::DeleteMarkerEntry) -> Self {
+        let object = Object::builder()
+            .set_key(marker.key.clone())
+            .set_last_modified(marker.last_modified)
+            .set_owner(marker.owner)
+            .set_size(Some(0))
+            .build();
+
+        ObjectInfo {
+            object,
+            version_id: marker.version_id,
+            is_latest: marker.is_latest,
+            is_delete_marker: true,
+        }
+    }
+
+    /// Get the object key
+    pub fn key(&self) -> Option<&str> {
+        self.object.key()
+    }
+
+    /// Get the object size
+    pub fn size(&self) -> Option<i64> {
+        self.object.size
+    }
+}
+
 pub struct FindCommand {
     pub client: Client,
     pub path: S3Path,
@@ -74,6 +151,7 @@ pub struct FindStream {
     pub page_size: i64,
     pub initial: bool,
     pub maxdepth: Option<usize>,
+    pub all_versions: bool,
 }
 
 impl FindStream {
@@ -87,6 +165,7 @@ impl FindStream {
             page_size: opts.page_size,
             initial: true,
             maxdepth: opts.maxdepth,
+            all_versions: opts.all_versions,
         }
     }
 
@@ -255,6 +334,140 @@ impl FindStream {
         })
     }
 
+    /// Creates a stream of object versions using ListObjectVersions API.
+    ///
+    /// This method lists all versions of objects, including delete markers.
+    /// Each version is converted to an Object for compatibility with existing commands.
+    fn versions_paginator(self) -> BoxedStream<'static, Vec<Object>> {
+        let bucket = self.path.bucket.clone();
+        let prefix = self.path.prefix.clone().unwrap_or_default();
+        let page_size = self.page_size;
+
+        Box::pin(async_stream::stream! {
+            let mut key_marker: Option<String> = None;
+            let mut version_id_marker: Option<String> = None;
+
+            loop {
+                let mut request = self.client
+                    .list_object_versions()
+                    .bucket(&bucket)
+                    .prefix(&prefix)
+                    .max_keys(page_size as i32);
+
+                if let Some(ref km) = key_marker {
+                    request = request.key_marker(km);
+                }
+                if let Some(ref vim) = version_id_marker {
+                    request = request.version_id_marker(vim);
+                }
+
+                match request.send().await {
+                    Ok(output) => {
+                        let mut objects = Vec::new();
+
+                        // Convert ObjectVersions to Objects
+                        if let Some(versions) = output.versions {
+                            for version in versions {
+                                let info = ObjectInfo::from_version(version);
+                                objects.push(info.object);
+                            }
+                        }
+
+                        // Include delete markers as well
+                        if let Some(markers) = output.delete_markers {
+                            for marker in markers {
+                                let info = ObjectInfo::from_delete_marker(marker);
+                                objects.push(info.object);
+                            }
+                        }
+
+                        if !objects.is_empty() {
+                            yield objects;
+                        }
+
+                        // Check if there are more results
+                        if output.is_truncated.unwrap_or(false) {
+                            key_marker = output.next_key_marker;
+                            version_id_marker = output.next_version_id_marker;
+                        } else {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error listing object versions: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        })
+    }
+
+    /// Creates a stream of ObjectInfo with version details using ListObjectVersions API.
+    ///
+    /// This method provides full version information including version_id, is_latest,
+    /// and delete marker status.
+    pub fn stream_versions(self) -> BoxedStream<'static, Vec<ObjectInfo>> {
+        let bucket = self.path.bucket.clone();
+        let prefix = self.path.prefix.clone().unwrap_or_default();
+        let page_size = self.page_size;
+
+        Box::pin(async_stream::stream! {
+            let mut key_marker: Option<String> = None;
+            let mut version_id_marker: Option<String> = None;
+
+            loop {
+                let mut request = self.client
+                    .list_object_versions()
+                    .bucket(&bucket)
+                    .prefix(&prefix)
+                    .max_keys(page_size as i32);
+
+                if let Some(ref km) = key_marker {
+                    request = request.key_marker(km);
+                }
+                if let Some(ref vim) = version_id_marker {
+                    request = request.version_id_marker(vim);
+                }
+
+                match request.send().await {
+                    Ok(output) => {
+                        let mut objects = Vec::new();
+
+                        // Convert ObjectVersions to ObjectInfo
+                        if let Some(versions) = output.versions {
+                            for version in versions {
+                                objects.push(ObjectInfo::from_version(version));
+                            }
+                        }
+
+                        // Include delete markers
+                        if let Some(markers) = output.delete_markers {
+                            for marker in markers {
+                                objects.push(ObjectInfo::from_delete_marker(marker));
+                            }
+                        }
+
+                        if !objects.is_empty() {
+                            yield objects;
+                        }
+
+                        // Check if there are more results
+                        if output.is_truncated.unwrap_or(false) {
+                            key_marker = output.next_key_marker;
+                            version_id_marker = output.next_version_id_marker;
+                        } else {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error listing object versions: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        })
+    }
+
     /// Creates a stream of S3 objects, using delimiter-based depth limiting if maxdepth is set.
     ///
     /// This method is non-async and returns a stream immediately without starting any I/O,
@@ -263,9 +476,15 @@ impl FindStream {
     /// # Returns
     ///
     /// A pinned, boxed stream that yields batches of objects (`Vec<Object>`).
+    /// - If `all_versions` is set: Uses ListObjectVersions API
     /// - If `maxdepth` is set: Uses delimiter-based hierarchical traversal
-    /// - If `maxdepth` is None: Uses standard flat pagination
+    /// - Otherwise: Uses standard flat pagination
     pub fn stream(self) -> BoxedStream<'static, Vec<Object>> {
+        // Use version listing if all_versions is set
+        if self.all_versions {
+            return self.versions_paginator();
+        }
+
         // Use delimiter-based traversal if maxdepth is set
         if self.maxdepth.is_some() {
             return self.paginator_with_depth();
@@ -300,6 +519,7 @@ impl PartialEq for FindStream {
             && self.page_size == other.page_size
             && self.initial == other.initial
             && self.maxdepth == other.maxdepth
+            && self.all_versions == other.all_versions
     }
 }
 
@@ -315,8 +535,9 @@ FindStream {{
     page_size: {},
     initial: {},
     maxdepth: {:?},
+    all_versions: {},
 }}",
-            self.path, self.token, self.page_size, self.initial, self.maxdepth
+            self.path, self.token, self.page_size, self.initial, self.maxdepth, self.all_versions
         )
     }
 }
@@ -622,6 +843,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         assert_eq!(find_stream.token, None);
@@ -636,6 +858,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         assert_eq!(find_stream, same_stream);
@@ -647,6 +870,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         assert_ne!(find_stream, different_stream);
@@ -674,6 +898,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         let _stream = find_stream.stream(); // Non-async, returns stream immediately
@@ -699,6 +924,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         let debug_str = format!("{:?}", find_stream);
@@ -709,6 +935,7 @@ mod tests {
         assert!(debug_str.contains("page_size: 1000"));
         assert!(debug_str.contains("initial: true"));
         assert!(debug_str.contains("maxdepth: None"));
+        assert!(debug_str.contains("all_versions: false"));
     }
 
     #[tokio::test]
@@ -734,6 +961,7 @@ mod tests {
             summarize: true,
             limit: Some(100),
             maxdepth: None,
+            all_versions: false,
         };
         let client = setup_client(&args).await;
 
@@ -766,6 +994,7 @@ mod tests {
             initial: true,
             client,
             maxdepth: None,
+            all_versions: false,
         };
 
         assert_eq!(stream.path, path);
@@ -811,6 +1040,7 @@ mod tests {
             mtime: mtimes,
             storage_class: Some(ObjectStorageClass::Standard),
             maxdepth: None,
+            all_versions: false,
         };
 
         let client = setup_client(&opts).await;
@@ -918,6 +1148,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         let mut paginator = find_stream.paginator().await;
@@ -987,6 +1218,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         let mut paginator = find_stream.paginator().await;
@@ -1061,6 +1293,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         let mut paginator = find_stream.paginator().await;
@@ -1135,6 +1368,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         let stream = find_stream.stream();
@@ -1201,6 +1435,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None,
+            all_versions: false,
         };
 
         let stream = find_stream.stream();
@@ -1240,6 +1475,7 @@ mod tests {
             mtime: vec![],
             storage_class: None,
             maxdepth: None,
+            all_versions: false,
         };
 
         let client1 = setup_client(&opts1).await;
@@ -1273,6 +1509,7 @@ mod tests {
             mtime: vec![],
             storage_class: None,
             maxdepth: None,
+            all_versions: false,
         };
 
         let client2 = setup_client(&opts_withour_prefix).await;
@@ -1345,6 +1582,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: Some(0),
+            all_versions: false,
         };
 
         let stream = find_stream.stream();
@@ -1446,6 +1684,7 @@ mod tests {
             page_size: 100,
             initial: true,
             maxdepth: Some(1),
+            all_versions: false,
         };
 
         let stream = find_stream.stream();
@@ -1516,6 +1755,7 @@ mod tests {
             page_size: 1000,
             initial: true,
             maxdepth: None, // No maxdepth - should use standard pagination
+            all_versions: false,
         };
 
         let stream = find_stream.stream();
@@ -1602,6 +1842,7 @@ mod tests {
             page_size: 100,
             initial: true,
             maxdepth: Some(1),
+            all_versions: false,
         };
 
         let stream = find_stream.stream();
@@ -1614,5 +1855,110 @@ mod tests {
         assert_eq!(objects.len(), 0);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_all_versions_listing() -> Result<(), Box<dyn std::error::Error>> {
+        // Test that all_versions uses ListObjectVersions API
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("data/".to_string()),
+        };
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?max-keys=1000&prefix=data%2F&versions=")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>data/</Prefix>
+            <MaxKeys>1000</MaxKeys>
+            <IsTruncated>false</IsTruncated>
+            <Version>
+                <Key>data/file1.txt</Key>
+                <VersionId>v1</VersionId>
+                <IsLatest>true</IsLatest>
+                <LastModified>2023-01-01T00:00:00.000Z</LastModified>
+                <Size>100</Size>
+                <StorageClass>STANDARD</StorageClass>
+            </Version>
+            <Version>
+                <Key>data/file1.txt</Key>
+                <VersionId>v0</VersionId>
+                <IsLatest>false</IsLatest>
+                <LastModified>2022-12-01T00:00:00.000Z</LastModified>
+                <Size>90</Size>
+                <StorageClass>STANDARD</StorageClass>
+            </Version>
+            <DeleteMarker>
+                <Key>data/deleted.txt</Key>
+                <VersionId>dm1</VersionId>
+                <IsLatest>true</IsLatest>
+                <LastModified>2023-02-01T00:00:00.000Z</LastModified>
+            </DeleteMarker>
+        </ListVersionsResult>"#;
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test", "test", None, None, "test",
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+            maxdepth: None,
+            all_versions: true, // Enable version listing
+        };
+
+        let stream = find_stream.stream();
+        let objects = stream
+            .flat_map(|x| futures::stream::iter(x.into_iter()))
+            .collect::<Vec<_>>()
+            .await;
+
+        // Should get all versions and delete markers
+        assert_eq!(objects.len(), 3);
+        assert_eq!(objects[0].key.as_ref().unwrap(), "data/file1.txt");
+        assert_eq!(objects[1].key.as_ref().unwrap(), "data/file1.txt");
+        assert_eq!(objects[2].key.as_ref().unwrap(), "data/deleted.txt");
+        // Delete marker has size 0
+        assert_eq!(objects[2].size, Some(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_object_info_from_object() {
+        let object = Object::builder().key("test.txt").size(100).build();
+
+        let info = ObjectInfo::from_object(object.clone());
+
+        assert_eq!(info.object, object);
+        assert_eq!(info.version_id, None);
+        assert_eq!(info.is_latest, None);
+        assert!(!info.is_delete_marker);
+        assert_eq!(info.key(), Some("test.txt"));
+        assert_eq!(info.size(), Some(100));
     }
 }

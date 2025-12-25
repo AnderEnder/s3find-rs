@@ -338,6 +338,32 @@ impl LocalStackFixture {
         format!("s3://{}/{}", self.bucket, prefix)
     }
 
+    /// Enable versioning on the bucket
+    async fn enable_versioning(&self) {
+        self.client
+            .put_bucket_versioning()
+            .bucket(&self.bucket)
+            .versioning_configuration(
+                aws_sdk_s3::types::VersioningConfiguration::builder()
+                    .status(aws_sdk_s3::types::BucketVersioningStatus::Enabled)
+                    .build(),
+            )
+            .send()
+            .await
+            .expect("Failed to enable versioning");
+    }
+
+    /// Delete an object (creates a delete marker when versioning is enabled)
+    async fn delete_object(&self, key: &str) {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .expect("Failed to delete object");
+    }
+
     /// Create a Command configured to use this LocalStack instance
     fn s3find_command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_s3find"));
@@ -780,4 +806,130 @@ async fn test_maxdepth_empty_subdirectories() {
         .stdout(predicate::str::contains("root.txt"))
         .stdout(predicate::str::contains("has_files/file.txt"))
         .stdout(predicate::str::contains("empty_at_level1/subdir/file.txt").not());
+}
+
+#[tokio::test]
+async fn test_all_versions_basic() {
+    let bucket_name = unique_bucket_name("test-versions-basic");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Enable versioning on the bucket
+    fixture.enable_versioning().await;
+
+    // Create multiple versions of the same object
+    fixture.put_object("file.txt", b"version 1").await;
+    fixture.put_object("file.txt", b"version 2").await;
+    fixture.put_object("file.txt", b"version 3").await;
+
+    // Without --all-versions, should only see the latest version (1 entry)
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path("")).arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("file.txt"));
+
+    // With --all-versions, should see all 3 versions
+    let mut cmd_versions = fixture.s3find_command();
+    cmd_versions
+        .arg(fixture.s3_path(""))
+        .arg("--all-versions")
+        .arg("ls");
+
+    let output = cmd_versions.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Count occurrences of file.txt in output
+    let count = stdout.matches("file.txt").count();
+    assert!(
+        count >= 3,
+        "Expected at least 3 versions, found {} occurrences of file.txt in output:\n{}",
+        count,
+        stdout
+    );
+}
+
+#[tokio::test]
+async fn test_all_versions_with_delete_markers() {
+    let bucket_name = unique_bucket_name("test-versions-delete");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Enable versioning
+    fixture.enable_versioning().await;
+
+    // Create object and then delete it (creates delete marker)
+    fixture.put_object("deleted.txt", b"original").await;
+    fixture.delete_object("deleted.txt").await;
+
+    // Also create another object with multiple versions
+    fixture.put_object("kept.txt", b"v1").await;
+    fixture.put_object("kept.txt", b"v2").await;
+
+    // Without --all-versions, deleted.txt should not appear (hidden by delete marker)
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path("")).arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("kept.txt"))
+        .stdout(predicate::str::contains("deleted.txt").not());
+
+    // With --all-versions, should see deleted.txt (both original and delete marker)
+    let mut cmd_versions = fixture.s3find_command();
+    cmd_versions
+        .arg(fixture.s3_path(""))
+        .arg("--all-versions")
+        .arg("ls");
+
+    cmd_versions
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kept.txt"))
+        .stdout(predicate::str::contains("deleted.txt"));
+}
+
+#[tokio::test]
+async fn test_all_versions_with_name_filter() {
+    let bucket_name = unique_bucket_name("test-versions-filter");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Enable versioning
+    fixture.enable_versioning().await;
+
+    // Create versioned objects with different extensions
+    fixture.put_object("doc.txt", b"v1").await;
+    fixture.put_object("doc.txt", b"v2").await;
+    fixture.put_object("image.png", b"v1").await;
+    fixture.put_object("image.png", b"v2").await;
+
+    // With --all-versions and --name filter
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--all-versions")
+        .arg("--name")
+        .arg("*.txt")
+        .arg("ls");
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should see doc.txt versions but not image.png
+    assert!(
+        stdout.contains("doc.txt"),
+        "Expected doc.txt in output:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("image.png"),
+        "Expected no image.png in output:\n{}",
+        stdout
+    );
+
+    // Count doc.txt occurrences (should be at least 2)
+    let count = stdout.matches("doc.txt").count();
+    assert!(
+        count >= 2,
+        "Expected at least 2 versions of doc.txt, found {}",
+        count
+    );
 }

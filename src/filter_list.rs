@@ -188,6 +188,7 @@ mod tests {
             mtime: Vec::new(),
             cmd: None,
             maxdepth: None,
+            all_versions: false,
         };
 
         let filter_list = FilterList::from_opts(&opts);

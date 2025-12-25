@@ -225,6 +225,22 @@ times out."#
     #[arg(name = "summarize", long, short)]
     pub summarize: bool,
 
+    /// Include all object versions (uses ListObjectVersions API)
+    #[arg(
+        name = "all-versions",
+        long,
+        long_help = r#"Include all versions of objects, not just the current version.
+
+When enabled, s3find uses the ListObjectVersions API instead of ListObjectsV2.
+This shows all versions of each object, including delete markers.
+
+Example:
+  s3find s3://bucket --all-versions ls           # List all versions
+  s3find s3://bucket --all-versions --name "*.log" ls
+  s3find s3://bucket --all-versions print --format json"#
+    )]
+    pub all_versions: bool,
+
     /// Maximum depth to descend (uses S3 delimiter for efficient traversal)
     #[arg(
         name = "maxdepth",
