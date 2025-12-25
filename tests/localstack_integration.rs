@@ -229,20 +229,20 @@ struct LocalStackFixture {
     bucket: String,
 }
 
+/// Generate a unique bucket name with timestamp suffix to prevent test pollution
+fn unique_bucket_name(base_name: &str) -> String {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    format!("{}-{}", base_name, timestamp)
+}
+
 impl LocalStackFixture {
     /// Creates a new test fixture with its own bucket in the shared LocalStack
-    /// The bucket name includes a timestamp to prevent conflicts across test runs
     async fn new(bucket_name: &str) -> Self {
         let localstack = get_localstack().await;
         let endpoint = localstack.endpoint.clone();
-
-        // Generate unique bucket name with timestamp to avoid test pollution
-        // when reusing manually-started LocalStack containers
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let unique_bucket_name = format!("{}-{}", bucket_name, timestamp);
 
         // Create S3 client pointing to LocalStack with path-style addressing
         let config = aws_config::defaults(BehaviorVersion::latest())
@@ -267,14 +267,9 @@ impl LocalStackFixture {
         // Create test bucket with retry for robustness
         let mut retries = 3;
         loop {
-            match client
-                .create_bucket()
-                .bucket(&unique_bucket_name)
-                .send()
-                .await
-            {
+            match client.create_bucket().bucket(bucket_name).send().await {
                 Ok(_) => {
-                    eprintln!("Created bucket: {}", unique_bucket_name);
+                    eprintln!("Created bucket: {}", bucket_name);
                     break;
                 }
                 Err(e) => {
@@ -283,7 +278,7 @@ impl LocalStackFixture {
                     if error_str.contains("BucketAlreadyOwnedByYou")
                         || error_str.contains("BucketAlreadyExists")
                     {
-                        eprintln!("Bucket already exists, reusing: {}", unique_bucket_name);
+                        eprintln!("Bucket already exists, reusing: {}", bucket_name);
                         break;
                     }
                     // Other errors - retry
@@ -304,7 +299,7 @@ impl LocalStackFixture {
         Self {
             endpoint,
             client,
-            bucket: unique_bucket_name,
+            bucket: bucket_name.to_string(),
         }
     }
 
@@ -358,7 +353,8 @@ impl LocalStackFixture {
 
 #[tokio::test]
 async fn test_ls_basic() {
-    let fixture = LocalStackFixture::new("test-ls-basic").await;
+    let bucket_name = unique_bucket_name("test-ls-basic");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create test data
     fixture.put_object("file1.txt", b"content1").await;
@@ -378,7 +374,8 @@ async fn test_ls_basic() {
 
 #[tokio::test]
 async fn test_ls_with_name_filter() {
-    let fixture = LocalStackFixture::new("test-ls-name-filter").await;
+    let bucket_name = unique_bucket_name("test-ls-name-filter");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create test data
     fixture.put_object("document.txt", b"content").await;
@@ -403,7 +400,8 @@ async fn test_ls_with_name_filter() {
 
 #[tokio::test]
 async fn test_ls_with_iname_filter() {
-    let fixture = LocalStackFixture::new("test-ls-iname-filter").await;
+    let bucket_name = unique_bucket_name("test-ls-iname-filter");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create test data with mixed case
     fixture.put_object("Document.TXT", b"content").await;
@@ -426,7 +424,8 @@ async fn test_ls_with_iname_filter() {
 
 #[tokio::test]
 async fn test_ls_with_regex_filter() {
-    let fixture = LocalStackFixture::new("test-ls-regex").await;
+    let bucket_name = unique_bucket_name("test-ls-regex");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create test data
     fixture.put_object("file001.txt", b"content").await;
@@ -449,7 +448,8 @@ async fn test_ls_with_regex_filter() {
 
 #[tokio::test]
 async fn test_print_command() {
-    let fixture = LocalStackFixture::new("test-print").await;
+    let bucket_name = unique_bucket_name("test-print");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     let test_content = b"Hello from LocalStack!";
     fixture.put_object("test.txt", test_content).await;
@@ -459,7 +459,7 @@ async fn test_print_command() {
     cmd.arg(fixture.s3_path("test.txt")).arg("print");
 
     // Check for the file path (with timestamp-based bucket name) and storage class
-    let expected_path = fixture.s3_path("test.txt");
+    let expected_path = format!("s3://{}/test.txt", bucket_name);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains(&expected_path))
@@ -468,7 +468,8 @@ async fn test_print_command() {
 
 #[tokio::test]
 async fn test_size_filter() {
-    let fixture = LocalStackFixture::new("test-size-filter").await;
+    let bucket_name = unique_bucket_name("test-size-filter");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create files of different sizes
     fixture.put_object("small.txt", b"small").await; // 5 bytes
@@ -493,7 +494,8 @@ async fn test_size_filter() {
 
 #[tokio::test]
 async fn test_storage_class_filter() {
-    let fixture = LocalStackFixture::new("test-storage-class").await;
+    let bucket_name = unique_bucket_name("test-storage-class");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create files with different storage classes
     fixture
@@ -526,7 +528,8 @@ async fn test_storage_class_filter() {
 
 #[tokio::test]
 async fn test_ls_with_prefix() {
-    let fixture = LocalStackFixture::new("test-ls-prefix").await;
+    let bucket_name = unique_bucket_name("test-ls-prefix");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create files in different directories
     fixture.put_object("root.txt", b"root").await;
@@ -548,7 +551,8 @@ async fn test_ls_with_prefix() {
 
 #[tokio::test]
 async fn test_combined_filters() {
-    let fixture = LocalStackFixture::new("test-combined-filters").await;
+    let bucket_name = unique_bucket_name("test-combined-filters");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Create various test files
     fixture.put_object("data001.txt", &[b'x'; 200]).await;
@@ -575,7 +579,8 @@ async fn test_combined_filters() {
 
 #[tokio::test]
 async fn test_empty_bucket() {
-    let fixture = LocalStackFixture::new("test-empty-bucket").await;
+    let bucket_name = unique_bucket_name("test-empty-bucket");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     // Run s3find on empty bucket
     let mut cmd = fixture.s3find_command();
@@ -587,7 +592,8 @@ async fn test_empty_bucket() {
 
 #[tokio::test]
 async fn test_nonexistent_prefix() {
-    let fixture = LocalStackFixture::new("test-nonexistent").await;
+    let bucket_name = unique_bucket_name("test-nonexistent");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
 
     fixture.put_object("exists.txt", b"content").await;
 
