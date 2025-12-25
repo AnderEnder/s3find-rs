@@ -82,13 +82,13 @@
 
 use assert_cmd::assert::OutputAssertExt;
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::{primitives::ByteStream, Client};
+use aws_sdk_s3::{Client, primitives::ByteStream};
 use predicates::prelude::*;
 use std::{process::Command, time::Duration};
 use testcontainers::{
+    ContainerAsync, GenericImage, ImageExt,
     core::{ContainerPort, WaitFor},
     runners::AsyncRunner,
-    ContainerAsync, GenericImage, ImageExt,
 };
 use tokio::sync::OnceCell;
 
@@ -283,7 +283,6 @@ async fn test_ls_basic() {
 
 #[tokio::test]
 async fn test_ls_with_name_filter() {
-    
     let fixture = LocalStackFixture::new("test-ls-name-filter").await;
 
     // Create test data
@@ -309,7 +308,6 @@ async fn test_ls_with_name_filter() {
 
 #[tokio::test]
 async fn test_ls_with_iname_filter() {
-    
     let fixture = LocalStackFixture::new("test-ls-iname-filter").await;
 
     // Create test data with mixed case
@@ -333,7 +331,6 @@ async fn test_ls_with_iname_filter() {
 
 #[tokio::test]
 async fn test_ls_with_regex_filter() {
-    
     let fixture = LocalStackFixture::new("test-ls-regex").await;
 
     // Create test data
@@ -357,7 +354,6 @@ async fn test_ls_with_regex_filter() {
 
 #[tokio::test]
 async fn test_print_command() {
-
     let fixture = LocalStackFixture::new("test-print").await;
 
     let test_content = b"Hello from LocalStack!";
@@ -375,15 +371,14 @@ async fn test_print_command() {
 
 #[tokio::test]
 async fn test_size_filter() {
-    
     let fixture = LocalStackFixture::new("test-size-filter").await;
 
     // Create files of different sizes
     fixture.put_object("small.txt", b"small").await; // 5 bytes
-    fixture.put_object("medium.txt", b"medium file content").await; // 19 bytes
     fixture
-        .put_object("large.txt", &vec![b'x'; 1000])
-        .await; // 1000 bytes
+        .put_object("medium.txt", b"medium file content")
+        .await; // 19 bytes
+    fixture.put_object("large.txt", &vec![b'x'; 1000]).await; // 1000 bytes
 
     // Find files larger than 100 bytes
     let mut cmd = fixture.s3find_command();
@@ -401,7 +396,6 @@ async fn test_size_filter() {
 
 #[tokio::test]
 async fn test_storage_class_filter() {
-    
     let fixture = LocalStackFixture::new("test-storage-class").await;
 
     // Create files with different storage classes
@@ -435,7 +429,6 @@ async fn test_storage_class_filter() {
 
 #[tokio::test]
 async fn test_ls_with_prefix() {
-    
     let fixture = LocalStackFixture::new("test-ls-prefix").await;
 
     // Create files in different directories
@@ -458,7 +451,6 @@ async fn test_ls_with_prefix() {
 
 #[tokio::test]
 async fn test_combined_filters() {
-    
     let fixture = LocalStackFixture::new("test-combined-filters").await;
 
     // Create various test files
@@ -486,7 +478,6 @@ async fn test_combined_filters() {
 
 #[tokio::test]
 async fn test_empty_bucket() {
-    
     let fixture = LocalStackFixture::new("test-empty-bucket").await;
 
     // Run s3find on empty bucket
@@ -499,7 +490,6 @@ async fn test_empty_bucket() {
 
 #[tokio::test]
 async fn test_nonexistent_prefix() {
-    
     let fixture = LocalStackFixture::new("test-nonexistent").await;
 
     fixture.put_object("exists.txt", b"content").await;

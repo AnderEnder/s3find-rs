@@ -25,7 +25,22 @@ jobs:
       - name: build
         run: cargo build --verbose
       - name: test
-        run: cargo test --no-fail-fast --verbose --all -- --nocapture
+        run: cargo test --lib --no-fail-fast --verbose -- --nocapture
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: trace
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: cache
+        uses: Swatinem/rust-cache@v2
+      - name: integration tests
+        run: cargo test --test localstack_integration --no-fail-fast --verbose -- --nocapture
         env:
           RUST_BACKTRACE: 1
           RUST_LOG: trace
