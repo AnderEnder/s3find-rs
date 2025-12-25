@@ -458,9 +458,11 @@ async fn test_print_command() {
     let mut cmd = fixture.s3find_command();
     cmd.arg(fixture.s3_path("test.txt")).arg("print");
 
+    // Check for the file path (with timestamp-based bucket name) and storage class
+    let expected_path = fixture.s3_path("test.txt");
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("s3://test-print/test.txt"))
+        .stdout(predicate::str::contains(&expected_path))
         .stdout(predicate::str::contains("STANDARD"));
 }
 
