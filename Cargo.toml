@@ -51,6 +51,9 @@ lazy_static = "1"
 aws-smithy-runtime = { version = "1", features = ["test-util"] }
 tempfile = "3"
 http = "1"
+testcontainers = "0.26"
+assert_cmd = "2"
+predicates = "3"
 
 [build-dependencies]
 version_check = "0.9"
