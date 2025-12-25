@@ -1,6 +1,7 @@
 use aws_sdk_s3::types::Object;
 
 use crate::arg::*;
+use crate::command::StreamObject;
 use crate::filter::Filter;
 
 pub struct FilterList<'a>(pub Vec<&'a dyn Filter>);
@@ -30,9 +31,24 @@ impl<'a> FilterList<'a> {
         filters
     }
 
-    pub async fn test_match(&self, object: Object) -> bool {
+    /// Test if a StreamObject matches all filters.
+    ///
+    /// Filters operate on the inner Object, so version metadata doesn't affect matching.
+    /// This ensures glob patterns like "*.txt" work correctly even for versioned objects.
+    pub fn test_match(&self, stream_obj: &StreamObject) -> bool {
         for item in &self.0 {
-            if !item.filter(&object) {
+            if !item.filter(&stream_obj.object) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Test if an Object matches all filters (for non-versioned use cases).
+    pub fn test_match_object(&self, object: &Object) -> bool {
+        for item in &self.0 {
+            if !item.filter(object) {
                 return false;
             }
         }
@@ -82,9 +98,10 @@ mod tests {
     use regex::Regex;
     use std::str::FromStr;
 
-    #[tokio::test]
-    async fn test_filter_list_test_match() {
+    #[test]
+    fn test_filter_list_test_match() {
         let object = Object::builder().key("test-object.txt").size(100).build();
+        let stream_obj = StreamObject::from_object(object);
 
         struct AlwaysTrueFilter;
         impl Filter for AlwaysTrueFilter {
@@ -106,7 +123,7 @@ mod tests {
             .add_filter(&true_filter);
 
         assert!(
-            filter_list.test_match(object.clone()).await,
+            filter_list.test_match(&stream_obj),
             "all true filters failed"
         );
 
@@ -116,7 +133,7 @@ mod tests {
             .add_filter(&false_filter);
 
         assert!(
-            !filter_list.test_match(object.clone()).await,
+            !filter_list.test_match(&stream_obj),
             "one false filter failed"
         );
     }

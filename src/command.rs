@@ -5,7 +5,7 @@ use std::pin::Pin;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
-use aws_sdk_s3::types::Object;
+use aws_sdk_s3::types::{DeleteMarkerEntry, Object, ObjectStorageClass, ObjectVersion};
 use aws_smithy_async::future::pagination_stream::PaginationStream;
 use aws_smithy_runtime_api::http::Response;
 
@@ -23,69 +23,92 @@ type S3Result<T> = Result<T, SdkError<ListObjectsV2Error, Response>>;
 // Delimiter used for hierarchical S3 listing
 const S3_PATH_DELIMITER: &str = "/";
 
-/// Convert an ObjectVersion to a standard Object.
+/// Wrapper that carries version metadata alongside the S3 Object.
 ///
-/// The version_id is appended to the key (e.g., "key?versionId=xxx") to make
-/// version information visible in the output. For the latest version, "(latest)"
-/// is also indicated.
-fn object_from_version(version: aws_sdk_s3::types::ObjectVersion) -> Object {
-    // Convert ObjectVersionStorageClass to ObjectStorageClass
-    let storage_class = version
-        .storage_class
-        .map(|sc| aws_sdk_s3::types::ObjectStorageClass::from(sc.as_str()));
-
-    // Append version info to key for visibility
-    let key = match (&version.key, &version.version_id) {
-        (Some(k), Some(vid)) => {
-            let latest_marker = if version.is_latest == Some(true) {
-                " (latest)"
-            } else {
-                ""
-            };
-            Some(format!("{}?versionId={}{}", k, vid, latest_marker))
-        }
-        (Some(k), None) => Some(k.clone()),
-        _ => None,
-    };
-
-    Object::builder()
-        .set_key(key)
-        .set_last_modified(version.last_modified)
-        .set_e_tag(version.e_tag)
-        .set_size(version.size)
-        .set_storage_class(storage_class)
-        .set_owner(version.owner)
-        .build()
+/// This keeps the original Object intact for filters while providing
+/// version information for version-aware operations and display.
+#[derive(Debug, Clone)]
+pub struct StreamObject {
+    /// The S3 Object (contains key, size, last_modified, etc.)
+    pub object: Object,
+    /// Version ID if from versioned listing
+    pub version_id: Option<String>,
+    /// Whether this is the latest version
+    pub is_latest: Option<bool>,
+    /// Whether this is a delete marker
+    pub is_delete_marker: bool,
 }
 
-/// Convert a DeleteMarkerEntry to a standard Object.
-///
-/// Delete markers are represented as Objects with size 0 and no storage class.
-/// The key includes the version_id and a "(delete marker)" indicator.
-fn object_from_delete_marker(marker: aws_sdk_s3::types::DeleteMarkerEntry) -> Object {
-    // Append version info and delete marker indicator to key
-    let key = match (&marker.key, &marker.version_id) {
-        (Some(k), Some(vid)) => {
-            let latest_marker = if marker.is_latest == Some(true) {
-                " (latest)"
-            } else {
-                ""
-            };
-            Some(format!(
-                "{}?versionId={}{} (delete marker)",
-                k, vid, latest_marker
-            ))
+impl StreamObject {
+    /// Create from a regular Object (non-versioned listing).
+    pub fn from_object(object: Object) -> Self {
+        Self {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
         }
-        (Some(k), None) => Some(format!("{} (delete marker)", k)),
-        _ => None,
-    };
+    }
 
-    Object::builder()
-        .set_key(key)
-        .set_last_modified(marker.last_modified)
-        .set_owner(marker.owner)
-        .set_size(Some(0))
-        .build()
+    /// Create from an ObjectVersion (versioned listing).
+    pub fn from_version(version: ObjectVersion) -> Self {
+        let object = Object::builder()
+            .set_key(version.key.clone())
+            .set_size(version.size)
+            .set_last_modified(version.last_modified)
+            .set_e_tag(version.e_tag.clone())
+            .set_storage_class(
+                version
+                    .storage_class
+                    .map(|sc| ObjectStorageClass::from(sc.as_str())),
+            )
+            .set_owner(version.owner.clone())
+            .build();
+
+        Self {
+            object,
+            version_id: version.version_id,
+            is_latest: version.is_latest,
+            is_delete_marker: false,
+        }
+    }
+
+    /// Create from a DeleteMarkerEntry (versioned listing).
+    pub fn from_delete_marker(marker: DeleteMarkerEntry) -> Self {
+        let object = Object::builder()
+            .set_key(marker.key.clone())
+            .size(0)
+            .set_last_modified(marker.last_modified)
+            .set_owner(marker.owner.clone())
+            .build();
+
+        Self {
+            object,
+            version_id: marker.version_id,
+            is_latest: marker.is_latest,
+            is_delete_marker: true,
+        }
+    }
+
+    /// Get the original key (without version info).
+    #[inline]
+    pub fn key(&self) -> Option<&str> {
+        self.object.key()
+    }
+
+    /// Get key for display (includes version info if present).
+    pub fn display_key(&self) -> String {
+        let key = self.object.key().unwrap_or("");
+        match (&self.version_id, self.is_latest, self.is_delete_marker) {
+            (Some(vid), Some(true), true) => {
+                format!("{}?versionId={} (latest) (delete marker)", key, vid)
+            }
+            (Some(vid), Some(true), false) => format!("{}?versionId={} (latest)", key, vid),
+            (Some(vid), _, true) => format!("{}?versionId={} (delete marker)", key, vid),
+            (Some(vid), _, false) => format!("{}?versionId={}", key, vid),
+            (None, _, _) => key.to_string(),
+        }
+    }
 }
 
 pub struct FindCommand {
@@ -105,8 +128,10 @@ impl FindCommand {
         }
     }
 
-    pub async fn exec(&self, acc: Option<FindStat>, list: Vec<Object>) -> Option<FindStat> {
-        let status = acc.map(|stat| stat + &list);
+    pub async fn exec(&self, acc: Option<FindStat>, list: Vec<StreamObject>) -> Option<FindStat> {
+        // Extract inner objects for stats calculation
+        let objects: Vec<Object> = list.iter().map(|so| so.object.clone()).collect();
+        let status = acc.map(|stat| stat + &objects);
 
         self.command
             .execute(&self.client, &self.path, &list)
@@ -188,7 +213,7 @@ impl FindStream {
     ///
     /// # Returns
     ///
-    /// A stream of `Result<Object, SdkError>` that yields objects immediately as they're
+    /// A stream of `Result<StreamObject, SdkError>` that yields objects immediately as they're
     /// fetched, without accumulating them in memory. Errors are propagated through the stream.
     ///
     /// # Performance
@@ -208,7 +233,7 @@ impl FindStream {
         maxdepth: usize,
         current_depth: usize,
         page_size: i32,
-    ) -> BoxedStream<'a, S3Result<Object>> {
+    ) -> BoxedStream<'a, S3Result<StreamObject>> {
         Box::pin(async_stream::stream! {
             // Special case: maxdepth=0 means no recursion at all
             if current_depth > maxdepth {
@@ -231,7 +256,7 @@ impl FindStream {
                         // Yield objects at this level immediately (no accumulation)
                         if let Some(contents) = output.contents {
                             for obj in contents {
-                                yield Ok(obj);
+                                yield Ok(StreamObject::from_object(obj));
                             }
                         }
 
@@ -271,10 +296,10 @@ impl FindStream {
 
     /// Creates a stream with depth-limited traversal using S3 delimiter parameter.
     ///
-    /// Returns objects in batches (Vec<Object>) to maintain consistency with the
+    /// Returns objects in batches (Vec<StreamObject>) to maintain consistency with the
     /// standard pagination interface. Objects are streamed from S3 and batched
     /// client-side, avoiding memory accumulation.
-    fn paginator_with_depth(self) -> BoxedStream<'static, Vec<Object>> {
+    fn paginator_with_depth(self) -> BoxedStream<'static, Vec<StreamObject>> {
         let maxdepth = self.maxdepth.unwrap_or(usize::MAX);
         let base_prefix = self.path.prefix.clone().unwrap_or_else(|| "".to_owned());
         let bucket = self.path.bucket.clone();
@@ -325,8 +350,8 @@ impl FindStream {
     /// Creates a stream of object versions using ListObjectVersions API.
     ///
     /// This method lists all versions of objects, including delete markers.
-    /// Each version is converted to an Object for compatibility with existing commands.
-    fn versions_paginator(self) -> BoxedStream<'static, Vec<Object>> {
+    /// Each version is wrapped in a StreamObject with version metadata preserved.
+    fn versions_paginator(self) -> BoxedStream<'static, Vec<StreamObject>> {
         let bucket = self.path.bucket.clone();
         let prefix = self.path.prefix.clone().unwrap_or_default();
         let page_size = self.page_size;
@@ -351,24 +376,24 @@ impl FindStream {
 
                 match request.send().await {
                     Ok(output) => {
-                        let mut objects = Vec::new();
+                        let mut stream_objects = Vec::new();
 
-                        // Convert ObjectVersions to Objects
+                        // Convert ObjectVersions to StreamObjects
                         if let Some(versions) = output.versions {
                             for version in versions {
-                                objects.push(object_from_version(version));
+                                stream_objects.push(StreamObject::from_version(version));
                             }
                         }
 
                         // Include delete markers as well
                         if let Some(markers) = output.delete_markers {
                             for marker in markers {
-                                objects.push(object_from_delete_marker(marker));
+                                stream_objects.push(StreamObject::from_delete_marker(marker));
                             }
                         }
 
-                        if !objects.is_empty() {
-                            yield objects;
+                        if !stream_objects.is_empty() {
+                            yield stream_objects;
                         }
 
                         // Check if there are more results
@@ -395,7 +420,7 @@ impl FindStream {
     ///
     /// # Returns
     ///
-    /// A pinned, boxed stream that yields batches of objects (`Vec<Object>`).
+    /// A pinned, boxed stream that yields batches of stream objects (`Vec<StreamObject>`).
     /// - If `all_versions` is set: Uses ListObjectVersions API (ignores maxdepth)
     /// - If `maxdepth` is set: Uses delimiter-based hierarchical traversal
     /// - Otherwise: Uses standard flat pagination
@@ -404,7 +429,7 @@ impl FindStream {
     ///
     /// When both `all_versions` and `maxdepth` are set, `all_versions` takes precedence
     /// and `maxdepth` is ignored. A warning is printed to stderr in this case.
-    pub fn stream(self) -> BoxedStream<'static, Vec<Object>> {
+    pub fn stream(self) -> BoxedStream<'static, Vec<StreamObject>> {
         // Use version listing if all_versions is set
         if self.all_versions {
             // Warn if maxdepth is also set (it will be ignored)
@@ -428,7 +453,12 @@ impl FindStream {
                     Ok(output) => {
                         let objects = output.contents.unwrap_or_default();
                         if !objects.is_empty() {
-                            yield objects;
+                            // Wrap objects in StreamObject
+                            let stream_objects: Vec<StreamObject> = objects
+                                .into_iter()
+                                .map(StreamObject::from_object)
+                                .collect();
+                            yield stream_objects;
                         }
                     }
                     Err(e) => {
@@ -733,15 +763,15 @@ mod tests {
             command: Box::new(command),
         };
 
-        // Create test objects
-        let objects = vec![
-            Object::builder().key("object1").size(100).build(),
-            Object::builder().key("object2").size(200).build(),
+        // Create test objects wrapped in StreamObject
+        let stream_objects = vec![
+            StreamObject::from_object(Object::builder().key("object1").size(100).build()),
+            StreamObject::from_object(Object::builder().key("object2").size(200).build()),
         ];
 
         // Execute find with stats
         let acc = Some(FindStat::default());
-        let result = find.exec(acc, objects).await;
+        let result = find.exec(acc, stream_objects).await;
 
         // Verify stats were updated
         assert!(result.is_some());
@@ -1302,12 +1332,16 @@ mod tests {
 
         let stream = find_stream.stream();
 
-        let objects: Vec<Object> = stream
+        let stream_objects: Vec<StreamObject> = stream
             .flat_map(|x| futures::stream::iter(x.into_iter()))
             .collect::<Vec<_>>()
             .await;
 
-        assert_eq!(objects.len(), 1, "Expected vector with 1 empty object");
+        assert_eq!(
+            stream_objects.len(),
+            1,
+            "Expected vector with 1 empty object"
+        );
 
         Ok(())
     }
@@ -1369,12 +1403,12 @@ mod tests {
 
         let stream = find_stream.stream();
 
-        let objects: Vec<Object> = stream
+        let stream_objects: Vec<StreamObject> = stream
             .flat_map(|x| futures::stream::iter(x.into_iter()))
             .collect::<Vec<_>>()
             .await;
 
-        assert_eq!(objects.len(), 0, "Expected vector without object");
+        assert_eq!(stream_objects.len(), 0, "Expected vector without object");
 
         Ok(())
     }
@@ -1515,15 +1549,15 @@ mod tests {
         };
 
         let stream = find_stream.stream();
-        let objects = stream
+        let stream_objects: Vec<StreamObject> = stream
             .flat_map(|x| futures::stream::iter(x.into_iter()))
             .collect::<Vec<_>>()
             .await;
 
         // With maxdepth=0, should only get objects at prefix level
-        assert_eq!(objects.len(), 2);
-        assert_eq!(objects[0].key.as_ref().unwrap(), "data/file1.txt");
-        assert_eq!(objects[1].key.as_ref().unwrap(), "data/file2.txt");
+        assert_eq!(stream_objects.len(), 2);
+        assert_eq!(stream_objects[0].key().unwrap(), "data/file1.txt");
+        assert_eq!(stream_objects[1].key().unwrap(), "data/file2.txt");
 
         Ok(())
     }
@@ -1624,8 +1658,8 @@ mod tests {
 
         // Should get objects from root level and one subdirectory level
         assert_eq!(objects.len(), 2);
-        assert_eq!(objects[0].key.as_ref().unwrap(), "logs/root.txt");
-        assert_eq!(objects[1].key.as_ref().unwrap(), "logs/2024/jan.txt");
+        assert_eq!(objects[0].key().unwrap(), "logs/root.txt");
+        assert_eq!(objects[1].key().unwrap(), "logs/2024/jan.txt");
         // Should NOT recurse into logs/2024/01/ due to maxdepth=1
 
         Ok(())
@@ -1694,7 +1728,7 @@ mod tests {
             .await;
 
         assert_eq!(objects.len(), 1);
-        assert_eq!(objects[0].key.as_ref().unwrap(), "data/file.txt");
+        assert_eq!(objects[0].key().unwrap(), "data/file.txt");
     }
 
     #[tokio::test]
@@ -1866,28 +1900,41 @@ mod tests {
             .collect::<Vec<_>>()
             .await;
 
-        // Should get all versions and delete markers with version info in keys
+        // Should get all versions and delete markers
         assert_eq!(objects.len(), 3);
+
+        // Check first version (latest)
+        assert_eq!(objects[0].key().unwrap(), "data/file1.txt");
+        assert_eq!(objects[0].version_id.as_ref().unwrap(), "v1");
+        assert_eq!(objects[0].is_latest, Some(true));
         assert_eq!(
-            objects[0].key.as_ref().unwrap(),
+            objects[0].display_key(),
             "data/file1.txt?versionId=v1 (latest)"
         );
+
+        // Check older version
+        assert_eq!(objects[1].key().unwrap(), "data/file1.txt");
+        assert_eq!(objects[1].version_id.as_ref().unwrap(), "v0");
+        assert_eq!(objects[1].is_latest, Some(false));
+        assert_eq!(objects[1].display_key(), "data/file1.txt?versionId=v0");
+
+        // Check delete marker
+        assert_eq!(objects[2].key().unwrap(), "data/deleted.txt");
+        assert_eq!(objects[2].version_id.as_ref().unwrap(), "dm1");
+        assert_eq!(objects[2].is_latest, Some(true));
+        assert!(objects[2].is_delete_marker);
         assert_eq!(
-            objects[1].key.as_ref().unwrap(),
-            "data/file1.txt?versionId=v0"
-        );
-        assert_eq!(
-            objects[2].key.as_ref().unwrap(),
+            objects[2].display_key(),
             "data/deleted.txt?versionId=dm1 (latest) (delete marker)"
         );
         // Delete marker has size 0
-        assert_eq!(objects[2].size, Some(0));
+        assert_eq!(objects[2].object.size(), Some(0));
 
         Ok(())
     }
 
     #[test]
-    fn test_object_from_version_with_version_id() {
+    fn test_stream_object_from_version_with_version_id() {
         use aws_sdk_s3::types::ObjectVersion;
         use aws_sdk_s3::types::ObjectVersionStorageClass;
 
@@ -1899,15 +1946,24 @@ mod tests {
             .storage_class(ObjectVersionStorageClass::Standard)
             .build();
 
-        let object = object_from_version(version);
+        let stream_obj = StreamObject::from_version(version);
 
-        // Key should include version_id and (latest) marker
-        assert_eq!(object.key(), Some("test.txt?versionId=abc123 (latest)"));
-        assert_eq!(object.size(), Some(100));
+        // key() returns the original key
+        assert_eq!(stream_obj.key(), Some("test.txt"));
+        // Version info is in separate fields
+        assert_eq!(stream_obj.version_id, Some("abc123".to_string()));
+        assert_eq!(stream_obj.is_latest, Some(true));
+        assert!(!stream_obj.is_delete_marker);
+        // display_key() shows full version info
+        assert_eq!(
+            stream_obj.display_key(),
+            "test.txt?versionId=abc123 (latest)"
+        );
+        assert_eq!(stream_obj.object.size(), Some(100));
     }
 
     #[test]
-    fn test_object_from_version_not_latest() {
+    fn test_stream_object_from_version_not_latest() {
         use aws_sdk_s3::types::ObjectVersion;
 
         let version = ObjectVersion::builder()
@@ -1917,15 +1973,20 @@ mod tests {
             .size(50)
             .build();
 
-        let object = object_from_version(version);
+        let stream_obj = StreamObject::from_version(version);
 
-        // Key should include version_id but not (latest)
-        assert_eq!(object.key(), Some("test.txt?versionId=old123"));
-        assert_eq!(object.size(), Some(50));
+        // key() returns the original key
+        assert_eq!(stream_obj.key(), Some("test.txt"));
+        // Version info is in separate fields
+        assert_eq!(stream_obj.version_id, Some("old123".to_string()));
+        assert_eq!(stream_obj.is_latest, Some(false));
+        // display_key() shows version but not (latest)
+        assert_eq!(stream_obj.display_key(), "test.txt?versionId=old123");
+        assert_eq!(stream_obj.object.size(), Some(50));
     }
 
     #[test]
-    fn test_object_from_delete_marker() {
+    fn test_stream_object_from_delete_marker() {
         use aws_sdk_s3::types::DeleteMarkerEntry;
 
         let marker = DeleteMarkerEntry::builder()
@@ -1934,13 +1995,36 @@ mod tests {
             .is_latest(true)
             .build();
 
-        let object = object_from_delete_marker(marker);
+        let stream_obj = StreamObject::from_delete_marker(marker);
 
-        // Key should include version_id and markers
+        // key() returns the original key
+        assert_eq!(stream_obj.key(), Some("deleted.txt"));
+        // Version info is in separate fields
+        assert_eq!(stream_obj.version_id, Some("del456".to_string()));
+        assert_eq!(stream_obj.is_latest, Some(true));
+        assert!(stream_obj.is_delete_marker);
+        // display_key() shows full info including delete marker
         assert_eq!(
-            object.key(),
-            Some("deleted.txt?versionId=del456 (latest) (delete marker)")
+            stream_obj.display_key(),
+            "deleted.txt?versionId=del456 (latest) (delete marker)"
         );
-        assert_eq!(object.size(), Some(0));
+        assert_eq!(stream_obj.object.size(), Some(0));
+    }
+
+    #[test]
+    fn test_stream_object_from_object_non_versioned() {
+        let object = Object::builder().key("simple.txt").size(200).build();
+
+        let stream_obj = StreamObject::from_object(object);
+
+        // key() returns the original key
+        assert_eq!(stream_obj.key(), Some("simple.txt"));
+        // No version info for non-versioned objects
+        assert_eq!(stream_obj.version_id, None);
+        assert_eq!(stream_obj.is_latest, None);
+        assert!(!stream_obj.is_delete_marker);
+        // display_key() is same as key for non-versioned
+        assert_eq!(stream_obj.display_key(), "simple.txt");
+        assert_eq!(stream_obj.object.size(), Some(200));
     }
 }

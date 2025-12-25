@@ -14,12 +14,13 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use aws_sdk_s3::Client;
-use aws_sdk_s3::types::{Delete, Object, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
+use aws_sdk_s3::types::{Delete, ObjectCannedAcl, ObjectIdentifier, Tag, Tagging};
 use aws_sdk_s3::types::{GlacierJobParameters, ObjectStorageClass, RestoreRequest};
 use aws_smithy_runtime_api::client::result::SdkError;
 use aws_smithy_types::date_time::Format;
 
 use crate::arg::*;
+use crate::command::StreamObject;
 use crate::error::*;
 use crate::utils::combine_keys;
 
@@ -51,32 +52,38 @@ pub struct ExecStatus {
 
 #[async_trait]
 pub trait RunCommand {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error>;
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error>;
 }
 
 impl FastPrint {
     #[inline]
-    fn print_object<I: Write>(
+    fn print_stream_object<I: Write>(
         &self,
         io: &mut I,
         bucket: &str,
-        object: &Object,
+        stream_obj: &StreamObject,
     ) -> std::io::Result<()> {
-        writeln!(
-            io,
-            "s3://{}/{}",
-            bucket,
-            object.key.clone().unwrap_or_default()
-        )
+        // Use display_key() which includes version info when present
+        writeln!(io, "s3://{}/{}", bucket, stream_obj.display_key())
     }
 }
 
 #[async_trait]
 impl RunCommand for FastPrint {
-    async fn execute(&self, _c: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        _c: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
         for x in list {
-            self.print_object(&mut stdout, &path.bucket, x)?
+            self.print_stream_object(&mut stdout, &path.bucket, x)?
         }
         Ok(())
     }
@@ -90,10 +97,17 @@ struct ObjectRecord {
     last_modified: String,
     key: String,
     storage_class: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    version_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    is_latest: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    is_delete_marker: Option<bool>,
 }
 
-impl From<&Object> for ObjectRecord {
-    fn from(object: &Object) -> Self {
+impl From<&StreamObject> for ObjectRecord {
+    fn from(stream_obj: &StreamObject) -> Self {
+        let object = &stream_obj.object;
         ObjectRecord {
             e_tag: object.e_tag.clone().unwrap_or_default(),
             owner: object
@@ -112,18 +126,27 @@ impl From<&Object> for ObjectRecord {
                 .clone()
                 .map(|x| x.to_string())
                 .unwrap_or_default(),
+            version_id: stream_obj.version_id.clone(),
+            is_latest: stream_obj.is_latest,
+            is_delete_marker: if stream_obj.is_delete_marker {
+                Some(true)
+            } else {
+                None
+            },
         }
     }
 }
 
 impl AdvancedPrint {
     #[inline]
-    fn print_object<I: Write>(
+    fn print_stream_object<I: Write>(
         &self,
         io: &mut I,
         bucket: &str,
-        object: &Object,
+        stream_obj: &StreamObject,
     ) -> std::io::Result<()> {
+        let object = &stream_obj.object;
+        // Use display_key() which includes version info when present
         writeln!(
             io,
             "{0} {1} {2} {3} \"s3://{4}/{5}\" {6}",
@@ -139,7 +162,7 @@ impl AdvancedPrint {
                 .and_then(|x| x.fmt(Format::DateTime).ok())
                 .unwrap_or("None".to_string()),
             bucket,
-            object.key.as_ref().unwrap_or(&"".to_string()),
+            stream_obj.display_key(),
             object
                 .storage_class
                 .as_ref()
@@ -149,17 +172,25 @@ impl AdvancedPrint {
     }
 
     #[inline]
-    fn print_json_object<I: Write>(&self, io: &mut I, object: &Object) -> Result<(), Error> {
-        let record: ObjectRecord = object.into();
+    fn print_json_stream_object<I: Write>(
+        &self,
+        io: &mut I,
+        stream_obj: &StreamObject,
+    ) -> Result<(), Error> {
+        let record: ObjectRecord = stream_obj.into();
         writeln!(io, "{}", serde_json::to_string(&record)?)?;
         Ok(())
     }
 
     #[inline]
-    fn print_csv_objects<I: Write>(&self, io: &mut I, objects: &[Object]) -> Result<(), Error> {
+    fn print_csv_stream_objects<I: Write>(
+        &self,
+        io: &mut I,
+        stream_objects: &[StreamObject],
+    ) -> Result<(), Error> {
         let mut wtr = WriterBuilder::new().has_headers(false).from_writer(io);
-        for object in objects {
-            let record: ObjectRecord = object.into();
+        for stream_obj in stream_objects {
+            let record: ObjectRecord = stream_obj.into();
             wtr.serialize(record)?;
         }
         wtr.flush()?;
@@ -169,22 +200,27 @@ impl AdvancedPrint {
 
 #[async_trait]
 impl RunCommand for AdvancedPrint {
-    async fn execute(&self, _c: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        _c: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
 
         match self.format {
             PrintFormat::Json => {
                 for x in list {
-                    self.print_json_object(&mut stdout, x)?;
+                    self.print_json_stream_object(&mut stdout, x)?;
                 }
             }
             PrintFormat::Text => {
                 for x in list {
-                    self.print_object(&mut stdout, &path.bucket, x)?;
+                    self.print_stream_object(&mut stdout, &path.bucket, x)?;
                 }
             }
             PrintFormat::Csv => {
-                self.print_csv_objects(&mut stdout, list)?;
+                self.print_csv_stream_objects(&mut stdout, list)?;
             }
         }
         Ok(())
@@ -220,12 +256,12 @@ impl Exec {
 
 #[async_trait]
 impl RunCommand for Exec {
-    async fn execute(&self, _: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, _: &Client, path: &S3Path, list: &[StreamObject]) -> Result<(), Error> {
         let mut stdout = std::io::stdout();
         for x in list {
-            let key = x.key.as_deref().unwrap_or("");
-            let path = format!("s3://{}/{}", &path.bucket, key);
-            self.exec(&mut stdout, &path)?;
+            // Use display_key() for the {} placeholder (includes version info)
+            let s3_path = format!("s3://{}/{}", &path.bucket, x.display_key());
+            self.exec(&mut stdout, &s3_path)?;
         }
         Ok(())
     }
@@ -233,12 +269,19 @@ impl RunCommand for Exec {
 
 #[async_trait]
 impl RunCommand for MultipleDelete {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
         let key_list: Vec<_> = list
             .iter()
-            .filter_map(|x| {
+            .filter_map(|stream_obj| {
                 ObjectIdentifier::builder()
-                    .set_key(x.key.clone())
+                    .set_key(stream_obj.object.key.clone())
+                    // Pass version_id for version-aware deletes
+                    .set_version_id(stream_obj.version_id.clone())
                     .build()
                     .ok()
             })
@@ -260,10 +303,16 @@ impl RunCommand for MultipleDelete {
                 |r| {
                     if let Some(deleted_list) = r.deleted {
                         for object in deleted_list {
+                            let version_info = object
+                                .version_id
+                                .as_ref()
+                                .map(|v| format!(" (version: {})", v))
+                                .unwrap_or_default();
                             println!(
-                                "deleted: s3://{}/{}",
+                                "deleted: s3://{}/{}{}",
                                 &path.bucket,
-                                object.key.as_ref().unwrap_or(&"".to_string())
+                                object.key.as_ref().unwrap_or(&"".to_string()),
+                                version_info
                             );
                         }
                     }
@@ -275,8 +324,13 @@ impl RunCommand for MultipleDelete {
 
 #[async_trait]
 impl RunCommand for SetTags {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
-        for object in list {
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
+        for stream_obj in list {
             let tags = self
                 .tags
                 .iter()
@@ -291,18 +345,23 @@ impl RunCommand for SetTags {
 
             let tagging = Tagging::builder().set_tag_set(Some(tags)).build().ok();
 
-            client
+            let mut request = client
                 .put_object_tagging()
                 .bucket(path.bucket.to_owned())
-                .set_key(object.key.clone())
-                .set_tagging(tagging)
-                .send()
-                .await?;
+                .set_key(stream_obj.object.key.clone())
+                .set_tagging(tagging);
+
+            // Pass version_id if present
+            if let Some(ref vid) = stream_obj.version_id {
+                request = request.version_id(vid);
+            }
+
+            request.send().await?;
 
             println!(
                 "tags are set for: s3://{}/{}",
                 &path.bucket,
-                &object.key.clone().unwrap()
+                stream_obj.display_key()
             );
         }
         Ok(())
@@ -311,14 +370,24 @@ impl RunCommand for SetTags {
 
 #[async_trait]
 impl RunCommand for ListTags {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
-        for object in list {
-            let tag_output = client
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
+        for stream_obj in list {
+            let mut request = client
                 .get_object_tagging()
                 .bucket(path.bucket.clone())
-                .set_key(object.key.clone())
-                .send()
-                .await?;
+                .set_key(stream_obj.object.key.clone());
+
+            // Pass version_id if present
+            if let Some(ref vid) = stream_obj.version_id {
+                request = request.version_id(vid);
+            }
+
+            let tag_output = request.send().await?;
 
             let tags: String = tag_output
                 .tag_set
@@ -330,7 +399,7 @@ impl RunCommand for ListTags {
             println!(
                 "s3://{}/{} {}",
                 &path.bucket,
-                object.key.as_ref().unwrap_or(&"".to_string()),
+                stream_obj.display_key(),
                 tags,
             );
         }
@@ -348,24 +417,34 @@ fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
 
 #[async_trait]
 impl RunCommand for SetPublic {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
-        for object in list {
-            client
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
+        for stream_obj in list {
+            let mut request = client
                 .put_object_acl()
                 .bucket(path.bucket.to_owned())
-                .set_key(object.key.clone())
-                .acl(ObjectCannedAcl::PublicRead)
-                .send()
-                .await?;
+                .set_key(stream_obj.object.key.clone())
+                .acl(ObjectCannedAcl::PublicRead);
 
-            if let Some(key) = object.key.as_ref() {
+            // Pass version_id if present
+            if let Some(ref vid) = stream_obj.version_id {
+                request = request.version_id(vid);
+            }
+
+            request.send().await?;
+
+            if let Some(key) = stream_obj.object.key.as_ref() {
                 let region = client
                     .config()
                     .region()
                     .map(|x| x.as_ref())
                     .unwrap_or("us-east-1");
                 let url = generate_s3_url(region, &path.bucket, key);
-                println!("{} {}", key, url);
+                println!("{} {}", stream_obj.display_key(), url);
             } else {
                 println!("No key found for object");
             }
@@ -376,11 +455,20 @@ impl RunCommand for SetPublic {
 
 #[async_trait]
 impl RunCommand for Download {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
-        for object in list {
-            let key = object.key.as_ref().ok_or(FunctionError::ObjectFieldError)?;
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
+        for stream_obj in list {
+            let key = stream_obj
+                .object
+                .key
+                .as_ref()
+                .ok_or(FunctionError::ObjectFieldError)?;
 
-            let size = object.size.unwrap_or_default() as u64;
+            let size = stream_obj.object.size.unwrap_or_default() as u64;
             let file_path = Path::new(&self.destination).join(key);
             let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
 
@@ -393,7 +481,7 @@ impl RunCommand for Download {
             println!(
                 "downloading: s3://{}/{} => {}",
                 &path.bucket,
-                &key,
+                stream_obj.display_key(),
                 file_path
                     .to_str()
                     .ok_or(FunctionError::FileNameParseError)?
@@ -403,13 +491,14 @@ impl RunCommand for Download {
                 return Ok(());
             }
 
-            let mut stream = client
-                .get_object()
-                .bucket(&path.bucket)
-                .key(key)
-                .send()
-                .await?
-                .body;
+            let mut request = client.get_object().bucket(&path.bucket).key(key);
+
+            // Pass version_id if present for version-aware downloads
+            if let Some(ref vid) = stream_obj.version_id {
+                request = request.version_id(vid);
+            }
+
+            let mut stream = request.send().await?.body;
 
             fs::create_dir_all(dir_path)?;
             let mut output = File::create(&file_path)?;
@@ -426,23 +515,39 @@ impl RunCommand for Download {
 
 #[async_trait]
 impl RunCommand for S3Copy {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
-        for object in list {
-            let key = object.key.clone().ok_or(FunctionError::ObjectFieldError)?;
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
+        for stream_obj in list {
+            let key = stream_obj
+                .object
+                .key
+                .clone()
+                .ok_or(FunctionError::ObjectFieldError)?;
 
             let target = combine_keys(self.flat, &key, &self.destination.prefix);
-            let source_path = format!("{0}/{1}", &path.bucket, key);
+
+            // For copy, version_id goes in copy_source URL
+            let source_path = match &stream_obj.version_id {
+                Some(vid) => format!("{}/{}?versionId={}", &path.bucket, key, vid),
+                None => format!("{}/{}", &path.bucket, key),
+            };
 
             println!(
-                "copying: s3://{0} => s3://{1}/{2}",
-                source_path, &self.destination.bucket, target,
+                "copying: s3://{} => s3://{}/{}",
+                stream_obj.display_key(),
+                &self.destination.bucket,
+                target,
             );
 
             client
                 .copy_object()
-                .bucket(&path.bucket)
+                .bucket(&self.destination.bucket)
                 .key(target)
-                .copy_source(source_path)
+                .copy_source(&source_path)
                 .set_storage_class(self.storage_class.clone())
                 .send()
                 .await?;
@@ -453,33 +558,51 @@ impl RunCommand for S3Copy {
 
 #[async_trait]
 impl RunCommand for S3Move {
-    async fn execute(&self, client: &Client, path: &S3Path, list: &[Object]) -> Result<(), Error> {
-        for object in list {
-            let key = object.key.clone().ok_or(FunctionError::ObjectFieldError)?;
+    async fn execute(
+        &self,
+        client: &Client,
+        path: &S3Path,
+        list: &[StreamObject],
+    ) -> Result<(), Error> {
+        for stream_obj in list {
+            let key = stream_obj
+                .object
+                .key
+                .clone()
+                .ok_or(FunctionError::ObjectFieldError)?;
 
             let target = combine_keys(self.flat, &key, &self.destination.prefix);
-            let source_path = format!("{0}/{1}", &path.bucket, key);
+
+            // For copy, version_id goes in copy_source URL
+            let source_path = match &stream_obj.version_id {
+                Some(vid) => format!("{}/{}?versionId={}", &path.bucket, key, vid),
+                None => format!("{}/{}", &path.bucket, key),
+            };
 
             println!(
-                "moving: s3://{0} => s3://{1}/{2}",
-                source_path, &self.destination.bucket, target,
+                "moving: s3://{} => s3://{}/{}",
+                stream_obj.display_key(),
+                &self.destination.bucket,
+                target,
             );
 
             client
                 .copy_object()
-                .bucket(&path.bucket)
+                .bucket(&self.destination.bucket)
                 .key(target)
-                .copy_source(source_path)
+                .copy_source(&source_path)
                 .set_storage_class(self.storage_class.clone())
                 .send()
                 .await?;
         }
 
+        // Delete original objects with version_id if present
         let key_list: Vec<_> = list
             .iter()
-            .filter_map(|x| {
+            .filter_map(|stream_obj| {
                 ObjectIdentifier::builder()
-                    .set_key(x.key.clone())
+                    .set_key(stream_obj.object.key.clone())
+                    .set_version_id(stream_obj.version_id.clone())
                     .build()
                     .ok()
             })
@@ -499,7 +622,7 @@ impl RunCommand for S3Move {
 
 #[async_trait]
 impl RunCommand for DoNothing {
-    async fn execute(&self, _c: &Client, _p: &S3Path, _l: &[Object]) -> Result<(), Error> {
+    async fn execute(&self, _c: &Client, _p: &S3Path, _l: &[StreamObject]) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -510,49 +633,58 @@ impl RunCommand for Restore {
         &self,
         client: &Client,
         path: &S3Path,
-        objects: &[Object],
+        stream_objects: &[StreamObject],
     ) -> Result<(), Error> {
-        for object in objects {
-            if object.storage_class == Some(ObjectStorageClass::Glacier)
-                || object.storage_class == Some(ObjectStorageClass::DeepArchive)
-            {
-                if let Some(key) = &object.key {
-                    let restore_request = RestoreRequest::builder()
-                        .days(self.days)
-                        .set_glacier_job_parameters(Some(
-                            GlacierJobParameters::builder()
-                                .tier(self.tier.clone())
-                                .build()?,
-                        ))
-                        .build();
+        for stream_obj in stream_objects {
+            let object = &stream_obj.object;
+            let is_glacier = object.storage_class == Some(ObjectStorageClass::Glacier)
+                || object.storage_class == Some(ObjectStorageClass::DeepArchive);
 
-                    let result = client
-                        .restore_object()
-                        .bucket(&path.bucket)
-                        .key(key)
-                        .restore_request(restore_request)
-                        .send()
-                        .await;
+            if is_glacier && object.key.is_some() {
+                let key = object.key.as_ref().unwrap();
+                let restore_request = RestoreRequest::builder()
+                    .days(self.days)
+                    .set_glacier_job_parameters(Some(
+                        GlacierJobParameters::builder()
+                            .tier(self.tier.clone())
+                            .build()?,
+                    ))
+                    .build();
 
-                    match result {
-                        Ok(_) => println!("Restore initiated for: {}", key),
-                        Err(e) => match e {
-                            SdkError::ServiceError(err)
-                                if err.err().meta().code() == Some("RestoreAlreadyInProgress") =>
-                            {
-                                println!("Restore already in progress for: {}", key)
-                            }
-                            SdkError::ServiceError(err)
-                                if err.err().meta().code() == Some("InvalidObjectState") =>
-                            {
-                                println!(
-                                    "Object is not in Glacier storage or already restored: {}",
-                                    key
-                                )
-                            }
-                            err => return Err(err.into()),
-                        },
-                    }
+                let mut request = client
+                    .restore_object()
+                    .bucket(&path.bucket)
+                    .key(key)
+                    .restore_request(restore_request);
+
+                // Pass version_id if present
+                if let Some(ref vid) = stream_obj.version_id {
+                    request = request.version_id(vid);
+                }
+
+                let result = request.send().await;
+
+                match result {
+                    Ok(_) => println!("Restore initiated for: {}", stream_obj.display_key()),
+                    Err(e) => match e {
+                        SdkError::ServiceError(err)
+                            if err.err().meta().code() == Some("RestoreAlreadyInProgress") =>
+                        {
+                            println!(
+                                "Restore already in progress for: {}",
+                                stream_obj.display_key()
+                            )
+                        }
+                        SdkError::ServiceError(err)
+                            if err.err().meta().code() == Some("InvalidObjectState") =>
+                        {
+                            println!(
+                                "Object is not in Glacier storage or already restored: {}",
+                                stream_obj.display_key()
+                            )
+                        }
+                        err => return Err(err.into()),
+                    },
                 }
             }
         }
@@ -566,20 +698,26 @@ impl RunCommand for ChangeStorage {
         &self,
         client: &Client,
         path: &S3Path,
-        objects: &[Object],
+        stream_objects: &[StreamObject],
     ) -> Result<(), Error> {
-        for object in objects {
-            if let Some(key) = &object.key {
+        for stream_obj in stream_objects {
+            if let Some(key) = &stream_obj.object.key {
                 println!(
                     "Changing storage class for s3://{}/{} to {:?}",
-                    path.bucket, key, self.storage_class
+                    path.bucket,
+                    stream_obj.display_key(),
+                    self.storage_class
                 );
 
-                let source_path = format!("{}/{}", path.bucket, key);
+                // For copy, version_id goes in copy_source URL
+                let source_path = match &stream_obj.version_id {
+                    Some(vid) => format!("{}/{}?versionId={}", path.bucket, key, vid),
+                    None => format!("{}/{}", path.bucket, key),
+                };
 
                 client
                     .copy_object()
-                    .copy_source(source_path)
+                    .copy_source(&source_path)
                     .bucket(&path.bucket)
                     .key(key)
                     .storage_class(self.storage_class.clone())
@@ -598,7 +736,7 @@ mod tests {
     use aws_config::BehaviorVersion;
     use aws_sdk_s3::{
         primitives::DateTime,
-        types::{ObjectStorageClass, StorageClass},
+        types::{Object, ObjectStorageClass, StorageClass},
     };
     use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
     use aws_smithy_types::body::SdkBody;
@@ -623,8 +761,9 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
-        cmd.print_object(&mut buf, bucket, &object)?;
+        cmd.print_stream_object(&mut buf, bucket, &stream_obj)?;
         let out = std::str::from_utf8(&buf)?;
 
         println!("{}", out);
@@ -654,8 +793,9 @@ mod tests {
             .size(1_234_567)
             .set_owner(Some(owner))
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
-        cmd.print_object(&mut buf, bucket, &object)?;
+        cmd.print_stream_object(&mut buf, bucket, &stream_obj)?;
         let out = std::str::from_utf8(&buf)?;
 
         println!("Output with owner, no date, no storage: {}", out);
@@ -684,8 +824,9 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
-        cmd.print_object(&mut buf, bucket, &object)?;
+        cmd.print_stream_object(&mut buf, bucket, &stream_obj)?;
         let out = std::str::from_utf8(&buf)?;
 
         assert!(out.contains("s3://test/somepath/otherpath"));
@@ -720,13 +861,14 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
         let mut buf = Vec::<u8>::new();
         let cmd = AdvancedPrint {
             format: PrintFormat::Json,
         };
 
-        cmd.print_json_object(&mut buf, &object)?;
+        cmd.print_json_stream_object(&mut buf, &stream_obj)?;
 
         let output = String::from_utf8(buf).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&output)?;
@@ -759,6 +901,7 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj1 = StreamObject::from_object(object1);
 
         let object2 = Object::builder()
             .e_tag("abcdef1234567890")
@@ -770,19 +913,20 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj2 = StreamObject::from_object(object2);
 
         let mut buf = Vec::<u8>::new();
         let cmd = AdvancedPrint {
             format: PrintFormat::Csv,
         };
 
-        cmd.print_csv_objects(&mut buf, &[object1.clone(), object2.clone()])?;
+        cmd.print_csv_stream_objects(&mut buf, &[stream_obj1.clone(), stream_obj2.clone()])?;
 
         let output = String::from_utf8(buf.clone()).unwrap();
         println!("CSV Output:\n{}", output);
 
-        let record1: ObjectRecord = (&object1).into();
-        let record2: ObjectRecord = (&object2).into();
+        let record1: ObjectRecord = (&stream_obj1).into();
+        let record2: ObjectRecord = (&stream_obj2).into();
 
         let mut reader = csv::ReaderBuilder::new()
             .has_headers(false)
@@ -821,6 +965,7 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
         let cmd = Cmd::Print(AdvancedPrint::default()).downcast();
         let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
@@ -831,7 +976,7 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object]).await?;
+        cmd.execute(&client, &path, &[stream_obj]).await?;
         Ok(())
     }
 
@@ -846,6 +991,7 @@ mod tests {
                 DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
             )
             .build();
+        let stream_obj1 = StreamObject::from_object(object1);
 
         let object2 = Object::builder()
             .e_tag("test-etag-2")
@@ -856,6 +1002,7 @@ mod tests {
                 DateTime::from_str("2023-02-15T12:30:45.000Z", Format::DateTime).unwrap(),
             )
             .build();
+        let stream_obj2 = StreamObject::from_object(object2);
 
         let cmd = Cmd::Print(AdvancedPrint {
             format: PrintFormat::Json,
@@ -869,7 +1016,8 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
         Ok(())
     }
 
@@ -884,6 +1032,7 @@ mod tests {
                 DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap(),
             )
             .build();
+        let stream_obj1 = StreamObject::from_object(object1);
 
         let object2 = Object::builder()
             .e_tag("csv-etag-2")
@@ -894,6 +1043,7 @@ mod tests {
                 DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap(),
             )
             .build();
+        let stream_obj2 = StreamObject::from_object(object2);
 
         let cmd = Cmd::Print(AdvancedPrint {
             format: PrintFormat::Csv,
@@ -907,7 +1057,8 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
         Ok(())
     }
 
@@ -923,6 +1074,7 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
         let cmd = Cmd::Ls(FastPrint {}).downcast();
         let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
@@ -933,7 +1085,7 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object]).await?;
+        cmd.execute(&client, &path, &[stream_obj]).await?;
         Ok(())
     }
 
@@ -949,6 +1101,7 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
         let cmd = Cmd::Nothing(DoNothing {}).downcast();
         let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
@@ -959,7 +1112,7 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object]).await
+        cmd.execute(&client, &path, &[stream_obj]).await
     }
 
     #[tokio::test]
@@ -974,6 +1127,7 @@ mod tests {
                 Format::DateTime,
             )?)
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
         let cmd = Cmd::Exec(Exec {
             utility: "echo {}".to_owned(),
@@ -988,7 +1142,7 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object]).await
+        cmd.execute(&client, &path, &[stream_obj]).await
     }
 
     #[test]
@@ -1028,6 +1182,7 @@ mod tests {
                 DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
             )
             .build();
+        let stream_obj = StreamObject::from_object(object);
 
         let content = "Test content\n";
 
@@ -1069,7 +1224,7 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object]).await?;
+        cmd.execute(&client, &path, &[stream_obj]).await?;
 
         let file_path = PathBuf::from(temp_path).join(key);
         assert!(file_path.exists(), "Downloaded file should exist");
@@ -1094,6 +1249,7 @@ mod tests {
                 DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
             )
             .build();
+        let stream_obj1 = StreamObject::from_object(object1);
 
         let object2 = Object::builder()
             .e_tag("test-etag-2")
@@ -1104,6 +1260,7 @@ mod tests {
                 DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
             )
             .build();
+        let stream_obj2 = StreamObject::from_object(object2);
 
         let req1 = http::Request::builder()
             .method("PUT")
@@ -1147,7 +1304,8 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
 
         Ok(())
     }
@@ -1219,7 +1377,10 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        let stream_obj1 = StreamObject::from_object(object1);
+        let stream_obj2 = StreamObject::from_object(object2);
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
 
         Ok(())
     }
@@ -1302,7 +1463,10 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        let stream_obj1 = StreamObject::from_object(object1);
+        let stream_obj2 = StreamObject::from_object(object2);
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
 
         Ok(())
     }
@@ -1400,7 +1564,10 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        let stream_obj1 = StreamObject::from_object(object1);
+        let stream_obj2 = StreamObject::from_object(object2);
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
 
         Ok(())
     }
@@ -1498,7 +1665,10 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        let stream_obj1 = StreamObject::from_object(object1);
+        let stream_obj2 = StreamObject::from_object(object2);
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
 
         Ok(())
     }
@@ -1566,7 +1736,8 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object]).await?;
+        let stream_obj = StreamObject::from_object(object);
+        cmd.execute(&client, &path, &[stream_obj]).await?;
 
         Ok(())
     }
@@ -1657,7 +1828,8 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object]).await?;
+        let stream_obj = StreamObject::from_object(object);
+        cmd.execute(&client, &path, &[stream_obj]).await?;
 
         Ok(())
     }
@@ -1781,7 +1953,10 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        let stream_obj1 = StreamObject::from_object(object1);
+        let stream_obj2 = StreamObject::from_object(object2);
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
 
         Ok(())
     }
@@ -1931,10 +2106,10 @@ mod tests {
             &client,
             &path,
             &[
-                glacier_object,
-                deeparchive_object,
-                restored_object,
-                invalid_state_object,
+                StreamObject::from_object(glacier_object),
+                StreamObject::from_object(deeparchive_object),
+                StreamObject::from_object(restored_object),
+                StreamObject::from_object(invalid_state_object),
             ],
         )
         .await?;
@@ -1989,7 +2164,9 @@ mod tests {
             prefix: None,
         };
 
-        let result = restore_cmd.execute(&client, &path, &[glacier_object]).await;
+        let result = restore_cmd
+            .execute(&client, &path, &[StreamObject::from_object(glacier_object)])
+            .await;
         assert!(result.is_ok(), "Standard tier restore should succeed");
 
         Ok(())
@@ -2042,7 +2219,9 @@ mod tests {
             prefix: None,
         };
 
-        let result = restore_cmd.execute(&client, &path, &[glacier_object]).await;
+        let result = restore_cmd
+            .execute(&client, &path, &[StreamObject::from_object(glacier_object)])
+            .await;
         assert!(result.is_ok(), "Expedited tier restore should succeed");
 
         Ok(())
@@ -2096,7 +2275,11 @@ mod tests {
         };
 
         let result = restore_cmd
-            .execute(&client, &path, &[deep_archive_object])
+            .execute(
+                &client,
+                &path,
+                &[StreamObject::from_object(deep_archive_object)],
+            )
             .await;
         assert!(result.is_ok(), "Bulk tier restore should succeed");
 
@@ -2140,7 +2323,11 @@ mod tests {
         };
 
         let result = restore_cmd
-            .execute(&client, &path, &[standard_object])
+            .execute(
+                &client,
+                &path,
+                &[StreamObject::from_object(standard_object)],
+            )
             .await;
         assert!(
             result.is_ok(),
@@ -2197,7 +2384,9 @@ mod tests {
             prefix: None,
         };
 
-        let result = restore_cmd.execute(&client, &path, &[glacier_object]).await;
+        let result = restore_cmd
+            .execute(&client, &path, &[StreamObject::from_object(glacier_object)])
+            .await;
         assert!(result.is_ok(), "Restore with maximum days should succeed");
 
         Ok(())
@@ -2292,7 +2481,10 @@ mod tests {
             prefix: None,
         };
 
-        cmd.execute(&client, &path, &[object1, object2]).await?;
+        let stream_obj1 = StreamObject::from_object(object1);
+        let stream_obj2 = StreamObject::from_object(object2);
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
 
         Ok(())
     }
