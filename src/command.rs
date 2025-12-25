@@ -1,5 +1,6 @@
 use std::fmt;
 use std::ops::Add;
+use std::pin::Pin;
 
 use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
@@ -9,10 +10,18 @@ use aws_smithy_async::future::pagination_stream::PaginationStream;
 use aws_smithy_runtime_api::http::Response;
 
 use futures::Stream;
+use futures::StreamExt;
 use humansize::*;
 
 use crate::arg::*;
 use crate::run_command::*;
+
+// Type aliases for cleaner signatures
+type BoxedStream<'a, T> = Pin<Box<dyn Stream<Item = T> + Send + 'a>>;
+type S3Result<T> = Result<T, SdkError<ListObjectsV2Error, Response>>;
+
+// Delimiter used for hierarchical S3 listing
+const S3_PATH_DELIMITER: &str = "/";
 
 pub struct FindCommand {
     pub client: Client,
@@ -93,117 +102,194 @@ impl FindStream {
             .send()
     }
 
-    /// Recursively collects objects up to maxdepth using delimiter-based traversal
-    fn collect_objects_recursive(
-        client: &Client,
-        bucket: String,
+    /// Recursively streams S3 objects up to maxdepth using delimiter-based traversal.
+    ///
+    /// This function uses S3's delimiter parameter to efficiently traverse the object
+    /// hierarchy server-side, avoiding the need to fetch objects beyond the specified depth.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - AWS S3 client reference
+    /// * `bucket` - S3 bucket name (borrowed to avoid cloning in recursion)
+    /// * `prefix` - Starting prefix to search from
+    /// * `maxdepth` - Maximum recursion depth:
+    ///   - `0` = objects at prefix level only (no subdirectories)
+    ///   - `1` = prefix level + one subdirectory level
+    ///   - `n` = prefix level + n subdirectory levels
+    /// * `current_depth` - Current recursion level (starts at 0)
+    /// * `page_size` - Number of results per S3 API call
+    ///
+    /// # Returns
+    ///
+    /// A stream of `Result<Object, SdkError>` that yields objects immediately as they're
+    /// fetched, without accumulating them in memory. Errors are propagated through the stream.
+    ///
+    /// # Performance
+    ///
+    /// - Objects are streamed immediately (no memory accumulation)
+    /// - Only fetches objects up to maxdepth from S3 (server-side filtering)
+    /// - Subdirectories are traversed sequentially to maintain order
+    ///
+    /// # Error Handling
+    ///
+    /// Errors from S3 API calls are yielded through the stream and stop further traversal
+    /// of that branch. Errors in one subdirectory don't prevent traversal of siblings.
+    fn collect_objects_recursive<'a>(
+        client: &'a Client,
+        bucket: &'a str,
         prefix: String,
         maxdepth: usize,
         current_depth: usize,
         page_size: i32,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Object>> + '_>> {
-        Box::pin(async move {
-        let mut all_objects = Vec::new();
+    ) -> BoxedStream<'a, S3Result<Object>> {
+        Box::pin(async_stream::stream! {
+            // Special case: maxdepth=0 means no recursion at all
+            if current_depth > maxdepth {
+                return;
+            }
 
-        // List objects at current level with delimiter
-        let mut paginator = client
-            .list_objects_v2()
-            .bucket(bucket.clone())
-            .prefix(prefix.clone())
-            .delimiter("/")
-            .max_keys(page_size)
-            .into_paginator()
-            .send();
+            // List objects at current level with delimiter for hierarchical traversal
+            let mut paginator = client
+                .list_objects_v2()
+                .bucket(bucket.to_string())
+                .prefix(prefix.clone())
+                .delimiter(S3_PATH_DELIMITER)
+                .max_keys(page_size)
+                .into_paginator()
+                .send();
 
-        while let Some(result) = paginator.next().await {
-            match result {
-                Ok(output) => {
-                    // Add objects at this level
-                    if let Some(contents) = output.contents {
-                        all_objects.extend(contents);
-                    }
+            while let Some(result) = paginator.next().await {
+                match result {
+                    Ok(output) => {
+                        // Yield objects at this level immediately (no accumulation)
+                        if let Some(contents) = output.contents {
+                            for obj in contents {
+                                yield Ok(obj);
+                            }
+                        }
 
-                    // Recurse into subdirectories if we haven't reached maxdepth
-                    if current_depth < maxdepth
-                        && let Some(common_prefixes) = output.common_prefixes
-                    {
-                        for common_prefix in common_prefixes {
-                            if let Some(prefix_str) = common_prefix.prefix {
-                                let sub_objects = Self::collect_objects_recursive(
-                                    client,
-                                    bucket.clone(),
-                                    prefix_str,
-                                    maxdepth,
-                                    current_depth + 1,
-                                    page_size,
-                                )
-                                .await;
-                                all_objects.extend(sub_objects);
+                        // Recurse into subdirectories if within depth limit
+                        if current_depth < maxdepth
+                            && let Some(common_prefixes) = output.common_prefixes
+                        {
+                            for common_prefix in common_prefixes {
+                                if let Some(prefix_str) = common_prefix.prefix {
+                                    // Recursively stream objects from subdirectory
+                                    let mut sub_stream = Self::collect_objects_recursive(
+                                        client,
+                                        bucket,  // No clone needed - just borrow
+                                        prefix_str,
+                                        maxdepth,
+                                        current_depth + 1,
+                                        page_size,
+                                    );
+
+                                    // Yield all objects from subdirectory stream
+                                    while let Some(item) = sub_stream.next().await {
+                                        yield item;
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                Err(e) => {
-                    eprintln!("Error listing objects: {:?}", e);
-                    break;
+                    Err(e) => {
+                        // Propagate error through stream
+                        yield Err(e);
+                        break;
+                    }
                 }
             }
-        }
-
-        all_objects
         })
     }
 
-    /// Creates a stream with depth-limited traversal using S3 delimiter parameter
-    async fn paginator_with_depth(self) -> impl Stream<Item = Vec<Object>> {
+    /// Creates a stream with depth-limited traversal using S3 delimiter parameter.
+    ///
+    /// Returns objects in batches (Vec<Object>) to maintain consistency with the
+    /// standard pagination interface. Objects are streamed from S3 and batched
+    /// client-side, avoiding memory accumulation.
+    fn paginator_with_depth(self) -> BoxedStream<'static, Vec<Object>> {
         let maxdepth = self.maxdepth.unwrap_or(usize::MAX);
         let base_prefix = self.path.prefix.clone().unwrap_or_else(|| "".to_owned());
+        let bucket = self.path.bucket.clone();
+        let page_size = self.page_size;
 
-        // Collect all objects up to maxdepth using delimiter-based recursion
-        let all_objects = Self::collect_objects_recursive(
-            &self.client,
-            self.path.bucket.clone(),
-            base_prefix,
-            maxdepth,
-            0,
-            self.page_size as i32,
-        )
-        .await;
+        Box::pin(async_stream::stream! {
+            let obj_stream = Self::collect_objects_recursive(
+                &self.client,
+                &bucket,
+                base_prefix,
+                maxdepth,
+                0,
+                page_size as i32,
+            );
 
-        // Yield objects in pages to maintain consistent interface
-        futures::stream::iter(
-            all_objects
-                .chunks(self.page_size as usize)
-                .map(|chunk| chunk.to_vec())
-                .collect::<Vec<_>>(),
-        )
+            futures::pin_mut!(obj_stream);
+
+            let mut chunk = Vec::with_capacity(page_size as usize);
+
+            while let Some(result) = obj_stream.next().await {
+                match result {
+                    Ok(obj) => {
+                        chunk.push(obj);
+                        // Yield chunk when it reaches page_size
+                        if chunk.len() >= page_size as usize {
+                            yield std::mem::take(&mut chunk);
+                            chunk = Vec::with_capacity(page_size as usize);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error listing objects: {:?}", e);
+                        // Yield partial chunk before stopping
+                        if !chunk.is_empty() {
+                            yield std::mem::take(&mut chunk);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Yield remaining objects in final partial chunk
+            if !chunk.is_empty() {
+                yield chunk;
+            }
+        })
     }
 
-    pub async fn stream(
-        self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = Vec<Object>> + Send>> {
+    /// Creates a stream of S3 objects, using delimiter-based depth limiting if maxdepth is set.
+    ///
+    /// This method is non-async and returns a stream immediately without starting any I/O,
+    /// enabling lazy evaluation. The stream begins fetching data only when polled.
+    ///
+    /// # Returns
+    ///
+    /// A pinned, boxed stream that yields batches of objects (`Vec<Object>`).
+    /// - If `maxdepth` is set: Uses delimiter-based hierarchical traversal
+    /// - If `maxdepth` is None: Uses standard flat pagination
+    pub fn stream(self) -> BoxedStream<'static, Vec<Object>> {
         // Use delimiter-based traversal if maxdepth is set
         if self.maxdepth.is_some() {
-            return Box::pin(self.paginator_with_depth().await);
+            return self.paginator_with_depth();
         }
 
         // Otherwise use standard pagination
-        let ps = self.paginator().await;
-        Box::pin(futures::stream::unfold(ps, |mut p| async {
-            let next_page = p.next().await;
+        Box::pin(async_stream::stream! {
+            let mut ps = self.paginator().await;
 
-            match next_page {
-                Some(Ok(output)) => {
-                    let objects = output.contents.unwrap_or(Vec::new());
-                    Some((objects, p))
+            while let Some(result) = ps.next().await {
+                match result {
+                    Ok(output) => {
+                        let objects = output.contents.unwrap_or_default();
+                        if !objects.is_empty() {
+                            yield objects;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error listing objects: {:?}", e);
+                        break;
+                    }
                 }
-                Some(Err(e)) => {
-                    eprintln!("Error listing objects: {:?}", e);
-                    None
-                }
-                None => None,
             }
-        }))
+        })
     }
 }
 
@@ -590,7 +676,7 @@ mod tests {
             maxdepth: None,
         };
 
-        let _stream = find_stream.stream();
+        let _stream = find_stream.stream();  // Non-async, returns stream immediately
     }
 
     #[test]
@@ -1051,11 +1137,10 @@ mod tests {
             maxdepth: None,
         };
 
-        let stream = find_stream.stream().await;
+        let stream = find_stream.stream();
 
-        let objects = stream
-            .map(|x| futures::stream::iter(x.into_iter()))
-            .flatten()
+        let objects: Vec<Object> = stream
+            .flat_map(|x| futures::stream::iter(x.into_iter()))
             .collect::<Vec<_>>()
             .await;
 
@@ -1118,11 +1203,10 @@ mod tests {
             maxdepth: None,
         };
 
-        let stream = find_stream.stream().await;
+        let stream = find_stream.stream();
 
-        let objects = stream
-            .map(|x| futures::stream::iter(x.into_iter()))
-            .flatten()
+        let objects: Vec<Object> = stream
+            .flat_map(|x| futures::stream::iter(x.into_iter()))
             .collect::<Vec<_>>()
             .await;
 
@@ -1199,4 +1283,343 @@ mod tests {
         assert_eq!(find_stream2.token, None);
         assert!(find_stream2.initial);
     }
+
+    #[tokio::test]
+    async fn test_maxdepth_zero() -> Result<(), Box<dyn std::error::Error>> {
+        // Test that maxdepth=0 returns only objects at prefix level
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("data/".to_string()),
+        };
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?delimiter=%2F&list-type=2&max-keys=1000&prefix=data%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>data/</Prefix>
+            <Delimiter>/</Delimiter>
+            <MaxKeys>1000</MaxKeys>
+            <IsTruncated>false</IsTruncated>
+            <Contents>
+                <Key>data/file1.txt</Key>
+                <Size>100</Size>
+            </Contents>
+            <Contents>
+                <Key>data/file2.txt</Key>
+                <Size>200</Size>
+            </Contents>
+            <CommonPrefixes>
+                <Prefix>data/2024/</Prefix>
+            </CommonPrefixes>
+        </ListBucketResult>"#;
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test", "test", None, None, "test"
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+            maxdepth: Some(0),
+        };
+
+        let stream = find_stream.stream();
+        let objects = stream
+            .flat_map(|x| futures::stream::iter(x.into_iter()))
+            .collect::<Vec<_>>()
+            .await;
+
+        // With maxdepth=0, should only get objects at prefix level
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].key.as_ref().unwrap(), "data/file1.txt");
+        assert_eq!(objects[1].key.as_ref().unwrap(), "data/file2.txt");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_maxdepth_one_with_delimiter() -> Result<(), Box<dyn std::error::Error>> {
+        // Test that maxdepth=1 uses delimiter and recurses one level
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("logs/".to_string()),
+        };
+
+        // First request: root level with delimiter
+        let req1 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?delimiter=%2F&list-type=2&max-keys=100&prefix=logs%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp1_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>logs/</Prefix>
+            <Delimiter>/</Delimiter>
+            <IsTruncated>false</IsTruncated>
+            <Contents>
+                <Key>logs/root.txt</Key>
+                <Size>100</Size>
+            </Contents>
+            <CommonPrefixes>
+                <Prefix>logs/2024/</Prefix>
+            </CommonPrefixes>
+        </ListBucketResult>"#;
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp1_body))
+            .unwrap();
+
+        // Second request: subdirectory level with delimiter
+        let req2 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?delimiter=%2F&list-type=2&max-keys=100&prefix=logs%2F2024%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp2_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>logs/2024/</Prefix>
+            <Delimiter>/</Delimiter>
+            <IsTruncated>false</IsTruncated>
+            <Contents>
+                <Key>logs/2024/jan.txt</Key>
+                <Size>200</Size>
+            </Contents>
+            <CommonPrefixes>
+                <Prefix>logs/2024/01/</Prefix>
+            </CommonPrefixes>
+        </ListBucketResult>"#;
+
+        let resp2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp2_body))
+            .unwrap();
+
+        let events = vec![
+            ReplayEvent::new(req1, resp1),
+            ReplayEvent::new(req2, resp2),
+        ];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test", "test", None, None, "test"
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 100,
+            initial: true,
+            maxdepth: Some(1),
+        };
+
+        let stream = find_stream.stream();
+        let objects = stream
+            .flat_map(|x| futures::stream::iter(x.into_iter()))
+            .collect::<Vec<_>>()
+            .await;
+
+        // Should get objects from root level and one subdirectory level
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].key.as_ref().unwrap(), "logs/root.txt");
+        assert_eq!(objects[1].key.as_ref().unwrap(), "logs/2024/jan.txt");
+        // Should NOT recurse into logs/2024/01/ due to maxdepth=1
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_maxdepth_none_uses_standard_pagination() {
+        // Test that maxdepth=None uses standard pagination without delimiter
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("data/".to_string()),
+        };
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?list-type=2&max-keys=1000&prefix=data%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>data/</Prefix>
+            <MaxKeys>1000</MaxKeys>
+            <IsTruncated>false</IsTruncated>
+            <Contents>
+                <Key>data/file.txt</Key>
+                <Size>100</Size>
+            </Contents>
+        </ListBucketResult>"#;
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test", "test", None, None, "test"
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 1000,
+            initial: true,
+            maxdepth: None,  // No maxdepth - should use standard pagination
+        };
+
+        let stream = find_stream.stream();
+        let objects = stream
+            .flat_map(|x| futures::stream::iter(x.into_iter()))
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0].key.as_ref().unwrap(), "data/file.txt");
+    }
+
+    #[tokio::test]
+    async fn test_maxdepth_with_empty_subdirectories() -> Result<(), Box<dyn std::error::Error>> {
+        // Test that empty subdirectories don't cause issues
+        let path = S3Path {
+            bucket: "test-bucket".to_string(),
+            prefix: Some("empty/".to_string()),
+        };
+
+        // Root level
+        let req1 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?delimiter=%2F&list-type=2&max-keys=100&prefix=empty%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp1_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>empty/</Prefix>
+            <Delimiter>/</Delimiter>
+            <IsTruncated>false</IsTruncated>
+            <CommonPrefixes>
+                <Prefix>empty/sub/</Prefix>
+            </CommonPrefixes>
+        </ListBucketResult>"#;
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp1_body))
+            .unwrap();
+
+        // Empty subdirectory
+        let req2 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/?delimiter=%2F&list-type=2&max-keys=100&prefix=empty%2Fsub%2F")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp2_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>test-bucket</Name>
+            <Prefix>empty/sub/</Prefix>
+            <Delimiter>/</Delimiter>
+            <IsTruncated>false</IsTruncated>
+        </ListBucketResult>"#;
+
+        let resp2 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp2_body))
+            .unwrap();
+
+        let events = vec![
+            ReplayEvent::new(req1, resp1),
+            ReplayEvent::new(req2, resp2),
+        ];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test", "test", None, None, "test"
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        );
+
+        let find_stream = FindStream {
+            client,
+            path,
+            token: None,
+            page_size: 100,
+            initial: true,
+            maxdepth: Some(1),
+        };
+
+        let stream = find_stream.stream();
+        let objects = stream
+            .flat_map(|x| futures::stream::iter(x.into_iter()))
+            .collect::<Vec<_>>()
+            .await;
+
+        // Empty subdirectory should yield no objects but not cause errors
+        assert_eq!(objects.len(), 0);
+
+        Ok(())
+    }
 }
+

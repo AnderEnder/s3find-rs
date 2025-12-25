@@ -229,18 +229,21 @@ times out."#
     #[arg(
         name = "maxdepth",
         long,
-        long_help = r#"Descend at most N levels below the starting prefix.
-Uses S3 Delimiter parameter for efficient API-side filtering, which reduces
-data transfer significantly for buckets with deep hierarchies.
+        long_help = r#"Descend at most N levels of subdirectories below the starting prefix.
 
-Depth is calculated by counting '/' separators in object keys relative to the search prefix.
+Depth is measured by subdirectory levels using S3's hierarchical structure:
+  - maxdepth 0: Only objects at the prefix level (no subdirectories)
+  - maxdepth 1: Prefix level + one subdirectory level
+  - maxdepth 2: Prefix level + two subdirectory levels
 
-Example: s3find s3://bucket/logs --maxdepth 2 ls
-  logs/file.txt          → depth 1 (included)
-  logs/2024/file.txt     → depth 2 (included)
-  logs/2024/01/file.txt  → depth 3 (excluded, not fetched from S3)
+Example: s3find s3://bucket/logs/ --maxdepth 1 ls
+  logs/file.txt          → depth 0 (included, at prefix level)
+  logs/2024/file.txt     → depth 1 (included, one subdirectory deep)
+  logs/2024/01/file.txt  → depth 2 (excluded, two subdirectories deep)
 
-Performance: Only fetches objects up to maxdepth from S3, unlike client-side filtering."#
+Performance: Uses S3's Delimiter parameter for server-side filtering,
+significantly reducing data transfer for deep hierarchies compared to
+fetching all objects and filtering client-side."#
     )]
     pub maxdepth: Option<usize>,
 

@@ -15,7 +15,7 @@ async fn main() -> Result<(), Error> {
 
     let filters = FilterList::from_opts(&args);
     let command = FindCommand::from_opts(&args, client.clone());
-    let stream = FindStream::from_opts(&args, client).stream().await;
+    let stream = FindStream::from_opts(&args, client).stream();
     let stats = default_stats(args.summarize);
 
     let stats = list_filter_execute(
