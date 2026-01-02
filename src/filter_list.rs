@@ -1,5 +1,3 @@
-use aws_sdk_s3::types::Object;
-
 use crate::arg::*;
 use crate::command::StreamObject;
 use crate::filter::Filter;
@@ -45,17 +43,6 @@ impl<'a> FilterList<'a> {
         true
     }
 
-    /// Test if an Object matches all filters (for non-versioned use cases).
-    pub fn test_match_object(&self, object: &Object) -> bool {
-        for item in &self.0 {
-            if !item.filter(object) {
-                return false;
-            }
-        }
-
-        true
-    }
-
     #[inline]
     pub fn add_filter(mut self, filter: &'a dyn Filter) -> Self {
         self.0.push(filter);
@@ -93,7 +80,7 @@ mod tests {
     use super::*;
 
     use aws_config::Region;
-    use aws_sdk_s3::types::ObjectStorageClass;
+    use aws_sdk_s3::types::{Object, ObjectStorageClass};
     use glob::Pattern;
     use regex::Regex;
     use std::str::FromStr;

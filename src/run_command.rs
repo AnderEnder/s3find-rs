@@ -331,6 +331,11 @@ impl RunCommand for SetTags {
         list: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in list {
+            // Skip delete markers - they have no content and cannot have tags
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             let tags = self
                 .tags
                 .iter()
@@ -377,6 +382,11 @@ impl RunCommand for ListTags {
         list: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in list {
+            // Skip delete markers - they have no content and cannot have tags
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             let mut request = client
                 .get_object_tagging()
                 .bucket(path.bucket.clone())
@@ -424,6 +434,11 @@ impl RunCommand for SetPublic {
         list: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in list {
+            // Skip delete markers - they have no content and cannot have ACLs
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             let mut request = client
                 .put_object_acl()
                 .bucket(path.bucket.to_owned())
@@ -462,6 +477,11 @@ impl RunCommand for Download {
         list: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in list {
+            // Skip delete markers - they have no content to download
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             let key = stream_obj
                 .object
                 .key
@@ -522,6 +542,11 @@ impl RunCommand for S3Copy {
         list: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in list {
+            // Skip delete markers - they have no content to copy
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             let key = stream_obj
                 .object
                 .key
@@ -563,6 +588,11 @@ impl RunCommand for S3Move {
         list: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in list {
+            // Skip delete markers - they have no content to copy/move
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             let key = stream_obj
                 .object
                 .key
@@ -592,9 +622,10 @@ impl RunCommand for S3Move {
                 .await?;
         }
 
-        // Delete original objects with version_id if present
+        // Delete original objects with version_id if present (skip delete markers)
         let key_list: Vec<_> = list
             .iter()
+            .filter(|stream_obj| !stream_obj.is_delete_marker)
             .filter_map(|stream_obj| {
                 ObjectIdentifier::builder()
                     .set_key(stream_obj.object.key.clone())
@@ -632,6 +663,11 @@ impl RunCommand for Restore {
         stream_objects: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in stream_objects {
+            // Skip delete markers - they have no content to restore
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             let object = &stream_obj.object;
             let is_glacier = object.storage_class == Some(ObjectStorageClass::Glacier)
                 || object.storage_class == Some(ObjectStorageClass::DeepArchive);
@@ -697,6 +733,11 @@ impl RunCommand for ChangeStorage {
         stream_objects: &[StreamObject],
     ) -> Result<(), Error> {
         for stream_obj in stream_objects {
+            // Skip delete markers - they have no content and cannot change storage class
+            if stream_obj.is_delete_marker {
+                continue;
+            }
+
             if let Some(key) = &stream_obj.object.key {
                 println!(
                     "Changing storage class for s3://{}/{} to {:?}",
