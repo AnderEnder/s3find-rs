@@ -432,6 +432,13 @@ When `--all-versions` is enabled:
 - The latest version is marked with `(latest)`
 - Delete markers are marked with `(delete marker)`
 
+**Version-aware operations:** When using `--all-versions`, operations work on specific versions:
+- `delete` - Deletes specific object versions (not just the current version)
+- `copy`/`move` - Copies or moves specific versions to the destination
+- `download` - Downloads specific versions of objects
+
+**Note:** Delete markers are automatically skipped for operations that don't support them (copy, move, download, tags, restore, change-storage, public) since they have no content.
+
 **Note:** `--all-versions` is not compatible with `--maxdepth`. If both are specified, `--all-versions` takes precedence and `--maxdepth` is ignored.
 
 For more information, see the [GitHub repository](https://github.com/AnderEnder/s3find-rs).
