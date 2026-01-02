@@ -538,9 +538,7 @@ impl RunCommand for S3Copy {
 
             println!(
                 "copying: s3://{} => s3://{}/{}",
-                stream_obj.display_key(),
-                &self.destination.bucket,
-                target,
+                &source_path, &self.destination.bucket, target,
             );
 
             client
@@ -581,9 +579,7 @@ impl RunCommand for S3Move {
 
             println!(
                 "moving: s3://{} => s3://{}/{}",
-                stream_obj.display_key(),
-                &self.destination.bucket,
-                target,
+                &source_path, &self.destination.bucket, target,
             );
 
             client

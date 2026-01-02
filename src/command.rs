@@ -392,6 +392,17 @@ impl FindStream {
                             }
                         }
 
+                        // Sort by key, then by last_modified descending to preserve S3's natural order
+                        // (versions and delete markers are interleaved by key in S3 API responses)
+                        stream_objects.sort_by(|a, b| {
+                            let key_cmp = a.object.key().cmp(&b.object.key());
+                            if key_cmp != std::cmp::Ordering::Equal {
+                                return key_cmp;
+                            }
+                            // Within same key, sort by last_modified descending (newest first)
+                            b.object.last_modified().cmp(&a.object.last_modified())
+                        });
+
                         if !stream_objects.is_empty() {
                             yield stream_objects;
                         }
@@ -1903,32 +1914,35 @@ mod tests {
         // Should get all versions and delete markers
         assert_eq!(objects.len(), 3);
 
-        // Check first version (latest)
-        assert_eq!(objects[0].key().unwrap(), "data/file1.txt");
-        assert_eq!(objects[0].version_id.as_ref().unwrap(), "v1");
+        // Objects are sorted by key (alphabetically), then by last_modified descending
+        // So deleted.txt comes before file1.txt
+
+        // Check delete marker (first alphabetically: "data/deleted.txt" < "data/file1.txt")
+        assert_eq!(objects[0].key().unwrap(), "data/deleted.txt");
+        assert_eq!(objects[0].version_id.as_ref().unwrap(), "dm1");
         assert_eq!(objects[0].is_latest, Some(true));
+        assert!(objects[0].is_delete_marker);
         assert_eq!(
             objects[0].display_key(),
-            "data/file1.txt?versionId=v1 (latest)"
-        );
-
-        // Check older version
-        assert_eq!(objects[1].key().unwrap(), "data/file1.txt");
-        assert_eq!(objects[1].version_id.as_ref().unwrap(), "v0");
-        assert_eq!(objects[1].is_latest, Some(false));
-        assert_eq!(objects[1].display_key(), "data/file1.txt?versionId=v0");
-
-        // Check delete marker
-        assert_eq!(objects[2].key().unwrap(), "data/deleted.txt");
-        assert_eq!(objects[2].version_id.as_ref().unwrap(), "dm1");
-        assert_eq!(objects[2].is_latest, Some(true));
-        assert!(objects[2].is_delete_marker);
-        assert_eq!(
-            objects[2].display_key(),
             "data/deleted.txt?versionId=dm1 (latest) (delete marker)"
         );
         // Delete marker has size 0
-        assert_eq!(objects[2].object.size(), Some(0));
+        assert_eq!(objects[0].object.size(), Some(0));
+
+        // Check first version of file1.txt (latest, newer last_modified)
+        assert_eq!(objects[1].key().unwrap(), "data/file1.txt");
+        assert_eq!(objects[1].version_id.as_ref().unwrap(), "v1");
+        assert_eq!(objects[1].is_latest, Some(true));
+        assert_eq!(
+            objects[1].display_key(),
+            "data/file1.txt?versionId=v1 (latest)"
+        );
+
+        // Check older version of file1.txt
+        assert_eq!(objects[2].key().unwrap(), "data/file1.txt");
+        assert_eq!(objects[2].version_id.as_ref().unwrap(), "v0");
+        assert_eq!(objects[2].is_latest, Some(false));
+        assert_eq!(objects[2].display_key(), "data/file1.txt?versionId=v0");
 
         Ok(())
     }
