@@ -2488,4 +2488,307 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_object_record_with_version_fields() {
+        use aws_sdk_s3::types::ObjectVersion;
+
+        // Create a versioned object using StreamObject::from_version
+        let version = ObjectVersion::builder()
+            .key("versioned-file.txt")
+            .version_id("ver123")
+            .is_latest(true)
+            .size(500)
+            .build();
+
+        let stream_obj = StreamObject::from_version(version);
+        let record: ObjectRecord = (&stream_obj).into();
+
+        assert_eq!(record.key, "versioned-file.txt");
+        assert_eq!(record.version_id, Some("ver123".to_string()));
+        assert_eq!(record.is_latest, Some(true));
+        assert_eq!(record.is_delete_marker, None);
+    }
+
+    #[test]
+    fn test_object_record_with_delete_marker() {
+        use aws_sdk_s3::types::DeleteMarkerEntry;
+
+        let marker = DeleteMarkerEntry::builder()
+            .key("deleted-file.txt")
+            .version_id("del456")
+            .is_latest(true)
+            .build();
+
+        let stream_obj = StreamObject::from_delete_marker(marker);
+        let record: ObjectRecord = (&stream_obj).into();
+
+        assert_eq!(record.key, "deleted-file.txt");
+        assert_eq!(record.version_id, Some("del456".to_string()));
+        assert_eq!(record.is_latest, Some(true));
+        assert_eq!(record.is_delete_marker, Some(true));
+    }
+
+    #[test]
+    fn test_advanced_print_json_with_version_fields() -> Result<(), Error> {
+        use aws_sdk_s3::types::ObjectVersion;
+        use aws_sdk_s3::types::ObjectVersionStorageClass;
+
+        let version = ObjectVersion::builder()
+            .e_tag("ver-etag")
+            .key("data/versioned.txt")
+            .version_id("v1234")
+            .is_latest(false)
+            .size(1024)
+            .storage_class(ObjectVersionStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-06-15T10:30:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let stream_obj = StreamObject::from_version(version);
+
+        let mut buf = Vec::<u8>::new();
+        let cmd = AdvancedPrint {
+            format: PrintFormat::Json,
+        };
+
+        cmd.print_json_stream_object(&mut buf, &stream_obj)?;
+
+        let output = String::from_utf8(buf).unwrap();
+        println!("JSON with version: {}", output);
+
+        // Verify version fields are present in JSON output
+        assert!(output.contains("\"version_id\":\"v1234\""));
+        assert!(output.contains("\"is_latest\":false"));
+        assert!(!output.contains("is_delete_marker")); // Should be omitted when false
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_advanced_print_json_with_delete_marker() -> Result<(), Error> {
+        use aws_sdk_s3::types::DeleteMarkerEntry;
+
+        let marker = DeleteMarkerEntry::builder()
+            .key("data/deleted.txt")
+            .version_id("dm789")
+            .is_latest(true)
+            .last_modified(
+                DateTime::from_str("2023-07-20T14:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let stream_obj = StreamObject::from_delete_marker(marker);
+
+        let mut buf = Vec::<u8>::new();
+        let cmd = AdvancedPrint {
+            format: PrintFormat::Json,
+        };
+
+        cmd.print_json_stream_object(&mut buf, &stream_obj)?;
+
+        let output = String::from_utf8(buf).unwrap();
+        println!("JSON with delete marker: {}", output);
+
+        // Verify version and delete marker fields are present
+        assert!(output.contains("\"version_id\":\"dm789\""));
+        assert!(output.contains("\"is_latest\":true"));
+        assert!(output.contains("\"is_delete_marker\":true"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_versioned_object() -> Result<(), Error> {
+        use aws_sdk_s3::types::ObjectVersion;
+
+        let version = ObjectVersion::builder()
+            .e_tag("ver-etag")
+            .key("test/versioned-file.txt")
+            .version_id("v123abc")
+            .is_latest(true)
+            .size(100)
+            .build();
+
+        let stream_obj = StreamObject::from_version(version);
+
+        // The delete request should include versionId
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("https://test-bucket.s3.amazonaws.com/?delete")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Deleted>
+                <Key>test/versioned-file.txt</Key>
+                <VersionId>v123abc</VersionId>
+            </Deleted>
+        </DeleteResult>"#;
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::Delete(MultipleDelete {}).downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, &path, &[stream_obj]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_copy_versioned_object() -> Result<(), Error> {
+        use aws_sdk_s3::types::ObjectVersion;
+
+        let version = ObjectVersion::builder()
+            .e_tag("ver-etag")
+            .key("source/file.txt")
+            .version_id("srcver123")
+            .is_latest(true)
+            .size(500)
+            .build();
+
+        let stream_obj = StreamObject::from_version(version);
+
+        // Copy request should include versionId in x-amz-copy-source
+        let req = http::Request::builder()
+            .method("PUT")
+            .uri("https://dest-bucket.s3.amazonaws.com/dest/file.txt")
+            .header(
+                "x-amz-copy-source",
+                "source-bucket/source/file.txt?versionId=srcver123",
+            )
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <LastModified>2023-01-02T00:00:00Z</LastModified>
+            <ETag>"new-etag"</ETag>
+        </CopyObjectResult>"#;
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let destination = S3Path {
+            bucket: "dest-bucket".to_owned(),
+            prefix: Some("dest/".to_owned()),
+        };
+
+        let cmd = Cmd::Copy(S3Copy {
+            destination,
+            flat: true,
+            storage_class: None,
+        })
+        .downcast();
+
+        let path = S3Path {
+            bucket: "source-bucket".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, &path, &[stream_obj]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_download_versioned_object() -> Result<(), Error> {
+        use aws_sdk_s3::types::ObjectVersion;
+
+        let version = ObjectVersion::builder()
+            .e_tag("ver-etag")
+            .key("downloads/file.txt")
+            .version_id("dlver456")
+            .is_latest(false)
+            .size(100)
+            .build();
+
+        let stream_obj = StreamObject::from_version(version);
+
+        // Download request should include versionId parameter
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/downloads/file.txt?versionId=dlver456")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("text/plain"))
+            .header("Content-Length", HeaderValue::from_static("13"))
+            .body(SdkBody::from("file contents"))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req, resp)];
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        // Create a temp directory for download
+        let temp_dir = std::env::temp_dir().join("s3find_test_versioned_download");
+        std::fs::create_dir_all(&temp_dir)?;
+
+        let cmd = Cmd::Download(Download {
+            destination: temp_dir.to_string_lossy().to_string(),
+            force: true,
+        })
+        .downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        cmd.execute(&client, &path, &[stream_obj]).await?;
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        Ok(())
+    }
 }
