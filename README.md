@@ -22,6 +22,8 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
   - [Multiple Filters](#multiple-filters)
   - [Actions and Operations](#actions-and-operations)
 - [Advanced Options](#additional-control)
+  - [Depth Control](#depth-control)
+  - [Object Versioning](#object-versioning)
 
 ## Installation
 
@@ -389,5 +391,54 @@ s3find 's3://example-bucket/example-path' --name '*' --limit 10 ls
 # Control page size for S3 API requests
 s3find 's3://example-bucket/example-path' --name '*' --number 100 ls
 ```
+
+### Depth Control
+
+Limit how deep s3find descends into the object hierarchy:
+
+```sh
+# Only objects at the bucket root level (no subdirectories)
+s3find 's3://example-bucket/' --maxdepth 0 ls
+
+# Objects up to one subdirectory level deep
+s3find 's3://example-bucket/' --maxdepth 1 ls
+
+# Objects up to two levels deep
+s3find 's3://example-bucket/data/' --maxdepth 2 ls
+```
+
+The `--maxdepth` option uses S3's delimiter-based traversal for efficient server-side filtering, avoiding the need to fetch objects beyond the specified depth.
+
+### Object Versioning
+
+List all versions of objects in versioned buckets:
+
+```sh
+# List all versions of all objects
+s3find 's3://example-bucket/' --all-versions ls
+
+# List all versions matching a pattern
+s3find 's3://example-bucket/' --all-versions --name '*.log' ls
+
+# Print all versions in JSON format
+s3find 's3://example-bucket/' --all-versions print --format json
+```
+
+When `--all-versions` is enabled:
+- Uses the S3 ListObjectVersions API instead of ListObjectsV2
+- Shows all versions of each object, not just the current version
+- Includes delete markers (shown with size 0)
+- Each entry displays the version ID alongside the key (e.g., `file.txt?versionId=abc123`); the underlying S3 key remains unchanged
+- The latest version is marked with `(latest)`
+- Delete markers are marked with `(delete marker)`
+
+**Version-aware operations:** When using `--all-versions`, operations work on specific versions:
+- `delete` - Deletes specific object versions (not just the current version)
+- `copy`/`move` - Copies or moves specific versions to the destination
+- `download` - Downloads specific versions of objects
+
+**Note:** Delete markers are automatically skipped for operations that don't support them (copy, move, download, tags, restore, change-storage, public) since they have no content.
+
+**Note:** `--all-versions` is not compatible with `--maxdepth`. If both are specified, `--all-versions` takes precedence and `--maxdepth` is ignored.
 
 For more information, see the [GitHub repository](https://github.com/AnderEnder/s3find-rs).

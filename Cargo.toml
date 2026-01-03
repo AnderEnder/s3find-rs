@@ -47,6 +47,7 @@ serde_json = "1.0.148"
 clap = { version = "4", features = ["derive"] }
 csv = "1.4.0"
 lazy_static = "1"
+urlencoding = "2"
 
 [dev-dependencies]
 aws-smithy-runtime = { version = "1", features = ["test-util"] }
