@@ -57,6 +57,9 @@ impl StreamObject {
             .set_size(version.size)
             .set_last_modified(version.last_modified)
             .set_e_tag(version.e_tag.clone())
+            // Convert ObjectVersionStorageClass to ObjectStorageClass via string.
+            // ObjectStorageClass::from(&str) handles unknown values by creating
+            // an Unknown variant, so this is safe even if new storage classes are added.
             .set_storage_class(
                 version
                     .storage_class

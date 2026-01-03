@@ -839,13 +839,46 @@ async fn test_all_versions_basic() {
     let output = cmd_versions.output().expect("Failed to execute command");
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Count occurrences of file.txt in output
+    // Count occurrences of file.txt in output (should be exactly 3 versions)
     let count = stdout.matches("file.txt").count();
-    assert!(
-        count >= 3,
-        "Expected at least 3 versions, found {} occurrences of file.txt in output:\n{}",
-        count,
-        stdout
+    assert_eq!(
+        3, count,
+        "Expected exactly 3 versions, found {} occurrences of file.txt in output:\n{}",
+        count, stdout
+    );
+
+    // Verify that version IDs are present and distinct
+    let version_ids: Vec<&str> = stdout
+        .lines()
+        .filter_map(|line| {
+            if line.contains("file.txt") && line.contains("versionId=") {
+                // Extract versionId from line like "file.txt?versionId=abc123"
+                line.split("versionId=")
+                    .nth(1)
+                    .and_then(|s| s.split_whitespace().next())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        3,
+        version_ids.len(),
+        "Expected 3 version IDs, found {}: {:?}",
+        version_ids.len(),
+        version_ids
+    );
+
+    // Check that all version IDs are distinct
+    let mut unique_ids = version_ids.clone();
+    unique_ids.sort();
+    unique_ids.dedup();
+    assert_eq!(
+        version_ids.len(),
+        unique_ids.len(),
+        "Version IDs should be distinct, found duplicates: {:?}",
+        version_ids
     );
 }
 

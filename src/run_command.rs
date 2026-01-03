@@ -29,7 +29,10 @@ use crate::utils::combine_keys;
 fn build_copy_source(bucket: &str, key: &str, version_id: Option<&str>) -> String {
     let encoded_key = urlencoding::encode(key);
     match version_id {
-        Some(vid) => format!("{}/{}?versionId={}", bucket, encoded_key, vid),
+        Some(vid) => {
+            let encoded_vid = urlencoding::encode(vid);
+            format!("{}/{}?versionId={}", bucket, encoded_key, encoded_vid)
+        }
         None => format!("{}/{}", bucket, encoded_key),
     }
 }
@@ -629,6 +632,7 @@ impl RunCommand for S3Move {
                 .key(target)
                 .copy_source(&source_path)
                 .set_storage_class(self.storage_class.clone())
+                .metadata_directive(MetadataDirective::Copy)
                 .send()
                 .await?;
         }
