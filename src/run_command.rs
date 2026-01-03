@@ -24,6 +24,16 @@ use crate::command::StreamObject;
 use crate::error::*;
 use crate::utils::combine_keys;
 
+/// Build a properly URL-encoded copy_source path for S3 CopyObject operations.
+/// S3 keys can contain special characters that need encoding in the copy_source parameter.
+fn build_copy_source(bucket: &str, key: &str, version_id: Option<&str>) -> String {
+    let encoded_key = urlencoding::encode(key);
+    match version_id {
+        Some(vid) => format!("{}/{}?versionId={}", bucket, encoded_key, vid),
+        None => format!("{}/{}", bucket, encoded_key),
+    }
+}
+
 impl Cmd {
     pub fn downcast(self) -> Box<dyn RunCommand> {
         match self {
@@ -489,7 +499,12 @@ impl RunCommand for Download {
                 .ok_or(FunctionError::ObjectFieldError)?;
 
             let size = stream_obj.object.size.unwrap_or_default() as u64;
-            let file_path = Path::new(&self.destination).join(key);
+            // Include version_id in file path to avoid overwrites when downloading multiple versions
+            let file_path = if let Some(ref vid) = stream_obj.version_id {
+                Path::new(&self.destination).join(format!("{}.v{}", key, vid))
+            } else {
+                Path::new(&self.destination).join(key)
+            };
             let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
 
             let mut count: u64 = 0;
@@ -555,11 +570,9 @@ impl RunCommand for S3Copy {
 
             let target = combine_keys(self.flat, &key, &self.destination.prefix);
 
-            // For copy, version_id goes in copy_source URL
-            let source_path = match &stream_obj.version_id {
-                Some(vid) => format!("{}/{}?versionId={}", &path.bucket, key, vid),
-                None => format!("{}/{}", &path.bucket, key),
-            };
+            // Build URL-encoded copy_source path
+            let source_path =
+                build_copy_source(&path.bucket, &key, stream_obj.version_id.as_deref());
 
             println!(
                 "copying: s3://{} => s3://{}/{}",
@@ -601,11 +614,9 @@ impl RunCommand for S3Move {
 
             let target = combine_keys(self.flat, &key, &self.destination.prefix);
 
-            // For copy, version_id goes in copy_source URL
-            let source_path = match &stream_obj.version_id {
-                Some(vid) => format!("{}/{}?versionId={}", &path.bucket, key, vid),
-                None => format!("{}/{}", &path.bucket, key),
-            };
+            // Build URL-encoded copy_source path
+            let source_path =
+                build_copy_source(&path.bucket, &key, stream_obj.version_id.as_deref());
 
             println!(
                 "moving: s3://{} => s3://{}/{}",
@@ -746,11 +757,9 @@ impl RunCommand for ChangeStorage {
                     self.storage_class
                 );
 
-                // For copy, version_id goes in copy_source URL
-                let source_path = match &stream_obj.version_id {
-                    Some(vid) => format!("{}/{}?versionId={}", path.bucket, key, vid),
-                    None => format!("{}/{}", path.bucket, key),
-                };
+                // Build URL-encoded copy_source path
+                let source_path =
+                    build_copy_source(&path.bucket, key, stream_obj.version_id.as_deref());
 
                 client
                     .copy_object()

@@ -428,7 +428,7 @@ When `--all-versions` is enabled:
 - Uses the S3 ListObjectVersions API instead of ListObjectsV2
 - Shows all versions of each object, not just the current version
 - Includes delete markers (shown with size 0)
-- Each entry includes the version ID in the key: `file.txt?versionId=abc123`
+- Each entry displays the version ID alongside the key (e.g., `file.txt?versionId=abc123`); the underlying S3 key remains unchanged
 - The latest version is marked with `(latest)`
 - Delete markers are marked with `(delete marker)`
 

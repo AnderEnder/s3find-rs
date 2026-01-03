@@ -2843,6 +2843,7 @@ dependencies = [
  "testcontainers",
  "thiserror",
  "tokio",
+ "urlencoding",
  "version_check",
 ]
 
