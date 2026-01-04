@@ -448,4 +448,53 @@ mod tests {
         // Should return None when tags not fetched
         assert_eq!(filter_list.matches(&stream_obj), None);
     }
+
+    #[test]
+    fn tag_filter_list_from_opts() {
+        use crate::arg::{FindOpt, S3Path};
+
+        let opts = FindOpt {
+            path: S3Path {
+                bucket: "test".to_string(),
+                prefix: None,
+            },
+            aws_access_key: None,
+            aws_secret_key: None,
+            aws_region: None,
+            endpoint_url: None,
+            force_path_style: false,
+            name: vec![],
+            iname: vec![],
+            regex: vec![],
+            size: vec![],
+            mtime: vec![],
+            storage_class: None,
+            tag: vec![
+                TagFilter {
+                    key: "env".to_string(),
+                    value: "prod".to_string(),
+                },
+                TagFilter {
+                    key: "team".to_string(),
+                    value: "data".to_string(),
+                },
+            ],
+            tag_exists: vec![TagExistsFilter {
+                key: "owner".to_string(),
+            }],
+            tag_concurrency: 50,
+            limit: None,
+            page_size: 1000,
+            summarize: false,
+            cmd: None,
+            maxdepth: None,
+            all_versions: false,
+        };
+
+        let filter_list = TagFilterList::from_opts(&opts);
+
+        assert!(filter_list.has_filters());
+        assert_eq!(filter_list.len(), 3);
+        assert!(!filter_list.is_empty());
+    }
 }
