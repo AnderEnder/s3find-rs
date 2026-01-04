@@ -67,12 +67,13 @@ impl TagFetchStats {
         self.access_denied.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Returns the total number of tag fetch events.
+    /// Returns the total number of tag fetch events across all counters.
     ///
-    /// Note: This counts events, not unique requests. Throttled requests that are
-    /// retried and eventually succeed will be counted in both `throttled` and
-    /// `success` counters. For unique request counts, use `success + failed + access_denied`.
-    pub fn total_requests(&self) -> usize {
+    /// Note: This counts events, not unique requests. A request that is throttled
+    /// multiple times before succeeding will increment `throttled` for each
+    /// throttle event, then `success` when it finally succeeds. For the count of
+    /// unique logical requests (final outcomes), use `success + failed + access_denied`.
+    pub fn total_events(&self) -> usize {
         self.success.load(Ordering::Relaxed)
             + self.failed.load(Ordering::Relaxed)
             + self.throttled.load(Ordering::Relaxed)
@@ -125,8 +126,9 @@ fn calculate_backoff_delay(attempt: u32, base_delay_ms: u64, max_delay_ms: u64) 
 }
 
 /// Simple pseudo-random jitter (0.0 to 1.0)
-/// Uses the current time to generate a simple pseudo-random value.
-/// Uses microsecond precision for better distribution across concurrent requests.
+/// Uses the current time's nanosecond component (mod 1_000_000) to generate
+/// a pseudo-random value with microsecond-level variation for better
+/// distribution across concurrent requests.
 fn rand_jitter() -> f64 {
     use std::time::SystemTime;
     let nanos = SystemTime::now()
@@ -294,7 +296,7 @@ mod tests {
     fn test_tag_fetch_stats() {
         let stats = TagFetchStats::new();
 
-        assert_eq!(stats.total_requests(), 0);
+        assert_eq!(stats.total_events(), 0);
 
         stats.record_success();
         stats.record_success();
@@ -306,7 +308,7 @@ mod tests {
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
         assert_eq!(stats.throttled.load(Ordering::Relaxed), 1);
         assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
-        assert_eq!(stats.total_requests(), 5);
+        assert_eq!(stats.total_events(), 5);
     }
 
     #[test]

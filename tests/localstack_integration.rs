@@ -1253,7 +1253,7 @@ async fn test_tag_filter_with_limit() {
         .filter(|line| line.contains("file") && line.contains(".txt"))
         .count();
     assert_eq!(
-        2, count,
+        count, 2,
         "Expected exactly 2 results with --limit 2, got {}: {}",
         count, stdout
     );
