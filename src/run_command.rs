@@ -1633,6 +1633,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_tags_with_version_id() -> Result<(), Error> {
+        // Test ListTags with version_id (versioned object)
+        let key1 = "test/versioned.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // Request includes versionId query parameter
+        let req1 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/test/versioned.txt?tagging&versionId=v123")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <TagSet>
+                <Tag>
+                    <Key>version</Key>
+                    <Value>v123</Value>
+                </Tag>
+            </TagSet>
+        </Tagging>"#;
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body1))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req1, resp1)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        // Create versioned StreamObject
+        let stream_obj = StreamObject {
+            object: object1,
+            version_id: Some("v123".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: false,
+            tags: None, // Force API fetch
+        };
+
+        cmd.execute(&client, &path, &[stream_obj]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
         // Test that ListTags uses cached tags when available (no API calls needed)
         use aws_sdk_s3::types::Tag;
