@@ -750,4 +750,313 @@ mod tests {
         assert!(results[0].tags.as_ref().unwrap().is_empty());
         assert_eq!(stats.success.load(Ordering::Relaxed), 0);
     }
+
+    fn make_versioned_tag_response(
+        key: &str,
+        version_id: &str,
+        tags: &[(&str, &str)],
+    ) -> ReplayEvent {
+        let uri = format!(
+            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging&versionId={}",
+            key, version_id
+        );
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let tag_xml: String = tags
+            .iter()
+            .map(|(k, v)| format!("<Tag><Key>{}</Key><Value>{}</Value></Tag>", k, v))
+            .collect::<Vec<_>>()
+            .join("");
+
+        let resp_body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+            <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                <TagSet>{}</TagSet>
+            </Tagging>"#,
+            tag_xml
+        );
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        ReplayEvent::new(req, resp)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_with_version_id() {
+        // Test that version_id is passed to API call
+        let events = vec![make_versioned_tag_response(
+            "versioned.txt",
+            "v123",
+            &[("version", "v123")],
+        )];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig::default().with_concurrency(1);
+
+        let object = Object::builder().key("versioned.txt").build();
+        let objects = vec![StreamObject {
+            object,
+            version_id: Some("v123".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: false,
+            tags: None,
+        }];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_some());
+        let tags = results[0].tags.as_ref().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].key(), "version");
+        assert_eq!(tags[0].value(), "v123");
+        assert_eq!(stats.success.load(Ordering::Relaxed), 1);
+    }
+
+    fn make_throttle_response(key: &str) -> ReplayEvent {
+        let uri = format!(
+            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging",
+            key
+        );
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <Error>
+                    <Code>SlowDown</Code>
+                    <Message>Reduce your request rate.</Message>
+                </Error>"#,
+            ))
+            .unwrap();
+
+        ReplayEvent::new(req, resp)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_throttle_then_success() {
+        // Test throttle retry: first 503, then success
+        let events = vec![
+            make_throttle_response("retry.txt"),
+            make_tag_response("retry.txt", &[("retried", "true")]),
+        ];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        // Use minimal delays for testing
+        let config = TagFetchConfig {
+            concurrency: 1,
+            max_retries: 3,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
+
+        let objects = vec![StreamObject::from_object(
+            Object::builder().key("retry.txt").build(),
+        )];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_some());
+        let tags = results[0].tags.as_ref().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].key(), "retried");
+        // Stats: 1 throttle + 1 success
+        assert_eq!(stats.throttled.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.success.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_throttle_exhausts_retries() {
+        // Test throttle retry exhaustion: 503 x 4 (exceeds max_retries of 3)
+        let events = vec![
+            make_throttle_response("exhaust.txt"),
+            make_throttle_response("exhaust.txt"),
+            make_throttle_response("exhaust.txt"),
+            make_throttle_response("exhaust.txt"),
+        ];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig {
+            concurrency: 1,
+            max_retries: 3,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
+
+        let objects = vec![StreamObject::from_object(
+            Object::builder().key("exhaust.txt").build(),
+        )];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        // Failed to get tags, gets empty vec
+        assert!(results[0].tags.is_some());
+        assert!(results[0].tags.as_ref().unwrap().is_empty());
+        // Stats: 4 throttle events + 1 failure (after exhausting retries)
+        assert_eq!(stats.throttled.load(Ordering::Relaxed), 4);
+        assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
+    }
+
+    fn make_429_response(key: &str) -> ReplayEvent {
+        let uri = format!(
+            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging",
+            key
+        );
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <Error>
+                    <Code>TooManyRequestsException</Code>
+                    <Message>Rate exceeded</Message>
+                </Error>"#,
+            ))
+            .unwrap();
+
+        ReplayEvent::new(req, resp)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_429_retry() {
+        // Test 429 (Too Many Requests) triggers retry
+        let events = vec![
+            make_429_response("rate-limited.txt"),
+            make_tag_response("rate-limited.txt", &[("ok", "true")]),
+        ];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig {
+            concurrency: 1,
+            max_retries: 3,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
+
+        let objects = vec![StreamObject::from_object(
+            Object::builder().key("rate-limited.txt").build(),
+        )];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_some());
+        assert_eq!(stats.throttled.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.success.load(Ordering::Relaxed), 1);
+    }
+
+    fn make_generic_error_response(key: &str, status: u16) -> ReplayEvent {
+        let uri = format!(
+            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging",
+            key
+        );
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::from_u16(status).unwrap())
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <Error>
+                    <Code>InternalError</Code>
+                    <Message>Generic error {}</Message>
+                </Error>"#,
+                status
+            )))
+            .unwrap();
+
+        ReplayEvent::new(req, resp)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_generic_error_no_retry() {
+        // Test that non-throttle errors (e.g., 500) don't retry
+        let events = vec![make_generic_error_response("error.txt", 500)];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig {
+            concurrency: 1,
+            max_retries: 3,
+            base_delay_ms: 1,
+            max_delay_ms: 10,
+        };
+
+        let objects = vec![StreamObject::from_object(
+            Object::builder().key("error.txt").build(),
+        )];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.as_ref().unwrap().is_empty());
+        // Should fail immediately without retry
+        assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.throttled.load(Ordering::Relaxed), 0);
+    }
 }
