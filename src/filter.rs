@@ -119,6 +119,18 @@ impl TagFilterList {
         }
     }
 
+    /// Creates a TagFilterList with the specified filters.
+    /// This is useful for testing or programmatic filter construction.
+    pub fn with_filters(
+        tag_filters: Vec<TagFilter>,
+        tag_exists_filters: Vec<TagExistsFilter>,
+    ) -> Self {
+        Self {
+            tag_filters,
+            tag_exists_filters,
+        }
+    }
+
     /// Returns true if there are any tag filters configured.
     pub fn has_filters(&self) -> bool {
         !self.tag_filters.is_empty() || !self.tag_exists_filters.is_empty()
