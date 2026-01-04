@@ -1,6 +1,6 @@
 use std::future::ready;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use anyhow::Error;
 

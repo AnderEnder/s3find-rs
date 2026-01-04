@@ -1,12 +1,12 @@
 use aws_sdk_s3::Client;
+use futures::Future;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
-use futures::Future;
 use std::sync::Arc;
 
 use crate::command::{FindStat, StreamObject};
 use crate::filter::TagFilterList;
-use crate::tag_fetcher::{fetch_tags_for_objects, TagFetchConfig, TagFetchStats};
+use crate::tag_fetcher::{TagFetchConfig, TagFetchStats, fetch_tags_for_objects};
 
 const CHUNK: usize = 1000;
 const TAG_FETCH_BATCH_SIZE: usize = 100;
@@ -113,14 +113,8 @@ where
 
     // Process remaining objects in the last batch
     if !batch.is_empty() {
-        let (_processed, new_stats) = process_tag_batch(
-            batch,
-            &tag_ctx,
-            remaining_limit,
-            current_stats,
-            f,
-        )
-        .await;
+        let (_processed, new_stats) =
+            process_tag_batch(batch, &tag_ctx, remaining_limit, current_stats, f).await;
         current_stats = new_stats;
     }
 
