@@ -934,4 +934,126 @@ mod tests {
         // Initial 5 files + 1 new file = 6
         assert_eq!(result.unwrap().total_files, 6);
     }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_with_tags_large_batch() {
+        // Test with more than TAG_FETCH_BATCH_SIZE (100) objects to trigger batch processing
+        use crate::arg::TagFilter;
+        use crate::filter::TagFilterList;
+
+        let tag = Tag::builder().key("env").value("prod").build().unwrap();
+
+        // Create 150 objects with pre-cached tags
+        let stream_objects: Vec<StreamObject> = (0..150)
+            .map(|i| {
+                let mut obj = StreamObject::from_object(
+                    Object::builder().key(format!("file{}.txt", i)).build(),
+                );
+                obj.tags = Some(vec![tag.clone()]);
+                obj
+            })
+            .collect();
+
+        let client = make_test_client(vec![]);
+        let stats = Arc::new(TagFetchStats::new());
+
+        let tag_filters = TagFilterList::with_filters(
+            vec![TagFilter {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+            vec![],
+        );
+
+        let tag_ctx = TagFilterContext {
+            client,
+            bucket: "test-bucket".to_string(),
+            filters: tag_filters,
+            config: TagFetchConfig::default().with_concurrency(1),
+            stats: Arc::clone(&stats),
+        };
+
+        let iterator = stream::iter(vec![stream_objects]);
+
+        let result = list_filter_execute_with_tags(
+            iterator,
+            None,
+            None,
+            tag_ctx,
+            |_: &StreamObject| ready(true),
+            &mut |acc, list| {
+                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
+                ready(
+                    acc.map(|stat| stat + &objects)
+                        .or_else(|| Some(FindStat::default() + &objects)),
+                )
+            },
+        )
+        .await;
+
+        assert!(result.is_some());
+        // All 150 objects should match
+        assert_eq!(result.unwrap().total_files, 150);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_with_tags_large_batch_with_limit() {
+        // Test batch processing with limit that triggers early termination
+        use crate::arg::TagFilter;
+        use crate::filter::TagFilterList;
+
+        let tag = Tag::builder().key("env").value("prod").build().unwrap();
+
+        // Create 150 objects with pre-cached tags
+        let stream_objects: Vec<StreamObject> = (0..150)
+            .map(|i| {
+                let mut obj = StreamObject::from_object(
+                    Object::builder().key(format!("file{}.txt", i)).build(),
+                );
+                obj.tags = Some(vec![tag.clone()]);
+                obj
+            })
+            .collect();
+
+        let client = make_test_client(vec![]);
+        let stats = Arc::new(TagFetchStats::new());
+
+        let tag_filters = TagFilterList::with_filters(
+            vec![TagFilter {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+            vec![],
+        );
+
+        let tag_ctx = TagFilterContext {
+            client,
+            bucket: "test-bucket".to_string(),
+            filters: tag_filters,
+            config: TagFetchConfig::default().with_concurrency(1),
+            stats: Arc::clone(&stats),
+        };
+
+        let iterator = stream::iter(vec![stream_objects]);
+
+        let result = list_filter_execute_with_tags(
+            iterator,
+            Some(50), // Limit to 50 - should terminate during first batch
+            None,
+            tag_ctx,
+            |_: &StreamObject| ready(true),
+            &mut |acc, list| {
+                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
+                ready(
+                    acc.map(|stat| stat + &objects)
+                        .or_else(|| Some(FindStat::default() + &objects)),
+                )
+            },
+        )
+        .await;
+
+        assert!(result.is_some());
+        // Only 50 objects should be returned due to limit
+        assert_eq!(result.unwrap().total_files, 50);
+    }
 }
