@@ -1056,4 +1056,66 @@ mod tests {
         // Only 50 objects should be returned due to limit
         assert_eq!(result.unwrap().total_files, 50);
     }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_with_tags_batch_limit_exhaustion() {
+        // Test that triggers the limit exhaustion break path after batch processing
+        use crate::arg::TagFilter;
+        use crate::filter::TagFilterList;
+
+        let tag = Tag::builder().key("env").value("prod").build().unwrap();
+
+        // Create exactly 100 objects to fill one batch, then 50 more
+        let stream_objects: Vec<StreamObject> = (0..150)
+            .map(|i| {
+                let mut obj = StreamObject::from_object(
+                    Object::builder().key(format!("file{}.txt", i)).build(),
+                );
+                obj.tags = Some(vec![tag.clone()]);
+                obj
+            })
+            .collect();
+
+        let client = make_test_client(vec![]);
+        let stats = Arc::new(TagFetchStats::new());
+
+        let tag_filters = TagFilterList::with_filters(
+            vec![TagFilter {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+            vec![],
+        );
+
+        let tag_ctx = TagFilterContext {
+            client,
+            bucket: "test-bucket".to_string(),
+            filters: tag_filters,
+            config: TagFetchConfig::default().with_concurrency(1),
+            stats: Arc::clone(&stats),
+        };
+
+        let iterator = stream::iter(vec![stream_objects]);
+
+        // Limit to exactly 100 - should exhaust limit after first batch
+        let result = list_filter_execute_with_tags(
+            iterator,
+            Some(100),
+            None,
+            tag_ctx,
+            |_: &StreamObject| ready(true),
+            &mut |acc, list| {
+                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
+                ready(
+                    acc.map(|stat| stat + &objects)
+                        .or_else(|| Some(FindStat::default() + &objects)),
+                )
+            },
+        )
+        .await;
+
+        assert!(result.is_some());
+        // Exactly 100 objects should match (first batch)
+        assert_eq!(result.unwrap().total_files, 100);
+    }
 }
