@@ -424,7 +424,7 @@ impl RunCommand for ListTags {
                 tag_output
                     .tag_set
                     .into_iter()
-                    .map(|x| format!("{}:{}", x.key, x.value))
+                    .map(|x| format!("{}:{}", x.key(), x.value()))
                     .collect::<Vec<String>>()
                     .join(",")
             };

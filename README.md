@@ -496,7 +496,7 @@ Tag filtering requires an individual `GetObjectTagging` API call for each object
 
 3. **Adjust concurrency**: Use `--tag-concurrency` to tune parallel API calls (default: 50). Higher values increase throughput but may cause throttling.
 
-4. **Cost awareness**: Each `GetObjectTagging` call costs approximately $0.0004 per 1,000 requests. For large buckets with millions of objects, apply filters to reduce the number of tag fetch operations.
+4. **Cost awareness**: `GetObjectTagging` requests incur S3 API charges that vary by region. For large buckets with millions of objects, apply filters to reduce the number of tag fetch operations. Refer to the [AWS S3 pricing documentation](https://aws.amazon.com/s3/pricing/) for current rates.
 
 **Example: Optimized tag filtering**
 

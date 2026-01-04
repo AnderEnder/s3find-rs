@@ -67,6 +67,11 @@ impl TagFetchStats {
         self.access_denied.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Returns the total number of tag fetch events.
+    ///
+    /// Note: This counts events, not unique requests. Throttled requests that are
+    /// retried and eventually succeed will be counted in both `throttled` and
+    /// `success` counters. For unique request counts, use `success + failed + access_denied`.
     pub fn total_requests(&self) -> usize {
         self.success.load(Ordering::Relaxed)
             + self.failed.load(Ordering::Relaxed)
@@ -120,14 +125,15 @@ fn calculate_backoff_delay(attempt: u32, base_delay_ms: u64, max_delay_ms: u64) 
 }
 
 /// Simple pseudo-random jitter (0.0 to 1.0)
-/// Uses the current time to generate a simple pseudo-random value
+/// Uses the current time to generate a simple pseudo-random value.
+/// Uses microsecond precision for better distribution across concurrent requests.
 fn rand_jitter() -> f64 {
     use std::time::SystemTime;
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    (nanos % 1000) as f64 / 1000.0
+    (nanos % 1_000_000) as f64 / 1_000_000.0
 }
 
 /// Fetches tags for a single object with retry logic
@@ -262,10 +268,12 @@ where
                         obj.tags = Some(tags);
                     }
                     Err(e) => {
-                        // Log the error but continue processing
-                        // Objects with failed tag fetches will have tags = None
+                        // Log the error but continue processing.
+                        // Objects with failed tag fetches get empty tags to allow filtering
+                        // to continue. This means they won't match any tag filter, which is
+                        // the safest behavior (don't include objects we can't verify).
                         eprintln!("Warning: Failed to fetch tags for {}: {}", key, e);
-                        obj.tags = Some(Vec::new()); // Empty tags on error to allow filtering
+                        obj.tags = Some(Vec::new());
                     }
                 }
 
@@ -425,6 +433,7 @@ mod tests {
     #[test]
     fn test_rand_jitter() {
         // Test that jitter is within expected range [0, 1)
+        // Uses microsecond precision for better distribution
         for _ in 0..100 {
             let jitter = rand_jitter();
             assert!(

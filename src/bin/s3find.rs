@@ -41,7 +41,7 @@ async fn main() -> Result<(), Error> {
             client,
             bucket: args.path.bucket.clone(),
             filters: tag_filters,
-            config: TagFetchConfig::default().with_concurrency(args.tag_concurrency),
+            config: TagFetchConfig::default().with_concurrency(args.tag_concurrency.into()),
             stats: Arc::clone(&tag_stats),
         };
 

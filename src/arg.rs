@@ -176,8 +176,9 @@ Multiple --tag flags use AND logic (all must match).
 This filter requires the s3:GetObjectTagging permission.
 
 Note: Tag filtering requires an API call per object that passes other filters.
-For large result sets, this can be slow and incur costs (~$0.0004 per 1,000 objects).
+For large result sets, this can be slow and incur additional S3 API costs.
 Apply other filters (--name, --mtime, --bytes-size) first to minimize API calls.
+See AWS S3 pricing documentation for current GetObjectTagging request costs.
 
 Examples:
     --tag environment=production
@@ -206,13 +207,14 @@ Examples:
         name = "tag-concurrency",
         long = "tag-concurrency",
         default_value = "50",
+        value_parser = clap::value_parser!(u16).range(1..=1000),
         long_help = r#"Maximum number of concurrent GetObjectTagging API requests.
 
 Higher values increase throughput but may cause throttling.
 AWS S3 supports ~3,500 requests/second per prefix.
-Default: 50 (conservative, suitable for most workloads)"#
+Valid range: 1-1000. Default: 50 (conservative, suitable for most workloads)"#
     )]
-    pub tag_concurrency: usize,
+    pub tag_concurrency: u16,
 
     /// Modification time for match
     #[arg(

@@ -9,6 +9,11 @@ use crate::filter::TagFilterList;
 use crate::tag_fetcher::{TagFetchConfig, TagFetchStats, fetch_tags_for_objects};
 
 const CHUNK: usize = 1000;
+
+/// Batch size for tag fetching operations.
+/// A value of 100 balances memory usage with API efficiency and works well with
+/// the default `tag_concurrency` (50), allowing up to 50 concurrent tag fetches
+/// per batch without overwhelming S3 API limits.
 const TAG_FETCH_BATCH_SIZE: usize = 100;
 
 pub async fn list_filter_execute<P, F, Fut, Fut2>(
@@ -143,11 +148,13 @@ where
     )
     .await;
 
-    // Apply tag filters and collect matching objects
+    // Apply tag filters and collect matching objects.
+    // Objects where tags couldn't be fetched (None) or failed to fetch (empty)
+    // won't match any tag filter, ensuring we only include verified matches.
     let matching: Vec<StreamObject> = objects_with_tags
         .into_iter()
         .filter(|obj| {
-            // Apply tag filter - treat None (tags not fetched) as false
+            // Apply tag filter - treat None (tags not fetched) as no match
             tag_ctx.filters.matches(obj).unwrap_or(false)
         })
         .collect();
