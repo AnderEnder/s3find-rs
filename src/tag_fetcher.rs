@@ -501,4 +501,253 @@ mod tests {
         // Object without key should return None
         assert!(stream_obj.key().is_none());
     }
+
+    // Mock-based tests for fetch_tags_for_objects
+    use aws_config::BehaviorVersion;
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_types::body::SdkBody;
+    use http::{HeaderValue, StatusCode};
+
+    fn make_test_client(events: Vec<ReplayEvent>) -> Client {
+        let replay_client = StaticReplayClient::new(events);
+        Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test", "test", None, None, "test",
+                ))
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client)
+                .build(),
+        )
+    }
+
+    fn make_tag_response(key: &str, tags: &[(&str, &str)]) -> ReplayEvent {
+        let uri = format!(
+            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging",
+            key
+        );
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let tag_xml: String = tags
+            .iter()
+            .map(|(k, v)| format!("<Tag><Key>{}</Key><Value>{}</Value></Tag>", k, v))
+            .collect::<Vec<_>>()
+            .join("");
+
+        let resp_body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+            <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                <TagSet>{}</TagSet>
+            </Tagging>"#,
+            tag_xml
+        );
+
+        let resp = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body))
+            .unwrap();
+
+        ReplayEvent::new(req, resp)
+    }
+
+    fn make_error_response(key: &str, status: u16) -> ReplayEvent {
+        let uri = format!(
+            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging",
+            key
+        );
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp = http::Response::builder()
+            .status(StatusCode::from_u16(status).unwrap())
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(""))
+            .unwrap();
+
+        ReplayEvent::new(req, resp)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_success() {
+        let events = vec![
+            make_tag_response("file1.txt", &[("env", "prod"), ("team", "data")]),
+            make_tag_response("file2.txt", &[("env", "dev")]),
+        ];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig::default().with_concurrency(1);
+
+        let objects = vec![
+            StreamObject::from_object(Object::builder().key("file1.txt").build()),
+            StreamObject::from_object(Object::builder().key("file2.txt").build()),
+        ];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].tags.is_some());
+        assert!(results[1].tags.is_some());
+        assert_eq!(stats.success.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_with_delete_marker() {
+        // Delete markers should get empty tags without API call
+        let client = make_test_client(vec![]);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig::default();
+
+        let object = Object::builder().key("deleted.txt").build();
+        let objects = vec![StreamObject {
+            object,
+            version_id: Some("v1".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: true,
+            tags: None,
+        }];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_some());
+        assert!(results[0].tags.as_ref().unwrap().is_empty());
+        // No API calls made for delete markers
+        assert_eq!(stats.success.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_already_has_tags() {
+        // Objects with existing tags should be skipped
+        let client = make_test_client(vec![]);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig::default();
+
+        let object = Object::builder().key("cached.txt").build();
+        let existing_tags = vec![Tag::builder().key("cached").value("true").build().unwrap()];
+        let objects = vec![StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: Some(existing_tags),
+        }];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_some());
+        assert_eq!(results[0].tags.as_ref().unwrap().len(), 1);
+        // No API calls made for objects with existing tags
+        assert_eq!(stats.success.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_access_denied() {
+        let events = vec![make_error_response("forbidden.txt", 403)];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig::default().with_concurrency(1);
+
+        let objects = vec![StreamObject::from_object(
+            Object::builder().key("forbidden.txt").build(),
+        )];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        // Failed fetches get empty tags
+        assert!(results[0].tags.is_some());
+        assert!(results[0].tags.as_ref().unwrap().is_empty());
+        assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_not_found() {
+        let events = vec![make_error_response("missing.txt", 404)];
+
+        let client = make_test_client(events);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig::default().with_concurrency(1);
+
+        let objects = vec![StreamObject::from_object(
+            Object::builder().key("missing.txt").build(),
+        )];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_some());
+        assert!(results[0].tags.as_ref().unwrap().is_empty());
+        assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_tags_for_objects_without_key() {
+        // Objects without keys get empty tags without API call
+        let client = make_test_client(vec![]);
+        let stats = Arc::new(TagFetchStats::new());
+        let config = TagFetchConfig::default();
+
+        let objects = vec![StreamObject::from_object(Object::builder().build())];
+
+        let results = fetch_tags_for_objects(
+            client,
+            "test-bucket".to_string(),
+            objects,
+            config,
+            Arc::clone(&stats),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].tags.is_some());
+        assert!(results[0].tags.as_ref().unwrap().is_empty());
+        assert_eq!(stats.success.load(Ordering::Relaxed), 0);
+    }
 }
