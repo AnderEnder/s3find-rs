@@ -333,6 +333,47 @@ impl LocalStackFixture {
             .expect("Failed to put object");
     }
 
+    /// Upload an object with tags
+    async fn put_object_with_tags(&self, key: &str, body: &[u8], tags: &[(&str, &str)]) {
+        // First upload the object
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(ByteStream::from(body.to_vec()))
+            .send()
+            .await
+            .expect("Failed to put object");
+
+        // Then set tags if provided
+        if !tags.is_empty() {
+            let tag_set: Vec<aws_sdk_s3::types::Tag> = tags
+                .iter()
+                .map(|(k, v)| {
+                    aws_sdk_s3::types::Tag::builder()
+                        .key(*k)
+                        .value(*v)
+                        .build()
+                        .unwrap()
+                })
+                .collect();
+
+            self.client
+                .put_object_tagging()
+                .bucket(&self.bucket)
+                .key(key)
+                .tagging(
+                    aws_sdk_s3::types::Tagging::builder()
+                        .set_tag_set(Some(tag_set))
+                        .build()
+                        .unwrap(),
+                )
+                .send()
+                .await
+                .expect("Failed to set object tags");
+        }
+    }
+
     /// Get the S3 path for use with s3find CLI
     fn s3_path(&self, prefix: &str) -> String {
         format!("s3://{}/{}", self.bucket, prefix)
@@ -1021,5 +1062,375 @@ async fn test_all_versions_with_maxdepth_warning() {
         "Expected at least 2 versions of each file, found root.txt={}, nested.txt={}",
         root_count,
         nested_count
+    );
+}
+
+// ============================================================================
+// Tag Filtering Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_tag_filter_basic() {
+    let bucket_name = unique_bucket_name("test-tag-basic");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create objects with different tags
+    fixture
+        .put_object_with_tags("prod-file.txt", b"prod content", &[("env", "production")])
+        .await;
+    fixture
+        .put_object_with_tags("dev-file.txt", b"dev content", &[("env", "development")])
+        .await;
+    fixture
+        .put_object_with_tags(
+            "staging-file.txt",
+            b"staging content",
+            &[("env", "staging")],
+        )
+        .await;
+    fixture.put_object("no-tags.txt", b"no tags").await;
+
+    // Find objects with env=production
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--tag")
+        .arg("env=production")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("prod-file.txt"))
+        .stdout(predicate::str::contains("dev-file.txt").not())
+        .stdout(predicate::str::contains("staging-file.txt").not())
+        .stdout(predicate::str::contains("no-tags.txt").not());
+}
+
+#[tokio::test]
+async fn test_tag_exists_filter() {
+    let bucket_name = unique_bucket_name("test-tag-exists");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create objects with and without owner tag
+    fixture
+        .put_object_with_tags("owned.txt", b"owned", &[("owner", "team-a")])
+        .await;
+    fixture
+        .put_object_with_tags("also-owned.txt", b"also owned", &[("owner", "team-b")])
+        .await;
+    fixture
+        .put_object_with_tags("categorized.txt", b"categorized", &[("category", "data")])
+        .await;
+    fixture.put_object("untagged.txt", b"no tags").await;
+
+    // Find objects that have the 'owner' tag (any value)
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--tag-exists")
+        .arg("owner")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("owned.txt"))
+        .stdout(predicate::str::contains("also-owned.txt"))
+        .stdout(predicate::str::contains("categorized.txt").not())
+        .stdout(predicate::str::contains("untagged.txt").not());
+}
+
+#[tokio::test]
+async fn test_tag_filter_multiple_and_logic() {
+    let bucket_name = unique_bucket_name("test-tag-multiple");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create objects with various tag combinations
+    fixture
+        .put_object_with_tags(
+            "both-match.txt",
+            b"content",
+            &[("env", "production"), ("team", "data")],
+        )
+        .await;
+    fixture
+        .put_object_with_tags(
+            "only-env.txt",
+            b"content",
+            &[("env", "production"), ("team", "other")],
+        )
+        .await;
+    fixture
+        .put_object_with_tags(
+            "only-team.txt",
+            b"content",
+            &[("env", "staging"), ("team", "data")],
+        )
+        .await;
+    fixture
+        .put_object_with_tags(
+            "neither.txt",
+            b"content",
+            &[("env", "dev"), ("team", "other")],
+        )
+        .await;
+
+    // Find objects with BOTH env=production AND team=data
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--tag")
+        .arg("env=production")
+        .arg("--tag")
+        .arg("team=data")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("both-match.txt"))
+        .stdout(predicate::str::contains("only-env.txt").not())
+        .stdout(predicate::str::contains("only-team.txt").not())
+        .stdout(predicate::str::contains("neither.txt").not());
+}
+
+#[tokio::test]
+async fn test_tag_filter_combined_with_name_filter() {
+    let bucket_name = unique_bucket_name("test-tag-combined");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create objects with tags and different extensions
+    fixture
+        .put_object_with_tags("report.txt", b"report", &[("type", "important")])
+        .await;
+    fixture
+        .put_object_with_tags("data.json", b"{}", &[("type", "important")])
+        .await;
+    fixture
+        .put_object_with_tags("notes.txt", b"notes", &[("type", "draft")])
+        .await;
+    fixture.put_object("readme.txt", b"readme").await;
+
+    // Find .txt files with type=important
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--name")
+        .arg("*.txt")
+        .arg("--tag")
+        .arg("type=important")
+        .arg("ls");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("report.txt"))
+        .stdout(predicate::str::contains("data.json").not()) // Wrong extension
+        .stdout(predicate::str::contains("notes.txt").not()) // Wrong tag value
+        .stdout(predicate::str::contains("readme.txt").not()); // No tags
+}
+
+#[tokio::test]
+async fn test_tag_filter_with_limit() {
+    let bucket_name = unique_bucket_name("test-tag-limit");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create several objects with same tag
+    for i in 1..=5 {
+        fixture
+            .put_object_with_tags(&format!("file{}.txt", i), b"content", &[("batch", "test")])
+            .await;
+    }
+
+    // Find objects with tag, limited to 2
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--tag")
+        .arg("batch=test")
+        .arg("--limit")
+        .arg("2")
+        .arg("ls");
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Count matching files - should be exactly 2
+    let count = stdout
+        .lines()
+        .filter(|line| line.contains("file") && line.contains(".txt"))
+        .count();
+    assert_eq!(
+        2, count,
+        "Expected exactly 2 results with --limit 2, got {}: {}",
+        count, stdout
+    );
+}
+
+#[tokio::test]
+async fn test_lstags_command() {
+    let bucket_name = unique_bucket_name("test-lstags");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create objects with various tags
+    fixture
+        .put_object_with_tags(
+            "multi-tag.txt",
+            b"content",
+            &[("env", "production"), ("owner", "team-a")],
+        )
+        .await;
+    fixture
+        .put_object_with_tags("single-tag.txt", b"content", &[("category", "data")])
+        .await;
+    fixture.put_object("no-tags.txt", b"content").await;
+
+    // Run lstags command
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path("")).arg("lstags");
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // All files should be listed
+    assert!(
+        stdout.contains("multi-tag.txt"),
+        "Expected multi-tag.txt in output: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("single-tag.txt"),
+        "Expected single-tag.txt in output: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("no-tags.txt"),
+        "Expected no-tags.txt in output: {}",
+        stdout
+    );
+
+    // Check for tag values in output (format: key=value)
+    assert!(
+        stdout.contains("env=production") || stdout.contains("env:production"),
+        "Expected env=production tag in output: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("owner=team-a") || stdout.contains("owner:team-a"),
+        "Expected owner=team-a tag in output: {}",
+        stdout
+    );
+}
+
+#[tokio::test]
+async fn test_tag_filter_with_summarize() {
+    let bucket_name = unique_bucket_name("test-tag-summarize");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create objects with tags
+    fixture
+        .put_object_with_tags("file1.txt", b"content1", &[("env", "prod")])
+        .await;
+    fixture
+        .put_object_with_tags("file2.txt", b"content2", &[("env", "prod")])
+        .await;
+    fixture
+        .put_object_with_tags("file3.txt", b"content3", &[("env", "dev")])
+        .await;
+
+    // Run with summarize flag
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--tag")
+        .arg("env=prod")
+        .arg("--summarize")
+        .arg("ls");
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Check that matching files are found
+    assert!(
+        stdout.contains("file1.txt"),
+        "Expected file1.txt in output: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("file2.txt"),
+        "Expected file2.txt in output: {}",
+        stdout
+    );
+
+    // Check for tag fetch statistics in stderr
+    assert!(
+        stderr.contains("Tag fetch stats") || stderr.contains("success"),
+        "Expected tag fetch stats in stderr: {}",
+        stderr
+    );
+}
+
+#[tokio::test]
+async fn test_tag_filter_no_matches() {
+    let bucket_name = unique_bucket_name("test-tag-no-match");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create objects with tags that won't match our filter
+    fixture
+        .put_object_with_tags("file1.txt", b"content", &[("env", "development")])
+        .await;
+    fixture
+        .put_object_with_tags("file2.txt", b"content", &[("env", "staging")])
+        .await;
+
+    // Search for non-existent tag value
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--tag")
+        .arg("env=nonexistent")
+        .arg("ls");
+
+    // Should succeed with no output
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("file1.txt").not())
+        .stdout(predicate::str::contains("file2.txt").not());
+}
+
+#[tokio::test]
+async fn test_tag_concurrency_option() {
+    let bucket_name = unique_bucket_name("test-tag-concurrency");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // Create a few objects with tags
+    for i in 1..=3 {
+        fixture
+            .put_object_with_tags(
+                &format!("file{}.txt", i),
+                b"content",
+                &[("batch", "concurrent")],
+            )
+            .await;
+    }
+
+    // Run with custom tag-concurrency setting
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--tag")
+        .arg("batch=concurrent")
+        .arg("--tag-concurrency")
+        .arg("10")
+        .arg("ls");
+
+    let output = cmd.output().expect("Failed to execute command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should find all 3 files
+    assert!(
+        stdout.contains("file1.txt"),
+        "Expected file1.txt: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("file2.txt"),
+        "Expected file2.txt: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("file3.txt"),
+        "Expected file3.txt: {}",
+        stdout
     );
 }

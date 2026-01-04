@@ -7,4 +7,5 @@ pub mod filter;
 pub mod filter_list;
 pub mod run;
 pub mod run_command;
+pub mod tag_fetcher;
 pub mod utils;
