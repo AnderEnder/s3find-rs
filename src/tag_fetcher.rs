@@ -109,7 +109,9 @@ impl TagFetchConfig {
 /// Calculate exponential backoff delay with jitter
 fn calculate_backoff_delay(attempt: u32, base_delay_ms: u64, max_delay_ms: u64) -> Duration {
     // Exponential backoff: base_delay * 2^attempt
-    let delay_ms = base_delay_ms.saturating_mul(1u64 << attempt);
+    // Cap attempt to 63 to prevent shift overflow (1u64 << 64 would overflow)
+    let safe_attempt = attempt.min(63);
+    let delay_ms = base_delay_ms.saturating_mul(1u64 << safe_attempt);
     let capped_delay = delay_ms.min(max_delay_ms);
 
     // Add jitter: random value between 0 and delay/2
@@ -391,5 +393,101 @@ mod tests {
 
         assert!(stream_obj.tags.is_some());
         assert!(stream_obj.tags.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_tag_fetch_error_display() {
+        // Test error display messages
+        let err = TagFetchError::AccessDenied {
+            bucket: "my-bucket".to_string(),
+            key: "my-key".to_string(),
+        };
+        assert!(err.to_string().contains("Access denied"));
+        assert!(err.to_string().contains("my-bucket"));
+        assert!(err.to_string().contains("my-key"));
+
+        let err = TagFetchError::NotFound {
+            bucket: "bucket".to_string(),
+            key: "key".to_string(),
+        };
+        assert!(err.to_string().contains("Object not found"));
+
+        let err = TagFetchError::Throttled;
+        assert!(err.to_string().contains("Throttled"));
+
+        let err = TagFetchError::ApiError("Custom error".to_string());
+        assert!(err.to_string().contains("Custom error"));
+
+        let err = TagFetchError::MissingKey;
+        assert!(err.to_string().contains("Missing object key"));
+    }
+
+    #[test]
+    fn test_rand_jitter() {
+        // Test that jitter is within expected range [0, 1)
+        for _ in 0..100 {
+            let jitter = rand_jitter();
+            assert!(
+                jitter >= 0.0 && jitter < 1.0,
+                "Jitter out of range: {}",
+                jitter
+            );
+        }
+    }
+
+    #[test]
+    fn test_tag_fetch_stats_concurrent_updates() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let stats = Arc::new(TagFetchStats::new());
+        let mut handles = vec![];
+
+        // Spawn multiple threads to update stats
+        for _ in 0..4 {
+            let stats_clone = Arc::clone(&stats);
+            handles.push(thread::spawn(move || {
+                for _ in 0..100 {
+                    stats_clone.record_success();
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(stats.success.load(Ordering::Relaxed), 400);
+    }
+
+    #[test]
+    fn test_calculate_backoff_with_zero_base_delay() {
+        // Edge case: base delay of 0
+        let delay = calculate_backoff_delay(0, 0, 5000);
+        assert!(delay.as_millis() <= 2500); // Only jitter applies
+    }
+
+    #[test]
+    fn test_calculate_backoff_overflow_protection() {
+        // Test with max attempt to ensure no overflow
+        let delay = calculate_backoff_delay(u32::MAX, 100, 5000);
+        // Should be capped at max_delay + jitter
+        assert!(delay.as_millis() <= 7500);
+    }
+
+    #[test]
+    fn test_object_without_key_handling() {
+        // Test behavior when object has no key
+        let object = Object::builder().build(); // No key set
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: None,
+        };
+
+        // Object without key should return None
+        assert!(stream_obj.key().is_none());
     }
 }

@@ -2088,4 +2088,146 @@ mod tests {
         assert_eq!(stream_obj.display_key(), "simple.txt");
         assert_eq!(stream_obj.object.size(), Some(200));
     }
+
+    #[test]
+    fn test_stream_object_has_tags() {
+        let object = Object::builder().key("test.txt").build();
+        let mut stream_obj = StreamObject::from_object(object);
+
+        // Initially, tags are not fetched
+        assert!(!stream_obj.has_tags());
+
+        // After setting empty tags
+        stream_obj.tags = Some(vec![]);
+        assert!(stream_obj.has_tags());
+
+        // After setting actual tags
+        stream_obj.tags = Some(vec![
+            Tag::builder().key("env").value("prod").build().unwrap(),
+        ]);
+        assert!(stream_obj.has_tags());
+    }
+
+    #[test]
+    fn test_stream_object_get_tag() {
+        let object = Object::builder().key("test.txt").build();
+        let mut stream_obj = StreamObject::from_object(object);
+
+        // Tags not fetched
+        assert_eq!(stream_obj.get_tag("env"), None);
+
+        // Set tags
+        stream_obj.tags = Some(vec![
+            Tag::builder().key("env").value("prod").build().unwrap(),
+            Tag::builder().key("team").value("data").build().unwrap(),
+        ]);
+
+        // Get existing tag
+        assert_eq!(stream_obj.get_tag("env"), Some("prod"));
+        assert_eq!(stream_obj.get_tag("team"), Some("data"));
+
+        // Get non-existent tag
+        assert_eq!(stream_obj.get_tag("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_stream_object_has_tag_key() {
+        let object = Object::builder().key("test.txt").build();
+        let mut stream_obj = StreamObject::from_object(object);
+
+        // Tags not fetched - should return false
+        assert!(!stream_obj.has_tag_key("env"));
+
+        // Empty tags
+        stream_obj.tags = Some(vec![]);
+        assert!(!stream_obj.has_tag_key("env"));
+
+        // Set tags
+        stream_obj.tags = Some(vec![
+            Tag::builder().key("env").value("prod").build().unwrap(),
+            Tag::builder().key("team").value("data").build().unwrap(),
+        ]);
+
+        // Check existing keys
+        assert!(stream_obj.has_tag_key("env"));
+        assert!(stream_obj.has_tag_key("team"));
+
+        // Check non-existent key
+        assert!(!stream_obj.has_tag_key("nonexistent"));
+    }
+
+    #[test]
+    fn test_stream_object_display_key_variants() {
+        // Test all display_key() variants for better coverage
+        let object = Object::builder().key("file.txt").build();
+
+        // Non-versioned object
+        let stream_obj = StreamObject {
+            object: object.clone(),
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: None,
+        };
+        assert_eq!(stream_obj.display_key(), "file.txt");
+
+        // Versioned object (not latest, not delete marker)
+        let stream_obj = StreamObject {
+            object: object.clone(),
+            version_id: Some("v123".to_string()),
+            is_latest: Some(false),
+            is_delete_marker: false,
+            tags: None,
+        };
+        assert_eq!(stream_obj.display_key(), "file.txt?versionId=v123");
+
+        // Latest version (not delete marker)
+        let stream_obj = StreamObject {
+            object: object.clone(),
+            version_id: Some("v456".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: false,
+            tags: None,
+        };
+        assert_eq!(stream_obj.display_key(), "file.txt?versionId=v456 (latest)");
+
+        // Delete marker (not latest)
+        let stream_obj = StreamObject {
+            object: object.clone(),
+            version_id: Some("v789".to_string()),
+            is_latest: Some(false),
+            is_delete_marker: true,
+            tags: None,
+        };
+        assert_eq!(
+            stream_obj.display_key(),
+            "file.txt?versionId=v789 (delete marker)"
+        );
+
+        // Delete marker that is also latest
+        let stream_obj = StreamObject {
+            object: object.clone(),
+            version_id: Some("v999".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: true,
+            tags: None,
+        };
+        assert_eq!(
+            stream_obj.display_key(),
+            "file.txt?versionId=v999 (latest) (delete marker)"
+        );
+
+        // Delete marker with no is_latest info
+        let stream_obj = StreamObject {
+            object,
+            version_id: Some("v111".to_string()),
+            is_latest: None,
+            is_delete_marker: true,
+            tags: None,
+        };
+        assert_eq!(
+            stream_obj.display_key(),
+            "file.txt?versionId=v111 (delete marker)"
+        );
+    }
 }
