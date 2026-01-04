@@ -75,11 +75,6 @@ pub trait TagAwareFilter {
     /// Returns true if the object matches this filter.
     /// Returns None if tags haven't been fetched yet (caller should fetch tags first).
     fn filter_with_tags(&self, object: &StreamObject) -> Option<bool>;
-
-    /// Returns true if this filter requires tags to be fetched.
-    fn requires_tags(&self) -> bool {
-        true
-    }
 }
 
 impl TagAwareFilter for TagFilter {

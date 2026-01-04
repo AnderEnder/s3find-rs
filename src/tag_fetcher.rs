@@ -20,7 +20,7 @@ pub enum TagFetchError {
     #[error("Object not found: {bucket}/{key}")]
     NotFound { bucket: String, key: String },
 
-    #[error("Throttled by S3 API")]
+    #[error("Request throttled by S3 API. Consider reducing --tag-concurrency.")]
     Throttled,
 
     #[error("S3 API error: {0}")]
@@ -115,7 +115,8 @@ impl TagFetchConfig {
 /// Calculate exponential backoff delay with jitter
 fn calculate_backoff_delay(attempt: u32, base_delay_ms: u64, max_delay_ms: u64) -> Duration {
     // Exponential backoff: base_delay * 2^attempt
-    // Cap attempt to 63 to prevent shift overflow (1u64 << 64 would overflow)
+    // Cap attempt to 63 so the shift amount never exceeds 63 (the maximum valid shift for u64);
+    // in Rust, shifting a u64 by >= 64 bits panics in debug builds and wraps in release builds.
     let safe_attempt = attempt.min(63);
     let delay_ms = base_delay_ms.saturating_mul(1u64 << safe_attempt);
     let capped_delay = delay_ms.min(max_delay_ms);
@@ -126,8 +127,8 @@ fn calculate_backoff_delay(attempt: u32, base_delay_ms: u64, max_delay_ms: u64) 
 }
 
 /// Simple pseudo-random jitter (0.0 to 1.0)
-/// Uses the current time's nanosecond component (mod 1_000_000) to generate
-/// a pseudo-random value with microsecond-level variation for better
+/// Uses nanosecond-based variation (modulo 1,000,000) to generate jitter
+/// in the range [0.0, 1.0) with sub-millisecond variation for better
 /// distribution across concurrent requests.
 fn rand_jitter() -> f64 {
     use std::time::SystemTime;
@@ -423,7 +424,8 @@ mod tests {
         assert!(err.to_string().contains("Object not found"));
 
         let err = TagFetchError::Throttled;
-        assert!(err.to_string().contains("Throttled"));
+        assert!(err.to_string().contains("throttled"));
+        assert!(err.to_string().contains("tag-concurrency"));
 
         let err = TagFetchError::ApiError("Custom error".to_string());
         assert!(err.to_string().contains("Custom error"));
@@ -435,7 +437,7 @@ mod tests {
     #[test]
     fn test_rand_jitter() {
         // Test that jitter is within expected range [0, 1)
-        // Uses microsecond precision for better distribution
+        // Uses sub-millisecond jitter based on nanoseconds for better distribution
         for _ in 0..100 {
             let jitter = rand_jitter();
             assert!(
