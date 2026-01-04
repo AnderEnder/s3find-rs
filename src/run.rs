@@ -1,12 +1,12 @@
 use aws_sdk_s3::Client;
-use futures::Future;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
+use futures::Future;
 use std::sync::Arc;
 
 use crate::command::{FindStat, StreamObject};
 use crate::filter::TagFilterList;
-use crate::tag_fetcher::{TagFetchConfig, TagFetchStats, fetch_tags_for_objects};
+use crate::tag_fetcher::{fetch_tags_for_objects, TagFetchConfig, TagFetchStats};
 
 const CHUNK: usize = 1000;
 const TAG_FETCH_BATCH_SIZE: usize = 100;
@@ -30,6 +30,16 @@ where
     }
 }
 
+/// Context for tag-aware filtering operations.
+/// Bundles S3 client and tag filtering configuration.
+pub struct TagFilterContext {
+    pub client: Client,
+    pub bucket: String,
+    pub filters: TagFilterList,
+    pub config: TagFetchConfig,
+    pub stats: Arc<TagFetchStats>,
+}
+
 /// Two-phase filtering with tag support.
 ///
 /// Phase 1: Apply cheap filters (name, size, mtime, etc.)
@@ -41,11 +51,7 @@ pub async fn list_filter_execute_with_tags<P, F, Fut, Fut2>(
     iterator: impl Stream<Item = Vec<StreamObject>>,
     limit: Option<usize>,
     stats: Option<FindStat>,
-    client: Client,
-    bucket: String,
-    tag_filters: TagFilterList,
-    tag_config: TagFetchConfig,
-    tag_stats: Arc<TagFetchStats>,
+    tag_ctx: TagFilterContext,
     mut cheap_filter: P,
     f: &mut F,
 ) -> Option<FindStat>
@@ -85,11 +91,7 @@ where
         if batch.len() >= TAG_FETCH_BATCH_SIZE {
             let (processed, new_stats) = process_tag_batch(
                 std::mem::take(&mut batch),
-                &client,
-                &bucket,
-                &tag_filters,
-                &tag_config,
-                &tag_stats,
+                &tag_ctx,
                 remaining_limit,
                 current_stats,
                 f,
@@ -113,11 +115,7 @@ where
     if !batch.is_empty() {
         let (_processed, new_stats) = process_tag_batch(
             batch,
-            &client,
-            &bucket,
-            &tag_filters,
-            &tag_config,
-            &tag_stats,
+            &tag_ctx,
             remaining_limit,
             current_stats,
             f,
@@ -132,11 +130,7 @@ where
 /// Process a batch of objects: fetch tags and apply tag filters
 async fn process_tag_batch<F, Fut2>(
     objects: Vec<StreamObject>,
-    client: &Client,
-    bucket: &str,
-    tag_filters: &TagFilterList,
-    tag_config: &TagFetchConfig,
-    tag_stats: &Arc<TagFetchStats>,
+    tag_ctx: &TagFilterContext,
     limit: Option<usize>,
     stats: Option<FindStat>,
     f: &mut F,
@@ -147,11 +141,11 @@ where
 {
     // Fetch tags for all objects in the batch
     let objects_with_tags = fetch_tags_for_objects(
-        client.clone(),
-        bucket.to_string(),
+        tag_ctx.client.clone(),
+        tag_ctx.bucket.clone(),
         objects,
-        tag_config.clone(),
-        Arc::clone(tag_stats),
+        tag_ctx.config.clone(),
+        Arc::clone(&tag_ctx.stats),
     )
     .await;
 
@@ -160,7 +154,7 @@ where
         .into_iter()
         .filter(|obj| {
             // Apply tag filter - treat None (tags not fetched) as false
-            tag_filters.matches(obj).unwrap_or(false)
+            tag_ctx.filters.matches(obj).unwrap_or(false)
         })
         .collect();
 

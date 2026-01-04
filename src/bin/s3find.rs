@@ -1,6 +1,6 @@
 use std::future::ready;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use anyhow::Error;
 
@@ -27,7 +27,6 @@ async fn main() -> Result<(), Error> {
 
     // Use two-phase filtering if tag filters are configured
     let stats = if tag_filters.has_filters() {
-        let tag_config = TagFetchConfig::default().with_concurrency(args.tag_concurrency);
         let tag_stats = Arc::new(TagFetchStats::new());
 
         // Show warning for large operations
@@ -38,15 +37,19 @@ async fn main() -> Result<(), Error> {
             );
         }
 
+        let tag_ctx = TagFilterContext {
+            client,
+            bucket: args.path.bucket.clone(),
+            filters: tag_filters,
+            config: TagFetchConfig::default().with_concurrency(args.tag_concurrency),
+            stats: Arc::clone(&tag_stats),
+        };
+
         let result = list_filter_execute_with_tags(
             stream,
             args.limit,
             stats,
-            client,
-            args.path.bucket.clone(),
-            tag_filters,
-            tag_config,
-            Arc::clone(&tag_stats),
+            tag_ctx,
             |x| ready(filters.test_match(x)),
             &mut |acc, x| command.exec(acc, x),
         )
