@@ -1703,6 +1703,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
+        // Test that ListTags skips delete markers (they can't have tags)
+        let key1 = "test/file1.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // No HTTP events needed - delete marker should be skipped
+        let replay_client = StaticReplayClient::new(vec![]);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        // Create a delete marker StreamObject
+        let stream_obj = StreamObject {
+            object: object1,
+            version_id: Some("delete-marker-version".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: true, // This is a delete marker
+            tags: None,
+        };
+
+        // Execute - should skip the delete marker without making API calls
+        cmd.execute(&client, &path, &[stream_obj]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         let key1 = "test/file1.txt";
         let key2 = "test/file2.txt";
