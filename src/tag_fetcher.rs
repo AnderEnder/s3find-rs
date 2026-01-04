@@ -216,11 +216,11 @@ fn classify_error(err: &SdkError<GetObjectTaggingError>, bucket: &str, key: &str
     }
 }
 
-/// Fetches tags for a stream of objects with concurrency control
+/// Fetches tags for a collection of objects with concurrency control
 ///
-/// This function takes an iterator of StreamObjects, fetches tags for each one
-/// concurrently (up to the configured limit), and returns a new iterator with
-/// the tags populated.
+/// This function takes an iterable collection of StreamObjects, fetches tags
+/// for each one concurrently (up to the configured limit), and returns a
+/// `Vec<StreamObject>` with the tags populated.
 pub async fn fetch_tags_for_objects<I>(
     client: Client,
     bucket: String,
