@@ -86,6 +86,9 @@ mod tests {
             storage_class: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
         let client_with_creds = setup_client(&args).await;
 
@@ -122,6 +125,9 @@ mod tests {
             storage_class: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let client = setup_client(&args).await;
@@ -152,6 +158,9 @@ mod tests {
             storage_class: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let client = setup_client(&args).await;
@@ -182,6 +191,9 @@ mod tests {
             storage_class: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let client = setup_client(&args).await;
@@ -212,6 +224,9 @@ mod tests {
             storage_class: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let client = setup_client(&args).await;

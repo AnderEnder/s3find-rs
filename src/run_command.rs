@@ -400,24 +400,34 @@ impl RunCommand for ListTags {
                 continue;
             }
 
-            let mut request = client
-                .get_object_tagging()
-                .bucket(path.bucket.clone())
-                .set_key(stream_obj.object.key.clone());
+            // Use cached tags if available (from tag filtering), otherwise fetch
+            let tags: String = if let Some(ref cached_tags) = stream_obj.tags {
+                cached_tags
+                    .iter()
+                    .map(|x| format!("{}:{}", x.key(), x.value()))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            } else {
+                // Fetch tags via API
+                let mut request = client
+                    .get_object_tagging()
+                    .bucket(path.bucket.clone())
+                    .set_key(stream_obj.object.key.clone());
 
-            // Pass version_id if present
-            if let Some(ref vid) = stream_obj.version_id {
-                request = request.version_id(vid);
-            }
+                // Pass version_id if present
+                if let Some(ref vid) = stream_obj.version_id {
+                    request = request.version_id(vid);
+                }
 
-            let tag_output = request.send().await?;
+                let tag_output = request.send().await?;
 
-            let tags: String = tag_output
-                .tag_set
-                .into_iter()
-                .map(|x| format!("{}:{}", x.key, x.value))
-                .collect::<Vec<String>>()
-                .join(",");
+                tag_output
+                    .tag_set
+                    .into_iter()
+                    .map(|x| format!("{}:{}", x.key, x.value))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            };
 
             println!(
                 "s3://{}/{} {}",

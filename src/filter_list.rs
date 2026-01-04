@@ -193,6 +193,9 @@ mod tests {
             cmd: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let filter_list = FilterList::from_opts(&opts);

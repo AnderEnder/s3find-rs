@@ -5,7 +5,7 @@ use std::pin::Pin;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output};
-use aws_sdk_s3::types::{DeleteMarkerEntry, Object, ObjectStorageClass, ObjectVersion};
+use aws_sdk_s3::types::{DeleteMarkerEntry, Object, ObjectStorageClass, ObjectVersion, Tag};
 use aws_smithy_async::future::pagination_stream::PaginationStream;
 use aws_smithy_runtime_api::http::Response;
 
@@ -27,6 +27,7 @@ const S3_PATH_DELIMITER: &str = "/";
 ///
 /// This keeps the original Object intact for filters while providing
 /// version information for version-aware operations and display.
+/// Also supports lazy-loaded tags for tag-based filtering.
 #[derive(Debug, Clone)]
 pub struct StreamObject {
     /// The S3 Object (contains key, size, last_modified, etc.)
@@ -37,6 +38,9 @@ pub struct StreamObject {
     pub is_latest: Option<bool>,
     /// Whether this is a delete marker
     pub is_delete_marker: bool,
+    /// Cached object tags (None = not fetched, Some = fetched)
+    /// Tags are lazy-loaded only when tag filtering is enabled.
+    pub tags: Option<Vec<Tag>>,
 }
 
 impl StreamObject {
@@ -47,6 +51,7 @@ impl StreamObject {
             version_id: None,
             is_latest: None,
             is_delete_marker: false,
+            tags: None,
         }
     }
 
@@ -73,6 +78,7 @@ impl StreamObject {
             version_id: version.version_id,
             is_latest: version.is_latest,
             is_delete_marker: false,
+            tags: None,
         }
     }
 
@@ -90,6 +96,7 @@ impl StreamObject {
             version_id: marker.version_id,
             is_latest: marker.is_latest,
             is_delete_marker: true,
+            tags: None,
         }
     }
 
@@ -111,6 +118,31 @@ impl StreamObject {
             (Some(vid), _, false) => format!("{}?versionId={}", key, vid),
             (None, _, _) => key.to_string(),
         }
+    }
+
+    /// Check if tags have been fetched for this object.
+    #[inline]
+    pub fn has_tags(&self) -> bool {
+        self.tags.is_some()
+    }
+
+    /// Get tag value by key.
+    /// Returns None if tags haven't been fetched or if the key doesn't exist.
+    pub fn get_tag(&self, key: &str) -> Option<&str> {
+        self.tags
+            .as_ref()?
+            .iter()
+            .find(|t| t.key() == key)
+            .map(|t| t.value())
+    }
+
+    /// Check if object has a tag with the given key (any value).
+    /// Returns false if tags haven't been fetched.
+    pub fn has_tag_key(&self, key: &str) -> bool {
+        self.tags
+            .as_ref()
+            .map(|tags| tags.iter().any(|t| t.key() == key))
+            .unwrap_or(false)
     }
 }
 
@@ -935,6 +967,9 @@ mod tests {
             limit: Some(100),
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
         let client = setup_client(&args).await;
 
@@ -1014,6 +1049,9 @@ mod tests {
             storage_class: Some(ObjectStorageClass::Standard),
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let client = setup_client(&opts).await;
@@ -1453,6 +1491,9 @@ mod tests {
             storage_class: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let client1 = setup_client(&opts1).await;
@@ -1487,6 +1528,9 @@ mod tests {
             storage_class: None,
             maxdepth: None,
             all_versions: false,
+            tag: Vec::new(),
+            tag_exists: Vec::new(),
+            tag_concurrency: 50,
         };
 
         let client2 = setup_client(&opts_withour_prefix).await;

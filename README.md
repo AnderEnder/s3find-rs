@@ -19,11 +19,13 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
   - [Filter by Size](#find-path-by-size)
   - [Filter by Time](#find-path-by-time)
   - [Filter by Storage Class](#object-storage-class-filter)
+  - [Filter by Tags](#filter-by-tags)
   - [Multiple Filters](#multiple-filters)
   - [Actions and Operations](#actions-and-operations)
 - [Advanced Options](#additional-control)
   - [Depth Control](#depth-control)
   - [Object Versioning](#object-versioning)
+  - [Tag Filtering Performance](#tag-filtering-performance)
 
 ## Installation
 
@@ -316,6 +318,49 @@ s3find 's3://example-bucket/example-path' --storage-class STANDARD print
 s3find 's3://example-bucket/example-path' --storage-class GLACIER print
 ```
 
+### Filter by Tags
+
+Filter objects based on their S3 tags using `--tag` for key-value matching or `--tag-exists` for key presence:
+
+```bash
+# Find objects with a specific tag key and value
+s3find 's3://example-bucket/example-path' --tag 'environment=production' ls
+
+# Find objects with multiple tags (AND logic - all must match)
+s3find 's3://example-bucket/example-path' --tag 'environment=production' --tag 'team=data' ls
+
+# Find objects that have a specific tag key (any value)
+s3find 's3://example-bucket/example-path' --tag-exists 'owner' ls
+
+# Combine tag filters with other filters
+s3find 's3://example-bucket/example-path' --name '*.log' --tag 'retention=long-term' ls
+
+# Control concurrency for tag fetching (default: 50)
+s3find 's3://example-bucket/example-path' --tag 'env=prod' --tag-concurrency 100 ls
+```
+
+**Required IAM Permissions:**
+Tag filtering requires the `s3:GetObjectTagging` permission on the objects being searched.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::example-bucket",
+        "arn:aws:s3:::example-bucket/*"
+      ]
+    }
+  ]
+}
+```
+
 ### Multiple Filters
 
 Combine filters to create more specific queries:
@@ -440,5 +485,32 @@ When `--all-versions` is enabled:
 **Note:** Delete markers are automatically skipped for operations that don't support them (copy, move, download, tags, restore, change-storage, public) since they have no content.
 
 **Note:** `--all-versions` is not compatible with `--maxdepth`. If both are specified, `--all-versions` takes precedence and `--maxdepth` is ignored.
+
+### Tag Filtering Performance
+
+Tag filtering requires an individual `GetObjectTagging` API call for each object that passes the other filters. To optimize performance and cost:
+
+1. **Apply other filters first**: Use `--name`, `--mtime`, `--bytes-size`, or `--storage-class` filters to reduce the number of objects before tag filtering is applied.
+
+2. **Use `--limit`**: When testing or exploring, use `--limit` to cap the number of objects processed.
+
+3. **Adjust concurrency**: Use `--tag-concurrency` to tune parallel API calls (default: 50). Higher values increase throughput but may cause throttling.
+
+4. **Cost awareness**: Each `GetObjectTagging` call costs approximately $0.0004 per 1,000 requests. For large buckets with millions of objects, apply filters to reduce the number of tag fetch operations.
+
+**Example: Optimized tag filtering**
+
+```bash
+# Bad: Fetches tags for ALL objects (expensive for large buckets)
+s3find 's3://large-bucket/' --tag 'env=prod' ls
+
+# Good: Apply cheap filters first, then tag filter
+s3find 's3://large-bucket/' --name '*.log' --mtime -7d --tag 'env=prod' ls
+
+# Good: Use limit when exploring
+s3find 's3://large-bucket/' --tag 'env=prod' --limit 100 ls
+```
+
+When `--summarize` is enabled, tag fetch statistics are displayed showing success/failure counts.
 
 For more information, see the [GitHub repository](https://github.com/AnderEnder/s3find-rs).

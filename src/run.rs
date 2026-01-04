@@ -1,10 +1,15 @@
+use aws_sdk_s3::Client;
 use futures::Future;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
+use std::sync::Arc;
 
 use crate::command::{FindStat, StreamObject};
+use crate::filter::TagFilterList;
+use crate::tag_fetcher::{TagFetchConfig, TagFetchStats, fetch_tags_for_objects};
 
 const CHUNK: usize = 1000;
+const TAG_FETCH_BATCH_SIZE: usize = 100;
 
 pub async fn list_filter_execute<P, F, Fut, Fut2>(
     iterator: impl Stream<Item = Vec<StreamObject>>,
@@ -23,6 +28,159 @@ where
         Some(limit) => list_filter_limit_execute(iterator, limit, stats, p, f).await,
         None => list_filter_unlimited_execute(iterator, stats, p, f).await,
     }
+}
+
+/// Two-phase filtering with tag support.
+///
+/// Phase 1: Apply cheap filters (name, size, mtime, etc.)
+/// Phase 2: Fetch tags for passing objects and apply tag filters
+///
+/// This function is called when tag filters are configured. It fetches tags
+/// only for objects that pass the cheap filters, minimizing API calls.
+pub async fn list_filter_execute_with_tags<P, F, Fut, Fut2>(
+    iterator: impl Stream<Item = Vec<StreamObject>>,
+    limit: Option<usize>,
+    stats: Option<FindStat>,
+    client: Client,
+    bucket: String,
+    tag_filters: TagFilterList,
+    tag_config: TagFetchConfig,
+    tag_stats: Arc<TagFetchStats>,
+    mut cheap_filter: P,
+    f: &mut F,
+) -> Option<FindStat>
+where
+    P: FnMut(&StreamObject) -> Fut,
+    Fut: Future<Output = bool>,
+    F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
+    Fut2: Future<Output = Option<FindStat>>,
+{
+    let mut remaining_limit = limit;
+    let mut current_stats = stats;
+
+    // Process chunks from the stream
+    let mut stream = Box::pin(
+        iterator
+            .map(|x| futures::stream::iter(x.into_iter()))
+            .flatten(),
+    );
+
+    // Collect objects in batches for tag fetching
+    let mut batch: Vec<StreamObject> = Vec::with_capacity(TAG_FETCH_BATCH_SIZE);
+
+    while let Some(obj) = stream.next().await {
+        // Check limit first
+        if remaining_limit == Some(0) {
+            break;
+        }
+
+        // Phase 1: Apply cheap filter
+        if !cheap_filter(&obj).await {
+            continue;
+        }
+
+        batch.push(obj);
+
+        // When batch is full, process it
+        if batch.len() >= TAG_FETCH_BATCH_SIZE {
+            let (processed, new_stats) = process_tag_batch(
+                std::mem::take(&mut batch),
+                &client,
+                &bucket,
+                &tag_filters,
+                &tag_config,
+                &tag_stats,
+                remaining_limit,
+                current_stats,
+                f,
+            )
+            .await;
+
+            current_stats = new_stats;
+
+            if let Some(ref mut remaining) = remaining_limit {
+                *remaining = remaining.saturating_sub(processed);
+                if *remaining == 0 {
+                    break;
+                }
+            }
+
+            batch = Vec::with_capacity(TAG_FETCH_BATCH_SIZE);
+        }
+    }
+
+    // Process remaining objects in the last batch
+    if !batch.is_empty() {
+        let (_processed, new_stats) = process_tag_batch(
+            batch,
+            &client,
+            &bucket,
+            &tag_filters,
+            &tag_config,
+            &tag_stats,
+            remaining_limit,
+            current_stats,
+            f,
+        )
+        .await;
+        current_stats = new_stats;
+    }
+
+    current_stats
+}
+
+/// Process a batch of objects: fetch tags and apply tag filters
+async fn process_tag_batch<F, Fut2>(
+    objects: Vec<StreamObject>,
+    client: &Client,
+    bucket: &str,
+    tag_filters: &TagFilterList,
+    tag_config: &TagFetchConfig,
+    tag_stats: &Arc<TagFetchStats>,
+    limit: Option<usize>,
+    stats: Option<FindStat>,
+    f: &mut F,
+) -> (usize, Option<FindStat>)
+where
+    F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
+    Fut2: Future<Output = Option<FindStat>>,
+{
+    // Fetch tags for all objects in the batch
+    let objects_with_tags = fetch_tags_for_objects(
+        client.clone(),
+        bucket.to_string(),
+        objects,
+        tag_config.clone(),
+        Arc::clone(tag_stats),
+    )
+    .await;
+
+    // Apply tag filters and collect matching objects
+    let matching: Vec<StreamObject> = objects_with_tags
+        .into_iter()
+        .filter(|obj| {
+            // Apply tag filter - treat None (tags not fetched) as false
+            tag_filters.matches(obj).unwrap_or(false)
+        })
+        .collect();
+
+    // Apply limit if needed
+    let matching = if let Some(limit) = limit {
+        matching.into_iter().take(limit).collect()
+    } else {
+        matching
+    };
+
+    let count = matching.len();
+
+    // Execute command on matching objects
+    let new_stats = if !matching.is_empty() {
+        f(stats, matching).await
+    } else {
+        stats
+    };
+
+    (count, new_stats)
 }
 
 #[inline]
