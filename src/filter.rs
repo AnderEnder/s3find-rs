@@ -450,6 +450,29 @@ mod tests {
     }
 
     #[test]
+    fn tag_exists_filter_without_tags() {
+        let object = Object::builder().key("test.txt").build();
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: None,
+        };
+
+        // Test TagExistsFilter with no tags fetched
+        let filter_list = TagFilterList {
+            tag_filters: vec![],
+            tag_exists_filters: vec![TagExistsFilter {
+                key: "owner".to_string(),
+            }],
+        };
+
+        // Should return None when tags not fetched
+        assert_eq!(filter_list.matches(&stream_obj), None);
+    }
+
+    #[test]
     fn tag_filter_list_from_opts() {
         use crate::arg::{FindOpt, S3Path};
 
