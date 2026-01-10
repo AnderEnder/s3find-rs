@@ -407,6 +407,24 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_error_non_service_error() {
+        use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
+        use aws_smithy_runtime_api::client::result::SdkError;
+
+        // Create a timeout error (non-ServiceError variant)
+        let timeout_err: SdkError<GetObjectTaggingError, HttpResponse> = SdkError::timeout_error(
+            Box::new(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")),
+        );
+
+        let result = classify_error(&timeout_err, "bucket", "key");
+        assert!(
+            matches!(result, TagFetchError::ApiError(_)),
+            "Expected ApiError, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
     fn test_tag_fetch_error_display() {
         // Test error display messages
         let err = TagFetchError::AccessDenied {
