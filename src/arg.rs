@@ -164,6 +164,58 @@ Valid values are:
     )]
     pub storage_class: Option<ObjectStorageClass>,
 
+    /// Filter objects by tag key=value pair (requires GetObjectTagging permission)
+    #[arg(
+        name = "tag",
+        long = "tag",
+        number_of_values = 1,
+        long_help = r#"Filter objects by tag key-value pair.
+Format: KEY=VALUE
+
+Multiple --tag flags use AND logic (all must match).
+This filter requires the s3:GetObjectTagging permission.
+
+Note: Tag filtering requires an API call per object that passes other filters.
+For large result sets, this can be slow and incur additional S3 API costs.
+Apply other filters (--name, --mtime, --bytes-size) first to minimize API calls.
+See AWS S3 pricing documentation for current GetObjectTagging request costs.
+
+Examples:
+    --tag environment=production
+    --tag team=data-science --tag project=ml-pipeline"#
+    )]
+    pub tag: Vec<TagFilter>,
+
+    /// Filter objects that have a specific tag key (any value)
+    #[arg(
+        name = "tag-exists",
+        long = "tag-exists",
+        number_of_values = 1,
+        long_help = r#"Filter objects that have a specific tag key, regardless of value.
+
+Multiple --tag-exists flags use AND logic (all keys must exist).
+This filter requires the s3:GetObjectTagging permission.
+
+Examples:
+    --tag-exists environment
+    --tag-exists owner --tag-exists project"#
+    )]
+    pub tag_exists: Vec<TagExistsFilter>,
+
+    /// Maximum concurrent tag fetch requests (default: 50)
+    #[arg(
+        name = "tag-concurrency",
+        long = "tag-concurrency",
+        default_value = "50",
+        value_parser = clap::value_parser!(u16).range(1..=1000),
+        long_help = r#"Maximum number of concurrent GetObjectTagging API requests.
+
+Higher values increase throughput but may cause throttling.
+AWS S3 supports ~3,500 requests/second per prefix.
+Valid range: 1-1000. Default: 50 (conservative, suitable for most workloads)"#
+    )]
+    pub tag_concurrency: u16,
+
     /// Modification time for match
     #[arg(
         name = "time",
@@ -464,6 +516,10 @@ pub enum FindError {
     TagValueParseError,
     #[error("Invalid days value: it should be in between 1 and 365")]
     RestoreDaysParseError,
+    #[error("Invalid tag filter format. Expected KEY=VALUE, got: {0}")]
+    TagFilterParseError(String),
+    #[error("Tag filter key cannot be empty")]
+    TagFilterEmptyKey,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -629,6 +685,58 @@ impl FromStr for FindTag {
         Ok(FindTag {
             key: key.to_string(),
             value: value.to_string(),
+        })
+    }
+}
+
+/// Filter for matching objects by tag key-value pairs.
+/// Format: KEY=VALUE
+#[derive(Debug, PartialEq, Clone)]
+pub struct TagFilter {
+    pub key: String,
+    pub value: String,
+}
+
+impl FromStr for TagFilter {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
+        let parts: Vec<&str> = s.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            return Err(FindError::TagFilterParseError(s.to_string()).into());
+        }
+
+        let key = parts[0].trim();
+        let value = parts[1].trim();
+
+        if key.is_empty() {
+            return Err(FindError::TagFilterEmptyKey.into());
+        }
+
+        Ok(TagFilter {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+    }
+}
+
+/// Filter for matching objects that have a specific tag key (regardless of value).
+#[derive(Debug, PartialEq, Clone)]
+pub struct TagExistsFilter {
+    pub key: String,
+}
+
+impl FromStr for TagExistsFilter {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
+        let key = s.trim();
+        if key.is_empty() {
+            return Err(FindError::TagFilterEmptyKey.into());
+        }
+
+        Ok(TagExistsFilter {
+            key: key.to_string(),
         })
     }
 }
@@ -1582,5 +1690,148 @@ mod tests {
         );
         assert!(args.force_path_style);
         assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint {})));
+    }
+
+    #[test]
+    fn tag_filter_correct() {
+        assert_eq!(
+            "environment=production".parse().ok(),
+            Some(TagFilter {
+                key: "environment".to_owned(),
+                value: "production".to_owned()
+            })
+        );
+
+        // Key with value containing special characters
+        assert_eq!(
+            "project=my-project-123".parse().ok(),
+            Some(TagFilter {
+                key: "project".to_owned(),
+                value: "my-project-123".to_owned()
+            })
+        );
+
+        // Empty value is allowed
+        assert_eq!(
+            "status=".parse().ok(),
+            Some(TagFilter {
+                key: "status".to_owned(),
+                value: "".to_owned()
+            })
+        );
+
+        // Value with equals sign (splitn handles this)
+        assert_eq!(
+            "equation=a=b+c".parse().ok(),
+            Some(TagFilter {
+                key: "equation".to_owned(),
+                value: "a=b+c".to_owned()
+            })
+        );
+
+        // Whitespace is trimmed
+        assert_eq!(
+            "  key  =  value  ".parse().ok(),
+            Some(TagFilter {
+                key: "key".to_owned(),
+                value: "value".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn tag_filter_incorrect() {
+        // Missing equals sign
+        assert!(TagFilter::from_str("environmentproduction").is_err());
+
+        // Empty key
+        assert!(TagFilter::from_str("=value").is_err());
+
+        // Whitespace only key
+        assert!(TagFilter::from_str("   =value").is_err());
+
+        // Empty string
+        assert!(TagFilter::from_str("").is_err());
+    }
+
+    #[test]
+    fn tag_exists_filter_correct() {
+        assert_eq!(
+            "environment".parse().ok(),
+            Some(TagExistsFilter {
+                key: "environment".to_owned()
+            })
+        );
+
+        // With dashes and numbers
+        assert_eq!(
+            "my-tag-123".parse().ok(),
+            Some(TagExistsFilter {
+                key: "my-tag-123".to_owned()
+            })
+        );
+
+        // Whitespace is trimmed
+        assert_eq!(
+            "  key  ".parse().ok(),
+            Some(TagExistsFilter {
+                key: "key".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn tag_exists_filter_incorrect() {
+        // Empty string
+        assert!(TagExistsFilter::from_str("").is_err());
+
+        // Whitespace only
+        assert!(TagExistsFilter::from_str("   ").is_err());
+    }
+
+    #[test]
+    fn test_tag_filter_cli_flags() {
+        let args = FindOpt::parse_from([
+            "s3find",
+            "s3://mybucket",
+            "--tag",
+            "env=prod",
+            "--tag",
+            "team=data",
+            "--tag-exists",
+            "owner",
+            "--tag-concurrency",
+            "100",
+        ]);
+
+        assert_eq!(args.tag.len(), 2);
+        assert_eq!(
+            args.tag[0],
+            TagFilter {
+                key: "env".to_string(),
+                value: "prod".to_string()
+            }
+        );
+        assert_eq!(
+            args.tag[1],
+            TagFilter {
+                key: "team".to_string(),
+                value: "data".to_string()
+            }
+        );
+        assert_eq!(args.tag_exists.len(), 1);
+        assert_eq!(
+            args.tag_exists[0],
+            TagExistsFilter {
+                key: "owner".to_string()
+            }
+        );
+        assert_eq!(args.tag_concurrency, 100);
+    }
+
+    #[test]
+    fn test_tag_concurrency_default() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket"]);
+        assert_eq!(args.tag_concurrency, 50);
     }
 }

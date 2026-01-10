@@ -400,24 +400,34 @@ impl RunCommand for ListTags {
                 continue;
             }
 
-            let mut request = client
-                .get_object_tagging()
-                .bucket(path.bucket.clone())
-                .set_key(stream_obj.object.key.clone());
+            // Use cached tags if available (from tag filtering), otherwise fetch
+            let tags: String = if let Some(ref cached_tags) = stream_obj.tags {
+                cached_tags
+                    .iter()
+                    .map(|x| format!("{}:{}", x.key(), x.value()))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            } else {
+                // Fetch tags via API
+                let mut request = client
+                    .get_object_tagging()
+                    .bucket(path.bucket.clone())
+                    .set_key(stream_obj.object.key.clone());
 
-            // Pass version_id if present
-            if let Some(ref vid) = stream_obj.version_id {
-                request = request.version_id(vid);
-            }
+                // Pass version_id if present
+                if let Some(ref vid) = stream_obj.version_id {
+                    request = request.version_id(vid);
+                }
 
-            let tag_output = request.send().await?;
+                let tag_output = request.send().await?;
 
-            let tags: String = tag_output
-                .tag_set
-                .into_iter()
-                .map(|x| format!("{}:{}", x.key, x.value))
-                .collect::<Vec<String>>()
-                .join(",");
+                tag_output
+                    .tag_set
+                    .into_iter()
+                    .map(|x| format!("{}:{}", x.key(), x.value()))
+                    .collect::<Vec<String>>()
+                    .join(",")
+            };
 
             println!(
                 "s3://{}/{} {}",
@@ -1618,6 +1628,197 @@ mod tests {
         let stream_obj2 = StreamObject::from_object(object2);
         cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
             .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_tags_with_version_id() -> Result<(), Error> {
+        // Test ListTags with version_id (versioned object)
+        let key1 = "test/versioned.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // Request includes versionId query parameter
+        let req1 = http::Request::builder()
+            .method("GET")
+            .uri("https://test-bucket.s3.amazonaws.com/test/versioned.txt?tagging&versionId=v123")
+            .body(SdkBody::empty())
+            .unwrap();
+
+        let resp_body1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <TagSet>
+                <Tag>
+                    <Key>version</Key>
+                    <Value>v123</Value>
+                </Tag>
+            </TagSet>
+        </Tagging>"#;
+
+        let resp1 = http::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static("application/xml"))
+            .body(SdkBody::from(resp_body1))
+            .unwrap();
+
+        let events = vec![ReplayEvent::new(req1, resp1)];
+
+        let replay_client = StaticReplayClient::new(events);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        // Create versioned StreamObject
+        let stream_obj = StreamObject {
+            object: object1,
+            version_id: Some("v123".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: false,
+            tags: None, // Force API fetch
+        };
+
+        cmd.execute(&client, &path, &[stream_obj]).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
+        // Test that ListTags uses cached tags when available (no API calls needed)
+        use aws_sdk_s3::types::Tag;
+
+        let key1 = "test/file1.txt";
+        let key2 = "test/file2.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        let object2 = Object::builder()
+            .e_tag("test-etag-2")
+            .key(key2)
+            .size(200)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // No HTTP events needed - tags are cached
+        let replay_client = StaticReplayClient::new(vec![]);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        // Create StreamObjects with pre-cached tags
+        let mut stream_obj1 = StreamObject::from_object(object1);
+        stream_obj1.tags = Some(vec![
+            Tag::builder().key("env").value("prod").build().unwrap(),
+            Tag::builder().key("team").value("data").build().unwrap(),
+        ]);
+
+        let mut stream_obj2 = StreamObject::from_object(object2);
+        stream_obj2.tags = Some(vec![
+            Tag::builder()
+                .key("category")
+                .value("documents")
+                .build()
+                .unwrap(),
+        ]);
+
+        // Execute - should use cached tags without making API calls
+        cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
+        // Test that ListTags skips delete markers (they can't have tags)
+        let key1 = "test/file1.txt";
+
+        let object1 = Object::builder()
+            .e_tag("test-etag-1")
+            .key(key1)
+            .size(100)
+            .storage_class(ObjectStorageClass::Standard)
+            .last_modified(
+                DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap(),
+            )
+            .build();
+
+        // No HTTP events needed - delete marker should be skipped
+        let replay_client = StaticReplayClient::new(vec![]);
+
+        let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(make_s3_test_credentials())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let cmd = Cmd::LsTags(ListTags {}).downcast();
+
+        let path = S3Path {
+            bucket: "test-bucket".to_owned(),
+            prefix: None,
+        };
+
+        // Create a delete marker StreamObject
+        let stream_obj = StreamObject {
+            object: object1,
+            version_id: Some("delete-marker-version".to_string()),
+            is_latest: Some(true),
+            is_delete_marker: true, // This is a delete marker
+            tags: None,
+        };
+
+        // Execute - should skip the delete marker without making API calls
+        cmd.execute(&client, &path, &[stream_obj]).await?;
 
         Ok(())
     }

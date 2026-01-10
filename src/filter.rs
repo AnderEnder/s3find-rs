@@ -4,6 +4,7 @@ use glob::MatchOptions;
 use regex::Regex;
 
 use crate::arg::*;
+use crate::command::StreamObject;
 
 pub trait Filter {
     fn filter(&self, object: &Object) -> bool;
@@ -64,6 +65,110 @@ impl Filter for Regex {
 impl Filter for ObjectStorageClass {
     fn filter(&self, object: &Object) -> bool {
         Some(self) == object.storage_class()
+    }
+}
+
+/// Trait for filters that require tag information.
+/// Unlike Filter which works on Object, TagAwareFilter works on StreamObject
+/// which contains cached tag data.
+pub trait TagAwareFilter {
+    /// Returns true if the object matches this filter.
+    /// Returns None if tags haven't been fetched yet (caller should fetch tags first).
+    fn filter_with_tags(&self, object: &StreamObject) -> Option<bool>;
+}
+
+impl TagAwareFilter for TagFilter {
+    fn filter_with_tags(&self, object: &StreamObject) -> Option<bool> {
+        let tags = object.tags.as_ref()?;
+        Some(
+            tags.iter()
+                .any(|t| t.key() == self.key && t.value() == self.value),
+        )
+    }
+}
+
+impl TagAwareFilter for TagExistsFilter {
+    fn filter_with_tags(&self, object: &StreamObject) -> Option<bool> {
+        let tags = object.tags.as_ref()?;
+        Some(tags.iter().any(|t| t.key() == self.key))
+    }
+}
+
+/// A collection of tag-aware filters that uses AND logic.
+/// All filters must match for an object to pass.
+#[derive(Debug, Default)]
+pub struct TagFilterList {
+    tag_filters: Vec<TagFilter>,
+    tag_exists_filters: Vec<TagExistsFilter>,
+}
+
+impl TagFilterList {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_opts(opts: &FindOpt) -> Self {
+        Self {
+            tag_filters: opts.tag.clone(),
+            tag_exists_filters: opts.tag_exists.clone(),
+        }
+    }
+
+    /// Creates a TagFilterList with the specified filters.
+    /// This is useful for testing or programmatic filter construction.
+    pub fn with_filters(
+        tag_filters: Vec<TagFilter>,
+        tag_exists_filters: Vec<TagExistsFilter>,
+    ) -> Self {
+        Self {
+            tag_filters,
+            tag_exists_filters,
+        }
+    }
+
+    /// Returns true if there are any tag filters configured.
+    pub fn has_filters(&self) -> bool {
+        !self.tag_filters.is_empty() || !self.tag_exists_filters.is_empty()
+    }
+
+    /// Returns the total number of tag filters.
+    pub fn len(&self) -> usize {
+        self.tag_filters.len() + self.tag_exists_filters.len()
+    }
+
+    /// Returns true if there are no tag filters.
+    pub fn is_empty(&self) -> bool {
+        self.tag_filters.is_empty() && self.tag_exists_filters.is_empty()
+    }
+
+    /// Tests if the object matches all tag filters (AND logic).
+    /// Returns None if tags haven't been fetched yet.
+    /// Returns Some(true) if all filters match.
+    /// Returns Some(false) if any filter doesn't match.
+    pub fn matches(&self, object: &StreamObject) -> Option<bool> {
+        if self.is_empty() {
+            return Some(true);
+        }
+
+        // Check all TagFilter filters
+        for filter in &self.tag_filters {
+            match filter.filter_with_tags(object) {
+                None => return None,               // Tags not fetched
+                Some(false) => return Some(false), // Short-circuit on first non-match
+                Some(true) => continue,
+            }
+        }
+
+        // Check all TagExistsFilter filters
+        for filter in &self.tag_exists_filters {
+            match filter.filter_with_tags(object) {
+                None => return None,               // Tags not fetched
+                Some(false) => return Some(false), // Short-circuit on first non-match
+                Some(true) => continue,
+            }
+        }
+
+        Some(true)
     }
 }
 
@@ -160,5 +265,259 @@ mod tests {
 
         let no_class_object = Object::builder().build();
         assert!(!ObjectStorageClass::Standard.filter(&no_class_object));
+    }
+
+    #[test]
+    fn tag_filter_with_tags() {
+        use aws_sdk_s3::types::Tag;
+
+        let object = Object::builder().key("test.txt").build();
+        let tags = vec![
+            Tag::builder().key("env").value("prod").build().unwrap(),
+            Tag::builder().key("team").value("data").build().unwrap(),
+        ];
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: Some(tags),
+        };
+
+        // Matching tag
+        let filter = TagFilter {
+            key: "env".to_string(),
+            value: "prod".to_string(),
+        };
+        assert_eq!(filter.filter_with_tags(&stream_obj), Some(true));
+
+        // Non-matching value
+        let filter = TagFilter {
+            key: "env".to_string(),
+            value: "dev".to_string(),
+        };
+        assert_eq!(filter.filter_with_tags(&stream_obj), Some(false));
+
+        // Non-existent key
+        let filter = TagFilter {
+            key: "nonexistent".to_string(),
+            value: "value".to_string(),
+        };
+        assert_eq!(filter.filter_with_tags(&stream_obj), Some(false));
+    }
+
+    #[test]
+    fn tag_filter_without_tags() {
+        let object = Object::builder().key("test.txt").build();
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: None,
+        };
+
+        let filter = TagFilter {
+            key: "env".to_string(),
+            value: "prod".to_string(),
+        };
+        assert_eq!(filter.filter_with_tags(&stream_obj), None);
+    }
+
+    #[test]
+    fn tag_exists_filter_with_tags() {
+        use aws_sdk_s3::types::Tag;
+
+        let object = Object::builder().key("test.txt").build();
+        let tags = vec![
+            Tag::builder().key("env").value("prod").build().unwrap(),
+            Tag::builder().key("team").value("data").build().unwrap(),
+        ];
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: Some(tags),
+        };
+
+        // Existing key
+        let filter = TagExistsFilter {
+            key: "env".to_string(),
+        };
+        assert_eq!(filter.filter_with_tags(&stream_obj), Some(true));
+
+        // Non-existent key
+        let filter = TagExistsFilter {
+            key: "nonexistent".to_string(),
+        };
+        assert_eq!(filter.filter_with_tags(&stream_obj), Some(false));
+    }
+
+    #[test]
+    fn tag_filter_list_empty() {
+        let object = Object::builder().key("test.txt").build();
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: None,
+        };
+
+        let filter_list = TagFilterList::new();
+        assert!(filter_list.is_empty());
+        assert!(!filter_list.has_filters());
+        assert_eq!(filter_list.len(), 0);
+        // Empty filter list always matches
+        assert_eq!(filter_list.matches(&stream_obj), Some(true));
+    }
+
+    #[test]
+    fn tag_filter_list_and_logic() {
+        use aws_sdk_s3::types::Tag;
+
+        let object = Object::builder().key("test.txt").build();
+        let tags = vec![
+            Tag::builder().key("env").value("prod").build().unwrap(),
+            Tag::builder().key("team").value("data").build().unwrap(),
+        ];
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: Some(tags),
+        };
+
+        // Both filters match
+        let filter_list = TagFilterList {
+            tag_filters: vec![TagFilter {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+            tag_exists_filters: vec![TagExistsFilter {
+                key: "team".to_string(),
+            }],
+        };
+        assert!(filter_list.has_filters());
+        assert_eq!(filter_list.len(), 2);
+        assert_eq!(filter_list.matches(&stream_obj), Some(true));
+
+        // One filter doesn't match (AND logic - should fail)
+        let filter_list = TagFilterList {
+            tag_filters: vec![TagFilter {
+                key: "env".to_string(),
+                value: "dev".to_string(), // Wrong value
+            }],
+            tag_exists_filters: vec![TagExistsFilter {
+                key: "team".to_string(),
+            }],
+        };
+        assert_eq!(filter_list.matches(&stream_obj), Some(false));
+
+        // Missing tag key (AND logic - should fail)
+        let filter_list = TagFilterList {
+            tag_filters: vec![],
+            tag_exists_filters: vec![TagExistsFilter {
+                key: "nonexistent".to_string(),
+            }],
+        };
+        assert_eq!(filter_list.matches(&stream_obj), Some(false));
+    }
+
+    #[test]
+    fn tag_filter_list_without_tags() {
+        let object = Object::builder().key("test.txt").build();
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: None,
+        };
+
+        let filter_list = TagFilterList {
+            tag_filters: vec![TagFilter {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+            tag_exists_filters: vec![],
+        };
+
+        // Should return None when tags not fetched
+        assert_eq!(filter_list.matches(&stream_obj), None);
+    }
+
+    #[test]
+    fn tag_exists_filter_without_tags() {
+        let object = Object::builder().key("test.txt").build();
+        let stream_obj = StreamObject {
+            object,
+            version_id: None,
+            is_latest: None,
+            is_delete_marker: false,
+            tags: None,
+        };
+
+        // Test TagExistsFilter with no tags fetched
+        let filter_list = TagFilterList {
+            tag_filters: vec![],
+            tag_exists_filters: vec![TagExistsFilter {
+                key: "owner".to_string(),
+            }],
+        };
+
+        // Should return None when tags not fetched
+        assert_eq!(filter_list.matches(&stream_obj), None);
+    }
+
+    #[test]
+    fn tag_filter_list_from_opts() {
+        use crate::arg::{FindOpt, S3Path};
+
+        let opts = FindOpt {
+            path: S3Path {
+                bucket: "test".to_string(),
+                prefix: None,
+            },
+            aws_access_key: None,
+            aws_secret_key: None,
+            aws_region: None,
+            endpoint_url: None,
+            force_path_style: false,
+            name: vec![],
+            iname: vec![],
+            regex: vec![],
+            size: vec![],
+            mtime: vec![],
+            storage_class: None,
+            tag: vec![
+                TagFilter {
+                    key: "env".to_string(),
+                    value: "prod".to_string(),
+                },
+                TagFilter {
+                    key: "team".to_string(),
+                    value: "data".to_string(),
+                },
+            ],
+            tag_exists: vec![TagExistsFilter {
+                key: "owner".to_string(),
+            }],
+            tag_concurrency: 50,
+            limit: None,
+            page_size: 1000,
+            summarize: false,
+            cmd: None,
+            maxdepth: None,
+            all_versions: false,
+        };
+
+        let filter_list = TagFilterList::from_opts(&opts);
+
+        assert!(filter_list.has_filters());
+        assert_eq!(filter_list.len(), 3);
+        assert!(!filter_list.is_empty());
     }
 }
