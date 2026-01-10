@@ -229,7 +229,19 @@ mod tests {
     use super::*;
     use aws_sdk_s3::types::Object;
     use futures::stream;
-    use std::future::ready;
+    use std::future::{Ready, ready};
+
+    /// Helper to create the standard stats accumulator closure used in tests.
+    fn make_stats_accumulator()
+    -> impl FnMut(Option<FindStat>, Vec<StreamObject>) -> Ready<Option<FindStat>> {
+        |acc, list| {
+            let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
+            ready(
+                acc.map(|stat| stat + &objects)
+                    .or_else(|| Some(FindStat::default() + &objects)),
+            )
+        }
+    }
 
     fn make_stream_objects(keys: &[&str]) -> Vec<StreamObject> {
         keys.iter()
@@ -316,13 +328,7 @@ mod tests {
             limit,
             stats,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -342,13 +348,7 @@ mod tests {
             limit,
             stats,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -368,13 +368,7 @@ mod tests {
             limit,
             stats,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -392,13 +386,7 @@ mod tests {
             iterator,
             stats,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -447,13 +435,7 @@ mod tests {
             None, // No initial stats
             tag_ctx,
             |_: &StreamObject| ready(true), // Cheap filter passes all
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -500,13 +482,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -552,13 +528,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(false), // Cheap filter rejects all
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -605,13 +575,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true), // Cheap filter passes all
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -660,13 +624,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -708,13 +666,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -757,13 +709,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -809,13 +755,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -865,13 +805,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -920,13 +854,7 @@ mod tests {
             Some(initial_stats),
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -981,13 +909,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -1042,13 +964,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
@@ -1104,13 +1020,7 @@ mod tests {
             None,
             tag_ctx,
             |_: &StreamObject| ready(true),
-            &mut |acc, list| {
-                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-                ready(
-                    acc.map(|stat| stat + &objects)
-                        .or_else(|| Some(FindStat::default() + &objects)),
-                )
-            },
+            &mut make_stats_accumulator(),
         )
         .await;
 
