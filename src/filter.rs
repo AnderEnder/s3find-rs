@@ -14,8 +14,8 @@ impl Filter for FindSize {
     fn filter(&self, object: &Object) -> bool {
         let object_size = object.size.unwrap_or_default();
         match *self {
-            FindSize::Bigger(size) => object_size >= size,
-            FindSize::Lower(size) => object_size <= size,
+            FindSize::Bigger(size) => object_size > size,
+            FindSize::Lower(size) => object_size < size,
             FindSize::Equal(size) => object_size == size,
         }
     }
@@ -185,6 +185,8 @@ mod tests {
         assert!(FindSize::Lower(11).filter(&object));
         assert!(FindSize::Equal(10).filter(&object));
 
+        assert!(!FindSize::Bigger(10).filter(&object));
+        assert!(!FindSize::Lower(10).filter(&object));
         assert!(!FindSize::Bigger(11).filter(&object));
         assert!(!FindSize::Lower(5).filter(&object));
         assert!(!FindSize::Equal(11).filter(&object));

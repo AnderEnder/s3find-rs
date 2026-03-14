@@ -15,6 +15,9 @@ license = "BSD-2-Clause"
 exclude = [".gitignore", ".github", "codecov.yml"]
 edition = "2024"
 
+[features]
+localstack-tests = []
+
 [[bin]]
 name = "s3find"
 path = "src/bin/s3find.rs"

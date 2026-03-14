@@ -245,8 +245,8 @@ Can be multiple, but should be overlaping"#
         allow_hyphen_values = true,
         long_help = r#"File size for match:
     5k - exact match 5k,
-    +5k - bigger than 5k,
-    -5k - smaller than 5k,
+    +5k - strictly bigger than 5k,
+    -5k - strictly smaller than 5k,
 
 Possible file size units are as follows:
     k - kilobytes (1024 bytes)
@@ -257,7 +257,7 @@ Possible file size units are as follows:
     )]
     pub size: Vec<FindSize>,
 
-    /// Limit result
+    /// Limit matched results in traversal order
     #[arg(name = "limit", long)]
     pub limit: Option<usize>,
 
@@ -273,7 +273,7 @@ times out."#
     )]
     pub page_size: i64,
 
-    /// Print summary statistic
+    /// Print summary statistics
     #[arg(name = "summarize", long, short)]
     pub summarize: bool,
 

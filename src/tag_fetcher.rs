@@ -3,6 +3,7 @@ use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingError;
 use aws_sdk_s3::types::Tag;
 use futures::{StreamExt, stream};
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -44,6 +45,7 @@ pub struct TagFetchStats {
     pub failed: AtomicUsize,
     pub throttled: AtomicUsize,
     pub access_denied: AtomicUsize,
+    pub excluded: AtomicUsize,
 }
 
 impl TagFetchStats {
@@ -67,12 +69,18 @@ impl TagFetchStats {
         self.access_denied.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_excluded(&self) {
+        self.excluded.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Returns the total number of tag fetch events across all counters.
     ///
     /// Note: This counts events, not unique requests. A request that is throttled
     /// multiple times before succeeding will increment `throttled` for each
     /// throttle event, then `success` when it finally succeeds. For the count of
     /// unique logical requests (final outcomes), use `success + failed + access_denied`.
+    /// `excluded` is tracked separately because it measures objects omitted from tag
+    /// matching after verification failed, not request events.
     pub fn total_events(&self) -> usize {
         self.success.load(Ordering::Relaxed)
             + self.failed.load(Ordering::Relaxed)
@@ -224,6 +232,22 @@ fn classify_error(err: &SdkError<GetObjectTaggingError>, bucket: &str, key: &str
 /// This function takes an iterable collection of StreamObjects, fetches tags
 /// for each one concurrently (up to the configured limit), and returns a
 /// `Vec<StreamObject>` with the tags populated.
+async fn map_with_concurrency_in_order<I, F, Fut, T>(
+    items: I,
+    concurrency: usize,
+    mapper: F,
+) -> Vec<T>
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> Fut,
+    Fut: Future<Output = T>,
+{
+    stream::iter(items.into_iter().map(mapper))
+        .buffered(concurrency)
+        .collect()
+        .await
+}
+
 pub async fn fetch_tags_for_objects<I>(
     client: Client,
     bucket: String,
@@ -236,56 +260,54 @@ where
 {
     let objects: Vec<StreamObject> = objects.into_iter().collect();
 
-    stream::iter(objects)
-        .map(|mut obj| {
-            let client = client.clone();
-            let bucket = bucket.clone();
-            let config = config.clone();
-            let stats = Arc::clone(&stats);
+    map_with_concurrency_in_order(objects, config.concurrency, |mut obj| {
+        let client = client.clone();
+        let bucket = bucket.clone();
+        let config = config.clone();
+        let stats = Arc::clone(&stats);
 
-            async move {
-                // Skip if already has tags
-                if obj.tags.is_some() {
-                    return obj;
-                }
+        async move {
+            // Skip if already has tags
+            if obj.tags.is_some() {
+                return obj;
+            }
 
-                // Skip delete markers (they don't have tags)
-                if obj.is_delete_marker {
+            // Skip delete markers (they don't have tags)
+            if obj.is_delete_marker {
+                obj.tags = Some(Vec::new());
+                return obj;
+            }
+
+            let key = match obj.object.key() {
+                Some(k) => k.to_string(),
+                None => {
+                    // Object without key - can't fetch tags
                     obj.tags = Some(Vec::new());
                     return obj;
                 }
+            };
 
-                let key = match obj.object.key() {
-                    Some(k) => k.to_string(),
-                    None => {
-                        // Object without key - can't fetch tags
-                        obj.tags = Some(Vec::new());
-                        return obj;
-                    }
-                };
+            let version_id = obj.version_id.as_deref();
 
-                let version_id = obj.version_id.as_deref();
-
-                match fetch_object_tags(&client, &bucket, &key, version_id, &config, &stats).await {
-                    Ok(tags) => {
-                        obj.tags = Some(tags);
-                    }
-                    Err(e) => {
-                        // Log the error but continue processing.
-                        // Objects with failed tag fetches get empty tags to allow filtering
-                        // to continue. This means they won't match any tag filter, which is
-                        // the safest behavior (don't include objects we can't verify).
-                        eprintln!("Warning: Failed to fetch tags for {}: {}", key, e);
-                        obj.tags = Some(Vec::new());
-                    }
+            match fetch_object_tags(&client, &bucket, &key, version_id, &config, &stats).await {
+                Ok(tags) => {
+                    obj.tags = Some(tags);
                 }
-
-                obj
+                Err(e) => {
+                    // Log the error but continue processing.
+                    // Objects with failed tag fetches get empty tags to allow filtering
+                    // to continue. This means they won't match any tag filter, which is
+                    // the safest behavior (don't include objects we can't verify).
+                    stats.record_excluded();
+                    eprintln!("Warning: Failed to fetch tags for {}: {}", key, e);
+                    obj.tags = Some(Vec::new());
+                }
             }
-        })
-        .buffer_unordered(config.concurrency)
-        .collect()
-        .await
+
+            obj
+        }
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -304,11 +326,13 @@ mod tests {
         stats.record_failure();
         stats.record_throttled();
         stats.record_access_denied();
+        stats.record_excluded();
 
         assert_eq!(stats.success.load(Ordering::Relaxed), 2);
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
         assert_eq!(stats.throttled.load(Ordering::Relaxed), 1);
         assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
         assert_eq!(stats.total_events(), 5);
     }
 
@@ -459,7 +483,7 @@ mod tests {
         for _ in 0..100 {
             let jitter = rand_jitter();
             assert!(
-                jitter >= 0.0 && jitter < 1.0,
+                (0.0..1.0).contains(&jitter),
                 "Jitter out of range: {}",
                 jitter
             );
@@ -628,6 +652,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_map_with_concurrency_in_order_preserves_input_order() {
+        let results = map_with_concurrency_in_order(vec![1, 2, 3], 3, |value| async move {
+            let delay_ms = match value {
+                1 => 30,
+                2 => 5,
+                3 => 10,
+                _ => 0,
+            };
+            sleep(Duration::from_millis(delay_ms)).await;
+            value
+        })
+        .await;
+
+        assert_eq!(results, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
     async fn test_fetch_tags_for_objects_with_delete_marker() {
         // Delete markers should get empty tags without API call
         let client = make_test_client(vec![]);
@@ -718,6 +759,7 @@ mod tests {
         assert!(results[0].tags.is_some());
         assert!(results[0].tags.as_ref().unwrap().is_empty());
         assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
@@ -745,6 +787,7 @@ mod tests {
         assert!(results[0].tags.is_some());
         assert!(results[0].tags.as_ref().unwrap().is_empty());
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
@@ -955,6 +998,7 @@ mod tests {
         // Stats: 4 throttle events + 1 failure (after exhausting retries)
         assert_eq!(stats.throttled.load(Ordering::Relaxed), 4);
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
     }
 
     fn make_429_response(key: &str) -> ReplayEvent {
@@ -1078,5 +1122,6 @@ mod tests {
         // Should fail immediately without retry
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
         assert_eq!(stats.throttled.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
     }
 }
