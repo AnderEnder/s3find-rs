@@ -24,14 +24,13 @@ impl RunCommand for SetTags {
             let tags = self
                 .tags
                 .iter()
-                .filter_map(|x| {
+                .map(|x| {
                     Tag::builder()
                         .key(x.key.clone())
                         .value(x.value.clone())
                         .build()
-                        .ok()
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
 
             let key = stream_obj
                 .object

@@ -50,6 +50,7 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 lazy_static = "1"
+shlex = "1"
 urlencoding = "2"
 
 [dev-dependencies]

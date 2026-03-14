@@ -47,13 +47,9 @@ impl RunCommand for SetPublic {
                 .put_object_acl_public_read(&path.bucket, key, stream_obj.version_id.as_deref())
                 .await?;
 
-            if let Some(key) = stream_obj.object.key.as_ref() {
-                let region = client.region().unwrap_or_else(|| "us-east-1".to_string());
-                let url = generate_s3_url(&region, &path.bucket, key);
-                println!("{} {}", stream_obj.display_key(), url);
-            } else {
-                println!("No key found for object");
-            }
+            let region = client.region().unwrap_or_else(|| "us-east-1".to_string());
+            let url = generate_s3_url(&region, &path.bucket, key);
+            println!("{} {}", stream_obj.display_key(), url);
         }
         Ok(())
     }

@@ -123,6 +123,25 @@ impl CommandS3Client for Client {
             .send()
             .await?;
 
+        let delete_errors = response.errors.unwrap_or_default();
+        if !delete_errors.is_empty() {
+            let details = delete_errors
+                .iter()
+                .map(|error| {
+                    let key = error.key().unwrap_or("<unknown>");
+                    let version = error
+                        .version_id()
+                        .map(|value| format!("?versionId={value}"))
+                        .unwrap_or_default();
+                    let code = error.code().unwrap_or("Unknown");
+                    let message = error.message().unwrap_or("unknown delete error");
+                    format!("{key}{version}: {code} ({message})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow!("delete_objects partially failed: {details}"));
+        }
+
         Ok(response
             .deleted
             .unwrap_or_default()
@@ -141,13 +160,13 @@ impl CommandS3Client for Client {
         version_id: Option<&str>,
         tags: Vec<Tag>,
     ) -> Result<(), Error> {
-        let tagging = Tagging::builder().set_tag_set(Some(tags)).build().ok();
+        let tagging = Tagging::builder().set_tag_set(Some(tags)).build()?;
 
         let mut request = self
             .put_object_tagging()
             .bucket(bucket)
             .key(key)
-            .set_tagging(tagging);
+            .set_tagging(Some(tagging));
 
         if let Some(version_id) = version_id {
             request = request.version_id(version_id);

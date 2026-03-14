@@ -100,12 +100,12 @@ impl AdvancedPrint {
         writeln!(
             io,
             "{0} {1} {2} {3} \"s3://{4}/{5}\" {6}",
-            object.e_tag.as_ref().unwrap_or(&"NoEtag".to_string()),
+            object.e_tag.as_deref().unwrap_or("NoEtag"),
             object
                 .owner
                 .as_ref()
-                .and_then(|x| x.display_name.as_ref())
-                .unwrap_or(&"None".to_string()),
+                .and_then(|x| x.display_name.as_deref())
+                .unwrap_or("None"),
             object.size.unwrap_or_default(),
             object
                 .last_modified

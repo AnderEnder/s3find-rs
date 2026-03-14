@@ -631,6 +631,46 @@ fn test_exec() -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn test_exec_supports_quoted_arguments() -> Result<(), Error> {
+    let mut buf = Vec::new();
+    let cmd = Exec {
+        utility: "echo \"test {}\"".to_owned(),
+    };
+
+    let path = "s3://test/somepath/otherpath";
+    cmd.exec(&mut buf, path)?;
+    let out = std::str::from_utf8(&buf)?;
+
+    assert_eq!(out.trim(), format!("test {path}"));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn test_exec_propagates_non_zero_status() {
+    let mut buf = Vec::new();
+    let cmd = Exec {
+        utility: "sh -c 'exit 7'".to_owned(),
+    };
+
+    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    assert!(err.to_string().contains("failed with status 7"));
+}
+
+#[cfg(windows)]
+#[test]
+fn test_exec_propagates_non_zero_status() {
+    let mut buf = Vec::new();
+    let cmd = Exec {
+        utility: "cmd /C exit 7".to_owned(),
+    };
+
+    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    assert!(err.to_string().contains("failed with status 7"));
+}
+
 #[test]
 fn test_advanced_print_json() -> Result<(), Error> {
     let object = Object::builder()
@@ -1253,6 +1293,53 @@ async fn test_multiple_delete_propagates_request_failure() {
 }
 
 #[tokio::test]
+async fn test_multiple_delete_propagates_partial_delete_failure() {
+    let object = Object::builder().key("test/file1.txt").size(100).build();
+
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("https://test-bucket.s3.amazonaws.com/?delete")
+        .body(SdkBody::empty())
+        .unwrap();
+
+    let resp = http::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", HeaderValue::from_static("application/xml"))
+        .body(SdkBody::from(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+                <DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                    <Error>
+                        <Key>test/file1.txt</Key>
+                        <Code>AccessDenied</Code>
+                        <Message>Access Denied</Message>
+                    </Error>
+                </DeleteResult>"#,
+        ))
+        .unwrap();
+
+    let client = aws_sdk_s3::Client::from_conf(
+        aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .credentials_provider(make_s3_test_credentials())
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .http_client(StaticReplayClient::new(vec![ReplayEvent::new(req, resp)]))
+            .build(),
+    );
+
+    let path = S3Path {
+        bucket: "test-bucket".to_owned(),
+        prefix: None,
+    };
+
+    let result = Cmd::Delete(MultipleDelete {})
+        .downcast()
+        .execute(&client, &path, &[StreamObject::from_object(object)])
+        .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn test_set_tags_with_replay_client() -> Result<(), Error> {
     let key1 = "test/file1.txt";
     let key2 = "test/file2.txt";
@@ -1332,6 +1419,42 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         .await?;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_set_tags_rejects_too_many_tags() {
+    let replay_client = StaticReplayClient::new(vec![]);
+    let client = aws_sdk_s3::Client::from_conf(
+        aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .credentials_provider(make_s3_test_credentials())
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .http_client(replay_client.clone())
+            .build(),
+    );
+
+    let path = S3Path {
+        bucket: "test-bucket".to_owned(),
+        prefix: None,
+    };
+    let objects = vec![StreamObject::from_object(
+        Object::builder().key("test/file1.txt").build(),
+    )];
+
+    let result = Cmd::Tags(SetTags {
+        tags: (0..11)
+            .map(|i| FindTag {
+                key: format!("tag{i}"),
+                value: "value".to_string(),
+            })
+            .collect(),
+    })
+    .downcast()
+    .execute(&client, &path, &objects)
+    .await;
+
+    assert!(result.is_err());
+    replay_client.assert_requests_match(&[]);
 }
 
 #[tokio::test]
