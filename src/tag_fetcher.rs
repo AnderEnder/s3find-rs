@@ -653,13 +653,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_map_with_concurrency_in_order_preserves_input_order() {
-        let results = map_with_concurrency_in_order(vec![1, 2, 3], 3, |value| async move {
-            let delay_ms = match value {
-                1 => 30,
-                2 => 5,
-                3 => 10,
-                _ => 0,
-            };
+        let results = map_with_concurrency_in_order(vec![1_usize, 2, 3], 3, |value| async move {
+            let delay_ms = [30_u64, 5, 10][value - 1];
             sleep(Duration::from_millis(delay_ms)).await;
             value
         })

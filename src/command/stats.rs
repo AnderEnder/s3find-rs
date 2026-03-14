@@ -26,34 +26,20 @@ pub struct FindStat {
 impl fmt::Display for FindStat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let file_size = make_format(BINARY);
+        let total_space = file_size(self.total_space as u64);
+        let max_size = file_size(self.max_size.unwrap_or_default() as u64);
+        let min_size = file_size(self.min_size.unwrap_or_default() as u64);
+        let average_size = file_size(self.average_size as u64);
+
         writeln!(f)?;
         writeln!(f, "Summary")?;
         writeln!(f, "{:19} {}", "Total files:", &self.total_files)?;
-        writeln!(
-            f,
-            "Total space:        {}",
-            file_size(self.total_space as u64),
-        )?;
+        writeln!(f, "Total space:        {total_space}")?;
         writeln!(f, "{:19} {}", "Largest file:", &self.max_key)?;
-        writeln!(
-            f,
-            "{:19} {}",
-            "Largest file size:",
-            file_size(self.max_size.unwrap_or_default() as u64),
-        )?;
+        writeln!(f, "{:19} {}", "Largest file size:", max_size)?;
         writeln!(f, "{:19} {}", "Smallest file:", &self.min_key)?;
-        writeln!(
-            f,
-            "{:19} {}",
-            "Smallest file size:",
-            file_size(self.min_size.unwrap_or_default() as u64),
-        )?;
-        writeln!(
-            f,
-            "{:19} {}",
-            "Average file size:",
-            file_size(self.average_size as u64),
-        )?;
+        writeln!(f, "{:19} {}", "Smallest file size:", min_size)?;
+        writeln!(f, "{:19} {}", "Average file size:", average_size)?;
         Ok(())
     }
 }

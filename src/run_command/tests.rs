@@ -659,6 +659,18 @@ fn test_exec_propagates_non_zero_status() {
     assert!(err.to_string().contains("failed with status 7"));
 }
 
+#[cfg(unix)]
+#[test]
+fn test_exec_propagates_stderr_output() {
+    let mut buf = Vec::new();
+    let cmd = Exec {
+        utility: "sh -c 'echo boom 1>&2; exit 7'".to_owned(),
+    };
+
+    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    assert!(err.to_string().contains("failed with status 7: boom"));
+}
+
 #[cfg(windows)]
 #[test]
 fn test_exec_propagates_non_zero_status() {
@@ -669,6 +681,18 @@ fn test_exec_propagates_non_zero_status() {
 
     let err = cmd.exec(&mut buf, "ignored").unwrap_err();
     assert!(err.to_string().contains("failed with status 7"));
+}
+
+#[cfg(windows)]
+#[test]
+fn test_exec_propagates_stderr_output() {
+    let mut buf = Vec::new();
+    let cmd = Exec {
+        utility: "cmd /C \"echo boom 1>&2 && exit 7\"".to_owned(),
+    };
+
+    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    assert!(err.to_string().contains("failed with status 7: boom"));
 }
 
 #[test]
@@ -1174,6 +1198,32 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
     cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_set_public_defaults_region_when_client_region_is_missing() -> Result<(), Error> {
+    let client = FakeCommandClient {
+        region: None,
+        ..Default::default()
+    };
+    let stream_obj = StreamObject::from_object(Object::builder().key("test/file.txt").build());
+    let cmd = Cmd::Public(SetPublic {}).downcast();
+    let path = S3Path {
+        bucket: "test-bucket".to_owned(),
+        prefix: None,
+    };
+
+    cmd.execute(&client, &path, &[stream_obj]).await?;
+
+    assert_eq!(
+        client.public_calls.lock().unwrap().as_slice(),
+        &[FakeCommandClient::object_key(
+            "test-bucket",
+            "test/file.txt",
+            None
+        )]
+    );
     Ok(())
 }
 

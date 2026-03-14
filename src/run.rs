@@ -398,6 +398,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_filter_execute_with_zero_limit_skips_predicate() {
+        let stream_objects = make_stream_objects(&["object1"]);
+        let iterator = ok_iterator(vec![stream_objects]);
+        let predicate_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let predicate_calls_for_closure = Arc::clone(&predicate_calls);
+
+        let result = list_filter_execute(
+            iterator,
+            Some(0),
+            None,
+            move |_: &StreamObject| {
+                predicate_calls_for_closure.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ready(true)
+            },
+            &mut make_stats_accumulator(),
+        )
+        .await;
+
+        assert!(result.unwrap().is_none());
+        assert_eq!(
+            predicate_calls.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[tokio::test]
     async fn test_list_filter_execute_without_limit() {
         let stream_objects = make_stream_objects(&["object1", "object2", "object3"]);
 
@@ -418,6 +444,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_filter_execute_skips_non_matching_objects() {
+        let stream_objects = make_stream_objects(&["object1", "object2"]);
+        let iterator = ok_iterator(vec![stream_objects]);
+
+        let result = list_filter_execute(
+            iterator,
+            None,
+            None,
+            |_: &StreamObject| ready(false),
+            &mut make_stats_accumulator(),
+        )
+        .await;
+
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn test_list_filter_limit_execute() {
         let stream_objects = make_stream_objects(&["object1", "object2", "object3"]);
 
@@ -435,6 +478,34 @@ mod tests {
         .await;
 
         assert_eq!(result.unwrap().unwrap().total_files, 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_flushes_full_chunk() {
+        let stream_objects: Vec<_> = (0..=CHUNK)
+            .map(|i| StreamObject::from_object(Object::builder().key(format!("object{i}")).build()))
+            .collect();
+        let iterator = ok_iterator(vec![stream_objects]);
+        let chunk_sizes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let chunk_sizes_for_accumulator = Arc::clone(&chunk_sizes);
+
+        let result = list_filter_execute(
+            iterator,
+            None,
+            None,
+            |_: &StreamObject| ready(true),
+            &mut move |acc, list| {
+                chunk_sizes_for_accumulator.lock().unwrap().push(list.len());
+                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
+                ready(Ok(acc
+                    .map(|stat| stat + &objects)
+                    .or_else(|| Some(FindStat::default() + &objects))))
+            },
+        )
+        .await;
+
+        assert_eq!(result.unwrap().unwrap().total_files, CHUNK + 1);
+        assert_eq!(chunk_sizes.lock().unwrap().as_slice(), &[CHUNK, 1]);
     }
 
     #[tokio::test]
