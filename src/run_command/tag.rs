@@ -16,21 +16,21 @@ impl RunCommand for SetTags {
         path: &S3Path,
         list: &[StreamObject],
     ) -> Result<(), Error> {
+        let tags = self
+            .tags
+            .iter()
+            .map(|x| {
+                Tag::builder()
+                    .key(x.key.clone())
+                    .value(x.value.clone())
+                    .build()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         for stream_obj in list {
             if stream_obj.is_delete_marker {
                 continue;
             }
-
-            let tags = self
-                .tags
-                .iter()
-                .map(|x| {
-                    Tag::builder()
-                        .key(x.key.clone())
-                        .value(x.value.clone())
-                        .build()
-                })
-                .collect::<Result<Vec<_>, _>>()?;
 
             let key = stream_obj
                 .object
@@ -39,7 +39,12 @@ impl RunCommand for SetTags {
                 .ok_or(crate::error::FunctionError::ObjectFieldError)?;
 
             client
-                .put_object_tagging(&path.bucket, key, stream_obj.version_id.as_deref(), tags)
+                .put_object_tagging(
+                    &path.bucket,
+                    key,
+                    stream_obj.version_id.as_deref(),
+                    tags.clone(),
+                )
                 .await?;
 
             println!(
