@@ -285,6 +285,7 @@ mod tests {
     use anyhow::anyhow;
     use aws_sdk_s3::types::Object;
     use futures::stream;
+    use std::cell::Cell;
     use std::future::{Ready, ready};
 
     /// Helper to create the standard stats accumulator closure used in tests.
@@ -297,6 +298,27 @@ mod tests {
                 .map(|stat| stat + &objects)
                 .or_else(|| Some(FindStat::default() + &objects))))
         }
+    }
+
+    fn always_true(_: &StreamObject) -> Ready<bool> {
+        ready(true)
+    }
+
+    thread_local! {
+        static COUNTING_TRUE_CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn reset_counting_true_calls() {
+        COUNTING_TRUE_CALLS.with(|count| count.set(0));
+    }
+
+    fn counting_true(_: &StreamObject) -> Ready<bool> {
+        COUNTING_TRUE_CALLS.with(|count| count.set(count.get() + 1));
+        ready(true)
+    }
+
+    fn counting_true_calls() -> usize {
+        COUNTING_TRUE_CALLS.with(Cell::get)
     }
 
     fn ok_iterator(
@@ -379,6 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_filter_execute_with_limit() {
+        reset_counting_true_calls();
         let stream_objects = make_stream_objects(&["object1", "object2", "object3"]);
 
         let iterator = ok_iterator(vec![stream_objects]);
@@ -389,38 +412,32 @@ mod tests {
             iterator,
             limit,
             stats,
-            |_: &StreamObject| ready(true),
+            counting_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
         assert_eq!(result.unwrap().unwrap().total_files, 2);
+        assert_eq!(counting_true_calls(), 2);
     }
 
     #[tokio::test]
     async fn test_list_filter_execute_with_zero_limit_skips_predicate() {
+        reset_counting_true_calls();
         let stream_objects = make_stream_objects(&["object1"]);
         let iterator = ok_iterator(vec![stream_objects]);
-        let predicate_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let predicate_calls_for_closure = Arc::clone(&predicate_calls);
 
         let result = list_filter_execute(
             iterator,
             Some(0),
             None,
-            move |_: &StreamObject| {
-                predicate_calls_for_closure.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                ready(true)
-            },
+            counting_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
         assert!(result.unwrap().is_none());
-        assert_eq!(
-            predicate_calls.load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
+        assert_eq!(counting_true_calls(), 0);
     }
 
     #[tokio::test]
@@ -435,7 +452,7 @@ mod tests {
             iterator,
             limit,
             stats,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -472,7 +489,7 @@ mod tests {
             iterator,
             limit,
             stats,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -489,20 +506,15 @@ mod tests {
         let chunk_sizes = Arc::new(std::sync::Mutex::new(Vec::new()));
         let chunk_sizes_for_accumulator = Arc::clone(&chunk_sizes);
 
-        let result = list_filter_execute(
-            iterator,
-            None,
-            None,
-            |_: &StreamObject| ready(true),
-            &mut move |acc, list| {
+        let result =
+            list_filter_execute(iterator, None, None, always_true, &mut move |acc, list| {
                 chunk_sizes_for_accumulator.lock().unwrap().push(list.len());
                 let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
                 ready(Ok(acc
                     .map(|stat| stat + &objects)
                     .or_else(|| Some(FindStat::default() + &objects))))
-            },
-        )
-        .await;
+            })
+            .await;
 
         assert_eq!(result.unwrap().unwrap().total_files, CHUNK + 1);
         assert_eq!(chunk_sizes.lock().unwrap().as_slice(), &[CHUNK, 1]);
@@ -518,7 +530,7 @@ mod tests {
         let result = list_filter_unlimited_execute(
             iterator,
             stats,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -536,7 +548,7 @@ mod tests {
             iterator,
             None,
             None,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -549,17 +561,11 @@ mod tests {
         let stream_objects = make_stream_objects(&["object1"]);
         let iterator = ok_iterator(vec![stream_objects]);
 
-        let result = list_filter_execute(
-            iterator,
-            None,
-            None,
-            |_: &StreamObject| ready(true),
-            &mut |_, _| {
-                ready(Err(S3FindError::command_execution(anyhow!(
-                    "command failed"
-                ))))
-            },
-        )
+        let result = list_filter_execute(iterator, None, None, always_true, &mut |_, _| {
+            ready(Err(S3FindError::command_execution(anyhow!(
+                "command failed"
+            ))))
+        })
         .await;
 
         assert!(matches!(result, Err(S3FindError::CommandExecution { .. })));
@@ -606,7 +612,7 @@ mod tests {
             None, // No limit
             None, // No initial stats
             tag_ctx,
-            |_: &StreamObject| ready(true), // Cheap filter passes all
+            always_true, // Cheap filter passes all
             &mut make_stats_accumulator(),
         )
         .await;
@@ -654,7 +660,7 @@ mod tests {
             Some(2), // Limit to 2
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -704,7 +710,7 @@ mod tests {
             Some(2),
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut move |acc, list| {
                 seen_keys_for_accumulator
                     .lock()
@@ -812,7 +818,7 @@ mod tests {
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true), // Cheap filter passes all
+            always_true, // Cheap filter passes all
             &mut make_stats_accumulator(),
         )
         .await;
@@ -861,7 +867,7 @@ mod tests {
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -907,7 +913,7 @@ mod tests {
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -950,7 +956,7 @@ mod tests {
             Some(0), // Limit of 0 - should return nothing
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -996,7 +1002,7 @@ mod tests {
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -1047,7 +1053,7 @@ mod tests {
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -1099,7 +1105,7 @@ mod tests {
             None,
             Some(initial_stats),
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -1155,7 +1161,7 @@ mod tests {
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -1211,7 +1217,7 @@ mod tests {
             Some(50), // Limit to 50 - should terminate during first batch
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
@@ -1268,7 +1274,7 @@ mod tests {
             Some(100),
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
