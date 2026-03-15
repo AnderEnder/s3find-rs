@@ -57,7 +57,7 @@ urlencoding = "2"
 aws-smithy-runtime = { version = "1", features = ["test-util"] }
 tempfile = "3"
 http = "1"
-testcontainers = "0.26"
+testcontainers = "0.27"
 assert_cmd = "2"
 predicates = "3"
 
