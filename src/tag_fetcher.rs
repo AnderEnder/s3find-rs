@@ -562,6 +562,8 @@ mod tests {
                 ))
                 .region(aws_sdk_s3::config::Region::new("us-east-1"))
                 .http_client(replay_client)
+                // Disable SDK-level retries so our custom retry logic controls all attempts
+                .retry_config(aws_sdk_s3::config::retry::RetryConfig::disabled())
                 .build(),
         )
     }
