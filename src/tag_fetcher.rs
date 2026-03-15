@@ -73,7 +73,7 @@ impl TagFetchStats {
         self.excluded.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Returns the total number of tag fetch events across all counters.
+    /// Returns the total number of request-event counters tracked by this struct.
     ///
     /// Note: This counts events, not unique requests. A request that is throttled
     /// multiple times before succeeding will increment `throttled` for each

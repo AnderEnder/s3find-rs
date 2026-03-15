@@ -104,6 +104,10 @@ impl CommandS3Client for Client {
         bucket: &str,
         objects: Vec<DeleteObjectRequest>,
     ) -> Result<Vec<DeletedObjectInfo>, Error> {
+        if objects.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let objects = objects
             .into_iter()
             .map(|object| {
@@ -348,6 +352,7 @@ mod tests {
     use crate::arg::S3Path;
 
     use aws_config::Region;
+    use aws_smithy_runtime::client::http::test_util::StaticReplayClient;
 
     use std::str::FromStr;
 
@@ -519,5 +524,26 @@ mod tests {
 
         // Verify the client was created with default credentials provider
         assert!(client.config().region().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_delete_objects_empty_list_is_noop() {
+        let replay_client = StaticReplayClient::new(vec![]);
+        let client = Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+                .region(Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let deleted =
+            <Client as CommandS3Client>::delete_objects(&client, "test-bucket", Vec::new())
+                .await
+                .unwrap();
+
+        assert!(deleted.is_empty());
+        replay_client.assert_requests_match(&[]);
     }
 }

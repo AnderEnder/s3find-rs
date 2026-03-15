@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use crate::adapters::aws::{CommandS3Client, DeleteObjectRequest};
 use crate::arg::{MultipleDelete, S3Path};
 use crate::command::StreamObject;
+use crate::error::FunctionError;
 
 use super::RunCommand;
 
@@ -15,19 +16,25 @@ impl RunCommand for MultipleDelete {
         path: &S3Path,
         list: &[StreamObject],
     ) -> Result<(), Error> {
-        let key_list: Vec<_> = list
+        let key_list = list
             .iter()
-            .filter_map(|stream_obj| {
-                stream_obj
+            .map(|stream_obj| {
+                let key = stream_obj
                     .object
                     .key
                     .clone()
-                    .map(|key| DeleteObjectRequest {
-                        key,
-                        version_id: stream_obj.version_id.clone(),
-                    })
+                    .ok_or(FunctionError::ObjectFieldError)?;
+
+                Ok(DeleteObjectRequest {
+                    key,
+                    version_id: stream_obj.version_id.clone(),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, FunctionError>>()?;
+
+        if key_list.is_empty() {
+            return Ok(());
+        }
 
         for object in client.delete_objects(&path.bucket, key_list).await? {
             let version_info = object

@@ -334,6 +334,43 @@ async fn test_multiple_delete_with_fake_client_records_version_ids() -> Result<(
 }
 
 #[tokio::test]
+async fn test_multiple_delete_empty_input_skips_delete_request() -> Result<(), Error> {
+    let client = FakeCommandClient::default();
+    let path = S3Path {
+        bucket: "test-bucket".to_string(),
+        prefix: None,
+    };
+
+    Cmd::Delete(MultipleDelete {})
+        .downcast()
+        .execute(&client, &path, &[])
+        .await?;
+
+    assert!(client.delete_calls.lock().unwrap().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multiple_delete_missing_key_returns_error() {
+    let client = FakeCommandClient::default();
+    let path = S3Path {
+        bucket: "test-bucket".to_string(),
+        prefix: None,
+    };
+    let objects = vec![StreamObject::from_object(Object::builder().build())];
+
+    let err = Cmd::Delete(MultipleDelete {})
+        .downcast()
+        .execute(&client, &path, &objects)
+        .await
+        .unwrap_err();
+
+    assert!(err.to_string().contains("S3 Object is not complete"));
+    assert!(client.delete_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn test_set_tags_with_fake_client_records_tags() -> Result<(), Error> {
     let client = FakeCommandClient::default();
     let path = S3Path {
@@ -514,6 +551,39 @@ async fn test_s3_move_with_fake_client_records_copy_and_delete() -> Result<(), E
     let delete_calls = client.delete_calls.lock().unwrap();
     assert_eq!(delete_calls.len(), 1);
     assert_eq!(delete_calls[0].1[0].key, "source/file.txt");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_s3_move_delete_markers_only_skips_delete_request() -> Result<(), Error> {
+    let client = FakeCommandClient::default();
+    let path = S3Path {
+        bucket: "source-bucket".to_string(),
+        prefix: None,
+    };
+    let objects = vec![StreamObject {
+        object: Object::builder().key("source/file.txt").build(),
+        version_id: None,
+        is_latest: None,
+        is_delete_marker: true,
+        tags: None,
+    }];
+
+    Cmd::Move(S3Move {
+        destination: S3Path {
+            bucket: "dest-bucket".to_string(),
+            prefix: Some("archive".to_string()),
+        },
+        flat: false,
+        storage_class: Some(StorageClass::StandardIa),
+    })
+    .downcast()
+    .execute(&client, &path, &objects)
+    .await?;
+
+    assert!(client.copy_calls.lock().unwrap().is_empty());
+    assert!(client.delete_calls.lock().unwrap().is_empty());
 
     Ok(())
 }

@@ -182,6 +182,10 @@ impl RunCommand for S3Move {
             })
             .collect();
 
+        if key_list.is_empty() {
+            return Ok(());
+        }
+
         client.delete_objects(&path.bucket, key_list).await?;
         Ok(())
     }

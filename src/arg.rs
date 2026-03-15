@@ -266,12 +266,13 @@ Possible file size units are as follows:
         name = "number",
         long,
         default_value = "1000",
+        value_parser = clap::value_parser!(u16).range(1..=1000),
         long_help = r#"The number of results to return in each response to a
 list operation. The default value is 1000 (the maximum
 allowed). Using a lower value may help if an operation
 times out."#
     )]
-    pub page_size: i64,
+    pub page_size: u16,
 
     /// Print summary statistics
     #[arg(name = "summarize", long, short)]
@@ -1132,6 +1133,24 @@ mod tests {
 
         assert_eq!(args.limit, Some(100));
         assert_eq!(args.page_size, 500);
+    }
+
+    #[test]
+    fn test_page_size_rejects_zero() {
+        let err = FindOpt::try_parse_from(["s3find", "s3://mybucket", "--number", "0"])
+            .err()
+            .expect("page size 0 should be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn test_page_size_rejects_values_above_s3_limit() {
+        let err = FindOpt::try_parse_from(["s3find", "s3://mybucket", "--number", "1001"])
+            .err()
+            .expect("page sizes above 1000 should be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
     }
 
     #[test]

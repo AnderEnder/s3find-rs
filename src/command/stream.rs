@@ -14,7 +14,7 @@ pub struct FindStream {
     pub client: Client,
     pub path: S3Path,
     pub token: Option<String>,
-    pub page_size: i64,
+    pub page_size: u16,
     pub initial: bool,
     pub maxdepth: Option<usize>,
     pub all_versions: bool,
@@ -40,7 +40,7 @@ impl FindStream {
             .list_objects_v2()
             .bucket(self.path.bucket.clone())
             .prefix(self.path.prefix.clone().unwrap_or_else(|| "".to_owned()))
-            .max_keys(self.page_size as i32)
+            .max_keys(i32::from(self.page_size))
             .into_paginator()
             .send()
     }
@@ -111,6 +111,8 @@ impl FindStream {
         let base_prefix = self.path.prefix.clone().unwrap_or_else(|| "".to_owned());
         let bucket = self.path.bucket.clone();
         let page_size = self.page_size;
+        let page_size_i32 = i32::from(page_size);
+        let page_size_usize = usize::from(page_size);
 
         Box::pin(async_stream::stream! {
             let obj_stream = Self::collect_objects_recursive(
@@ -119,20 +121,20 @@ impl FindStream {
                 base_prefix,
                 maxdepth,
                 0,
-                page_size as i32,
+                page_size_i32,
             );
 
             futures::pin_mut!(obj_stream);
 
-            let mut chunk = Vec::with_capacity(page_size as usize);
+            let mut chunk = Vec::with_capacity(page_size_usize);
 
             while let Some(result) = obj_stream.next().await {
                 match result {
                     Ok(obj) => {
                         chunk.push(obj);
-                        if chunk.len() >= page_size as usize {
+                        if chunk.len() >= page_size_usize {
                             yield Ok(std::mem::take(&mut chunk));
-                            chunk = Vec::with_capacity(page_size as usize);
+                            chunk = Vec::with_capacity(page_size_usize);
                         }
                     }
                     Err(err) => {
@@ -162,7 +164,7 @@ impl FindStream {
                     .list_object_versions()
                     .bucket(&bucket)
                     .prefix(&prefix)
-                    .max_keys(page_size as i32);
+                    .max_keys(i32::from(page_size));
 
                 if let Some(ref km) = key_marker {
                     request = request.key_marker(km);
