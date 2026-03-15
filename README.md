@@ -10,6 +10,9 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
 - [Installation](#installation)
   - [Pre-built Binaries](#pre-built-binaries)
   - [Build from Source](#build-from-source)
+- [Development](#development)
+  - [Checks](#checks)
+  - [Behavior Notes](#behavior-notes)
 - [Usage](#usage)
   - [Basic Syntax](#basic-syntax)
   - [Authentication Methods](#authentication-methods)
@@ -56,6 +59,31 @@ cargo install --git https://github.com/AnderEnder/s3find-rs
 # Install from crates.io
 cargo install s3find
 ```
+
+## Development
+
+### Checks
+
+```sh
+# Fast unit and module tests
+cargo test --lib -- --nocapture
+
+# Full default test suite (without opt-in LocalStack integration tests)
+cargo test --all -- --nocapture
+
+# LocalStack integration tests (opt-in; requires Docker or Podman socket)
+cargo test --features localstack-tests --test localstack_integration -- --nocapture
+
+# Lint
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+### Behavior Notes
+
+- Listing failures and subcommand failures return a non-zero exit code instead of succeeding with partial output.
+- `download` skips existing destination files and continues with the remaining objects unless `--force` is set.
+- With tag filters enabled, result order stays aligned with S3 traversal order, and `--limit` applies to that ordered match set.
+- `--summarize` prints normal summary statistics and, when tag filters are used, tag fetch statistics including `excluded` objects.
 
 ## Usage
 
@@ -113,122 +141,12 @@ s3find 's3://mybucket/data' \
 
 ### Command Line Reference
 
+Use `s3find --help` for the top-level reference and `s3find <path> <command> --help` for subcommand syntax. Commonly used commands:
+
 ```sh
-Walk an Amazon S3 path hierarchy
-
-The authorization flow is the following chain:
-  * use credentials from arguments provided by users
-  * use environment variable credentials: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-  * use credentials via aws file profile.
-    Profile can be set via environment variable AWS_PROFILE
-    Profile file can be set via environment variable AWS_SHARED_CREDENTIALS_FILE
-  * use AWS instance IAM profile
-  * use AWS container IAM profile
-
-
-Usage: s3find [OPTIONS] <path> [COMMAND]
-
-Commands:
-  exec      Exec any shell program with every key
-  print     Extended print with detail information
-  delete    Delete matched keys
-  download  Download matched keys
-  copy      Copy matched keys to a s3 destination
-  move      Move matched keys to a s3 destination
-  ls        Print the list of matched keys
-  lstags    Print the list of matched keys with tags
-  tags      Set the tags(overwrite) for the matched keys
-  public    Make the matched keys public available (readonly)
-  restore   Restore objects from Glacier and Deep Archive storage
-  change-storage  Change storage class of matched objects and move objects to Glacier or Deep Archive
-  nothing   Do not do anything with keys, do not print them as well
-  help      Print this message or the help of the given subcommand(s)
-
-Arguments:
-  <path>
-          S3 path to walk through. It should be s3://bucket/path
-
-Options:
-      --aws-access-key <aws-access-key>
-          AWS access key. Unrequired
-
-      --aws-secret-key <aws-secret-key>
-          AWS secret key from AWS credential pair. Required only for the credential based authentication
-
-      --aws-region <aws-region>
-          [default: us-east-1]
-
-      --name <pattern>
-          Glob pattern for match, can be multiple
-
-      --iname <ipattern>
-          Case-insensitive glob pattern for match, can be multiple
-
-      --regex <rpattern>
-          Regex pattern for match, can be multiple
-
-      --storage-class <storage-class>
-          Object storage class for match
-          Valid values are:
-              DEEP_ARCHIVE
-              EXPRESS_ONEZONE
-              GLACIER
-              GLACIER_IR
-              INTELLIGENT_TIERING
-              ONEZONE_IA
-              OUTPOSTS
-              REDUCED_REDUNDANCY
-              SNOW
-              STANDARD
-              STANDARD_IA
-              Unknown values are also supported
-
-      --mtime <time>
-          Modification time for match, a time period:
-              -5d - for period from now-5d to now
-              +5d - for period before now-5d
-
-          Possible time units are as follows:
-              s - seconds
-              m - minutes
-              h - hours
-              d - days
-              w - weeks
-
-          Can be multiple, but should be overlaping
-
-      --bytes-size <bytes-size>
-          File size for match:
-              5k - exact match 5k,
-              +5k - bigger than 5k,
-              -5k - smaller than 5k,
-
-          Possible file size units are as follows:
-              k - kilobytes (1024 bytes)
-              M - megabytes (1024 kilobytes)
-              G - gigabytes (1024 megabytes)
-              T - terabytes (1024 gigabytes)
-              P - petabytes (1024 terabytes)
-
-      --limit <limit>
-          Limit result
-
-      --number <number>
-          The number of results to return in each response to a
-          list operation. The default value is 1000 (the maximum
-          allowed). Using a lower value may help if an operation
-          times out.
-
-          [default: 1000]
-
-  -s, --summarize
-          Print summary statistic
-
-  -h, --help
-          Print help (see a summary with '-h')
-
-  -V, --version
-          Print version
+s3find --help
+s3find s3://example-bucket/path print --help
+s3find s3://example-bucket/path copy --help
 ```
 
 ## Examples
@@ -284,13 +202,13 @@ s3find 's3://example-bucket/example-path' --regex '[0-9]$' print
 
 ```sh
 # Exact match - files exactly 0 bytes
-s3find 's3://example-bucket/example-path' --size 0 print
+s3find 's3://example-bucket/example-path' --bytes-size 0 print
 
-# Larger than 10 megabytes
-s3find 's3://example-bucket/example-path' --size +10M print
+# Strictly larger than 10 megabytes
+s3find 's3://example-bucket/example-path' --bytes-size +10M print
 
-# Smaller than 10 kilobytes
-s3find 's3://example-bucket/example-path' --size -10k print
+# Strictly smaller than 10 kilobytes
+s3find 's3://example-bucket/example-path' --bytes-size -10k print
 ```
 
 ### Find Path by Time
@@ -367,10 +285,10 @@ Combine filters to create more specific queries:
 
 ```sh
 # Files between 10 and 20 bytes
-s3find 's3://example-bucket/example-path' --size +10 --size -20 print
+s3find 's3://example-bucket/example-path' --bytes-size +10 --bytes-size -20 print
 
 # Combine different filter types
-s3find 's3://example-bucket/example-path' --size +10M --name '*backup*' print
+s3find 's3://example-bucket/example-path' --bytes-size +10M --name '*backup*' print
 ```
 
 ### Actions and Operations
@@ -394,23 +312,26 @@ s3find 's3://example-bucket/example-path' --name '*' lstags
 #### Execute Commands on Objects
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*' exec 'echo {}'
+s3find 's3://example-bucket/example-path' --name '*' exec --utility 'echo {}'
 ```
 
 #### Download Objects
 
 ```sh
-s3find 's3://example-bucket/example-path' --name '*.pdf' download
+s3find 's3://example-bucket/example-path' --name '*.pdf' download ./downloads
 ```
 
 #### Copy and Move Operations
 
 ```sh
 # Copy files to another location
-s3find 's3://example-bucket/example-path' --name '*.dat' copy -f 's3://example-bucket/example-path2'
+s3find 's3://example-bucket/example-path' --name '*.dat' copy 's3://example-bucket/example-path2'
 
 # Move files to another location
-s3find 's3://example-bucket/example-path' --name '*.dat' move -f 's3://example-bucket/example-path2'
+s3find 's3://example-bucket/example-path' --name '*.dat' move 's3://example-bucket/example-path2'
+
+# Flatten keys while copying
+s3find 's3://example-bucket/example-path' --name '*.dat' copy --flat 's3://example-bucket/example-path2'
 ```
 
 #### Tag Management
@@ -511,6 +432,6 @@ s3find 's3://large-bucket/' --name '*.log' --mtime -7d --tag 'env=prod' ls
 s3find 's3://large-bucket/' --tag 'env=prod' --limit 100 ls
 ```
 
-When `--summarize` is enabled, tag fetch statistics are displayed showing success/failure counts.
+When `--summarize` is enabled, tag fetch statistics are displayed showing success, failed, throttled, access denied, and excluded counts.
 
 For more information, see the [GitHub repository](https://github.com/AnderEnder/s3find-rs).

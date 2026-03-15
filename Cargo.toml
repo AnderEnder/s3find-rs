@@ -15,6 +15,9 @@ license = "BSD-2-Clause"
 exclude = [".gitignore", ".github", "codecov.yml"]
 edition = "2024"
 
+[features]
+localstack-tests = []
+
 [[bin]]
 name = "s3find"
 path = "src/bin/s3find.rs"
@@ -47,6 +50,7 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 lazy_static = "1"
+shlex = "1"
 urlencoding = "2"
 
 [dev-dependencies]

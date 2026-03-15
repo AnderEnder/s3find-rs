@@ -1,7 +1,297 @@
+use anyhow::{Error, anyhow};
+use async_trait::async_trait;
 use aws_config::{BehaviorVersion, meta::credentials::CredentialsProviderChain};
-use aws_sdk_s3::{Client, config::Credentials};
+use aws_sdk_s3::{
+    Client,
+    config::Credentials,
+    primitives::ByteStream,
+    types::{
+        Delete, GlacierJobParameters, MetadataDirective, ObjectCannedAcl, ObjectIdentifier,
+        RestoreRequest, StorageClass, Tag, Tagging, Tier,
+    },
+};
+use aws_smithy_runtime_api::client::result::SdkError;
 
 use crate::arg::{self, FindOpt};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteObjectRequest {
+    pub key: String,
+    pub version_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedObjectInfo {
+    pub key: Option<String>,
+    pub version_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreObjectStatus {
+    Started,
+    AlreadyInProgress,
+    InvalidObjectState,
+}
+
+#[async_trait]
+pub trait CommandS3Client: Send + Sync {
+    fn region(&self) -> Option<String>;
+
+    async fn delete_objects(
+        &self,
+        bucket: &str,
+        objects: Vec<DeleteObjectRequest>,
+    ) -> Result<Vec<DeletedObjectInfo>, Error>;
+
+    async fn put_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        tags: Vec<Tag>,
+    ) -> Result<(), Error>;
+
+    async fn get_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<Vec<Tag>, Error>;
+
+    async fn put_object_acl_public_read(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<(), Error>;
+
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<ByteStream, Error>;
+
+    async fn copy_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        copy_source: &str,
+        storage_class: Option<StorageClass>,
+        metadata_directive: Option<MetadataDirective>,
+    ) -> Result<(), Error>;
+
+    async fn restore_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        days: i32,
+        tier: Tier,
+    ) -> Result<RestoreObjectStatus, Error>;
+}
+
+#[async_trait]
+impl CommandS3Client for Client {
+    fn region(&self) -> Option<String> {
+        self.config()
+            .region()
+            .map(|region| region.as_ref().to_string())
+    }
+
+    async fn delete_objects(
+        &self,
+        bucket: &str,
+        objects: Vec<DeleteObjectRequest>,
+    ) -> Result<Vec<DeletedObjectInfo>, Error> {
+        if objects.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let objects = objects
+            .into_iter()
+            .map(|object| {
+                ObjectIdentifier::builder()
+                    .key(object.key)
+                    .set_version_id(object.version_id)
+                    .build()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let delete = Delete::builder().set_objects(Some(objects)).build()?;
+
+        let response = self
+            .delete_objects()
+            .bucket(bucket)
+            .delete(delete)
+            .send()
+            .await?;
+
+        let delete_errors = response.errors.unwrap_or_default();
+        if !delete_errors.is_empty() {
+            let details = delete_errors
+                .iter()
+                .map(|error| {
+                    let key = error.key().unwrap_or("<unknown>");
+                    let version = error
+                        .version_id()
+                        .map(|value| format!("?versionId={value}"))
+                        .unwrap_or_default();
+                    let code = error.code().unwrap_or("Unknown");
+                    let message = error.message().unwrap_or("unknown delete error");
+                    format!("{key}{version}: {code} ({message})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow!("delete_objects partially failed: {details}"));
+        }
+
+        Ok(response
+            .deleted
+            .unwrap_or_default()
+            .into_iter()
+            .map(|object| DeletedObjectInfo {
+                key: object.key,
+                version_id: object.version_id,
+            })
+            .collect())
+    }
+
+    async fn put_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        tags: Vec<Tag>,
+    ) -> Result<(), Error> {
+        let tagging = Tagging::builder().set_tag_set(Some(tags)).build()?;
+
+        let mut request = self
+            .put_object_tagging()
+            .bucket(bucket)
+            .key(key)
+            .set_tagging(Some(tagging));
+
+        if let Some(version_id) = version_id {
+            request = request.version_id(version_id);
+        }
+
+        request.send().await?;
+        Ok(())
+    }
+
+    async fn get_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<Vec<Tag>, Error> {
+        let mut request = self.get_object_tagging().bucket(bucket).key(key);
+
+        if let Some(version_id) = version_id {
+            request = request.version_id(version_id);
+        }
+
+        Ok(request.send().await?.tag_set)
+    }
+
+    async fn put_object_acl_public_read(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<(), Error> {
+        let mut request = self
+            .put_object_acl()
+            .bucket(bucket)
+            .key(key)
+            .acl(ObjectCannedAcl::PublicRead);
+
+        if let Some(version_id) = version_id {
+            request = request.version_id(version_id);
+        }
+
+        request.send().await?;
+        Ok(())
+    }
+
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<ByteStream, Error> {
+        let mut request = self.get_object().bucket(bucket).key(key);
+
+        if let Some(version_id) = version_id {
+            request = request.version_id(version_id);
+        }
+
+        Ok(request.send().await?.body)
+    }
+
+    async fn copy_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        copy_source: &str,
+        storage_class: Option<StorageClass>,
+        metadata_directive: Option<MetadataDirective>,
+    ) -> Result<(), Error> {
+        let mut request = self
+            .copy_object()
+            .bucket(bucket)
+            .key(key)
+            .copy_source(copy_source)
+            .set_storage_class(storage_class);
+
+        if let Some(metadata_directive) = metadata_directive {
+            request = request.metadata_directive(metadata_directive);
+        }
+
+        request.send().await?;
+        Ok(())
+    }
+
+    async fn restore_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        days: i32,
+        tier: Tier,
+    ) -> Result<RestoreObjectStatus, Error> {
+        let restore_request = RestoreRequest::builder()
+            .days(days)
+            .set_glacier_job_parameters(Some(GlacierJobParameters::builder().tier(tier).build()?))
+            .build();
+
+        let mut request = self
+            .restore_object()
+            .bucket(bucket)
+            .key(key)
+            .restore_request(restore_request);
+
+        if let Some(version_id) = version_id {
+            request = request.version_id(version_id);
+        }
+
+        match request.send().await {
+            Ok(_) => Ok(RestoreObjectStatus::Started),
+            Err(SdkError::ServiceError(err))
+                if err.err().meta().code() == Some("RestoreAlreadyInProgress") =>
+            {
+                Ok(RestoreObjectStatus::AlreadyInProgress)
+            }
+            Err(SdkError::ServiceError(err))
+                if err.err().meta().code() == Some("InvalidObjectState") =>
+            {
+                Ok(RestoreObjectStatus::InvalidObjectState)
+            }
+            Err(err) => Err(anyhow!(err)),
+        }
+    }
+}
 
 pub async fn setup_client(args: &arg::FindOpt) -> Client {
     let FindOpt {
@@ -62,6 +352,7 @@ mod tests {
     use crate::arg::S3Path;
 
     use aws_config::Region;
+    use aws_smithy_runtime::client::http::test_util::StaticReplayClient;
 
     use std::str::FromStr;
 
@@ -233,5 +524,26 @@ mod tests {
 
         // Verify the client was created with default credentials provider
         assert!(client.config().region().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_delete_objects_empty_list_is_noop() {
+        let replay_client = StaticReplayClient::new(vec![]);
+        let client = Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .credentials_provider(Credentials::new("mock", "mock", None, None, "mock"))
+                .region(Region::new("us-east-1"))
+                .http_client(replay_client.clone())
+                .build(),
+        );
+
+        let deleted =
+            <Client as CommandS3Client>::delete_objects(&client, "test-bucket", Vec::new())
+                .await
+                .unwrap();
+
+        assert!(deleted.is_empty());
+        replay_client.assert_requests_match(&[]);
     }
 }

@@ -1,3 +1,5 @@
+#![cfg(feature = "localstack-tests")]
+
 //! Integration tests for s3find CLI using LocalStack
 //!
 //! These tests use testcontainers to automatically start a LocalStack container,
@@ -7,12 +9,12 @@
 //!
 //! Run only integration tests:
 //! ```bash
-//! cargo test --test localstack_integration
+//! cargo test --features localstack-tests --test localstack_integration -- --nocapture
 //! ```
 //!
 //! Run all tests (unit + integration):
 //! ```bash
-//! cargo test
+//! cargo test --all --features localstack-tests -- --nocapture
 //! ```
 //!
 //! Run only unit tests (exclude integration):
@@ -25,7 +27,7 @@
 //! In CI pipelines, you can run these as a separate stage:
 //! ```yaml
 //! - name: Run integration tests
-//!   run: cargo test --test localstack_integration
+//!   run: cargo test --features localstack-tests --test localstack_integration -- --nocapture
 //! ```
 //!
 //! ## Test Isolation
@@ -49,7 +51,7 @@
 //! docker run -d -p 4566:4566 --name localstack localstack/localstack:4.12
 //!
 //! # Run tests multiple times (instant startup!)
-//! cargo test --test localstack_integration
+//! cargo test --features localstack-tests --test localstack_integration -- --nocapture
 //! ```
 //!
 //! **Cleanup:**
@@ -76,7 +78,7 @@
 //! export DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock
 //!
 //! # Run tests
-//! cargo test --test localstack_integration
+//! cargo test --features localstack-tests --test localstack_integration -- --nocapture
 //! ```
 //!
 //! **macOS/Windows (Podman Machine):**
@@ -86,7 +88,7 @@
 //! podman machine start
 //!
 //! # Podman automatically sets DOCKER_HOST
-//! cargo test --test localstack_integration
+//! cargo test --features localstack-tests --test localstack_integration -- --nocapture
 //! ```
 //!
 //! Note: Docker or Podman must be available for testcontainers to work.

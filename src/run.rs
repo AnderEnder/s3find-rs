@@ -5,6 +5,7 @@ use futures::stream::StreamExt;
 use std::sync::Arc;
 
 use crate::command::{FindStat, StreamObject};
+use crate::error::S3FindResult;
 use crate::filter::TagFilterList;
 use crate::tag_fetcher::{TagFetchConfig, TagFetchStats, fetch_tags_for_objects};
 
@@ -17,17 +18,17 @@ const CHUNK: usize = 1000;
 const TAG_FETCH_BATCH_SIZE: usize = 100;
 
 pub async fn list_filter_execute<P, F, Fut, Fut2>(
-    iterator: impl Stream<Item = Vec<StreamObject>>,
+    iterator: impl Stream<Item = S3FindResult<Vec<StreamObject>>>,
     limit: Option<usize>,
     stats: Option<FindStat>,
     p: P,
     f: &mut F,
-) -> Option<FindStat>
+) -> S3FindResult<Option<FindStat>>
 where
     P: FnMut(&StreamObject) -> Fut,
     Fut: Future<Output = bool>,
     F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
-    Fut2: Future<Output = Option<FindStat>>,
+    Fut2: Future<Output = S3FindResult<Option<FindStat>>>,
 {
     match limit {
         Some(limit) => list_filter_limit_execute(iterator, limit, stats, p, f).await,
@@ -53,66 +54,70 @@ pub struct TagFilterContext {
 /// This function is called when tag filters are configured. It fetches tags
 /// only for objects that pass the cheap filters, minimizing API calls.
 pub async fn list_filter_execute_with_tags<P, F, Fut, Fut2>(
-    iterator: impl Stream<Item = Vec<StreamObject>>,
+    iterator: impl Stream<Item = S3FindResult<Vec<StreamObject>>>,
     limit: Option<usize>,
     stats: Option<FindStat>,
     tag_ctx: TagFilterContext,
     mut cheap_filter: P,
     f: &mut F,
-) -> Option<FindStat>
+) -> S3FindResult<Option<FindStat>>
 where
     P: FnMut(&StreamObject) -> Fut,
     Fut: Future<Output = bool>,
     F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
-    Fut2: Future<Output = Option<FindStat>>,
+    Fut2: Future<Output = S3FindResult<Option<FindStat>>>,
 {
     let mut remaining_limit = limit;
     let mut current_stats = stats;
 
     // Process chunks from the stream
-    let mut stream = Box::pin(
-        iterator
-            .map(|x| futures::stream::iter(x.into_iter()))
-            .flatten(),
-    );
+    let mut stream = Box::pin(iterator);
 
     // Collect objects in batches for tag fetching
     let mut batch: Vec<StreamObject> = Vec::with_capacity(TAG_FETCH_BATCH_SIZE);
 
-    while let Some(obj) = stream.next().await {
-        // Check limit first
-        if remaining_limit == Some(0) {
-            break;
-        }
+    while let Some(batch_result) = stream.next().await {
+        let objects = batch_result?;
 
-        // Phase 1: Apply cheap filter
-        if !cheap_filter(&obj).await {
-            continue;
-        }
-
-        batch.push(obj);
-
-        // When batch is full, process it
-        if batch.len() >= TAG_FETCH_BATCH_SIZE {
-            let (processed, new_stats) = process_tag_batch(
-                std::mem::take(&mut batch),
-                &tag_ctx,
-                remaining_limit,
-                current_stats,
-                f,
-            )
-            .await;
-
-            current_stats = new_stats;
-
-            if let Some(ref mut remaining) = remaining_limit {
-                *remaining = remaining.saturating_sub(processed);
-                if *remaining == 0 {
-                    break;
-                }
+        for obj in objects {
+            // Check limit first
+            if remaining_limit == Some(0) {
+                break;
             }
 
-            batch = Vec::with_capacity(TAG_FETCH_BATCH_SIZE);
+            // Phase 1: Apply cheap filter
+            if !cheap_filter(&obj).await {
+                continue;
+            }
+
+            batch.push(obj);
+
+            // When batch is full, process it
+            if batch.len() >= TAG_FETCH_BATCH_SIZE {
+                let (processed, new_stats) = process_tag_batch(
+                    std::mem::take(&mut batch),
+                    &tag_ctx,
+                    remaining_limit,
+                    current_stats,
+                    f,
+                )
+                .await;
+
+                current_stats = new_stats?;
+
+                if let Some(ref mut remaining) = remaining_limit {
+                    *remaining = remaining.saturating_sub(processed);
+                    if *remaining == 0 {
+                        break;
+                    }
+                }
+
+                batch = Vec::with_capacity(TAG_FETCH_BATCH_SIZE);
+            }
+        }
+
+        if remaining_limit == Some(0) {
+            break;
         }
     }
 
@@ -120,10 +125,10 @@ where
     if !batch.is_empty() {
         let (_processed, new_stats) =
             process_tag_batch(batch, &tag_ctx, remaining_limit, current_stats, f).await;
-        current_stats = new_stats;
+        current_stats = new_stats?;
     }
 
-    current_stats
+    Ok(current_stats)
 }
 
 /// Process a batch of objects: fetch tags and apply tag filters
@@ -133,10 +138,10 @@ async fn process_tag_batch<F, Fut2>(
     limit: Option<usize>,
     stats: Option<FindStat>,
     f: &mut F,
-) -> (usize, Option<FindStat>)
+) -> (usize, S3FindResult<Option<FindStat>>)
 where
     F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
-    Fut2: Future<Output = Option<FindStat>>,
+    Fut2: Future<Output = S3FindResult<Option<FindStat>>>,
 {
     // Fetch tags for all objects in the batch
     let objects_with_tags = fetch_tags_for_objects(
@@ -172,7 +177,7 @@ where
     let new_stats = if !matching.is_empty() {
         f(stats, matching).await
     } else {
-        stats
+        Ok(stats)
     };
 
     (count, new_stats)
@@ -180,67 +185,146 @@ where
 
 #[inline]
 async fn list_filter_limit_execute<P, F, Fut, Fut2>(
-    iterator: impl Stream<Item = Vec<StreamObject>>,
+    iterator: impl Stream<Item = S3FindResult<Vec<StreamObject>>>,
     limit: usize,
     stats: Option<FindStat>,
     p: P,
     f: &mut F,
-) -> Option<FindStat>
+) -> S3FindResult<Option<FindStat>>
 where
     P: FnMut(&StreamObject) -> Fut,
     Fut: Future<Output = bool>,
     F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
-    Fut2: Future<Output = Option<FindStat>>,
+    Fut2: Future<Output = S3FindResult<Option<FindStat>>>,
 {
-    iterator
-        .map(|x| futures::stream::iter(x.into_iter()))
-        .flatten()
-        .filter(p)
-        .take(limit)
-        .chunks(CHUNK)
-        .fold(stats, f)
-        .await
+    list_filter_execute_internal(iterator, Some(limit), stats, p, f).await
 }
 
 #[inline]
 async fn list_filter_unlimited_execute<P, F, Fut, Fut2>(
-    iterator: impl Stream<Item = Vec<StreamObject>>,
+    iterator: impl Stream<Item = S3FindResult<Vec<StreamObject>>>,
     stats: Option<FindStat>,
     p: P,
     f: &mut F,
-) -> Option<FindStat>
+) -> S3FindResult<Option<FindStat>>
 where
     P: FnMut(&StreamObject) -> Fut,
     Fut: Future<Output = bool>,
     F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
-    Fut2: Future<Output = Option<FindStat>>,
+    Fut2: Future<Output = S3FindResult<Option<FindStat>>>,
 {
-    iterator
-        .map(|x| futures::stream::iter(x.into_iter()))
-        .flatten()
-        .filter(p)
-        .chunks(CHUNK)
-        .fold(stats, f)
-        .await
+    list_filter_execute_internal(iterator, None, stats, p, f).await
+}
+
+async fn list_filter_execute_internal<P, F, Fut, Fut2>(
+    iterator: impl Stream<Item = S3FindResult<Vec<StreamObject>>>,
+    mut remaining_limit: Option<usize>,
+    mut stats: Option<FindStat>,
+    mut predicate: P,
+    f: &mut F,
+) -> S3FindResult<Option<FindStat>>
+where
+    P: FnMut(&StreamObject) -> Fut,
+    Fut: Future<Output = bool>,
+    F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
+    Fut2: Future<Output = S3FindResult<Option<FindStat>>>,
+{
+    let mut stream = Box::pin(iterator);
+    let mut chunk = Vec::with_capacity(CHUNK);
+
+    while let Some(batch_result) = stream.next().await {
+        let batch = batch_result?;
+
+        for obj in batch {
+            if remaining_limit == Some(0) {
+                return flush_chunk(stats, chunk, f).await;
+            }
+
+            if !predicate(&obj).await {
+                continue;
+            }
+
+            chunk.push(obj);
+
+            if let Some(ref mut remaining) = remaining_limit {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    return flush_chunk(stats, chunk, f).await;
+                }
+            }
+
+            if chunk.len() >= CHUNK {
+                stats = f(stats, std::mem::take(&mut chunk)).await?;
+            }
+        }
+    }
+
+    flush_chunk(stats, chunk, f).await
+}
+
+async fn flush_chunk<F, Fut2>(
+    stats: Option<FindStat>,
+    chunk: Vec<StreamObject>,
+    f: &mut F,
+) -> S3FindResult<Option<FindStat>>
+where
+    F: FnMut(Option<FindStat>, Vec<StreamObject>) -> Fut2,
+    Fut2: Future<Output = S3FindResult<Option<FindStat>>>,
+{
+    if chunk.is_empty() {
+        return Ok(stats);
+    }
+
+    f(stats, chunk).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{S3FindError, S3FindResult};
+    use anyhow::anyhow;
     use aws_sdk_s3::types::Object;
     use futures::stream;
+    use std::cell::Cell;
     use std::future::{Ready, ready};
 
     /// Helper to create the standard stats accumulator closure used in tests.
     fn make_stats_accumulator()
-    -> impl FnMut(Option<FindStat>, Vec<StreamObject>) -> Ready<Option<FindStat>> {
+    -> impl FnMut(Option<FindStat>, Vec<StreamObject>) -> Ready<S3FindResult<Option<FindStat>>>
+    {
         |acc, list| {
             let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
-            ready(
-                acc.map(|stat| stat + &objects)
-                    .or_else(|| Some(FindStat::default() + &objects)),
-            )
+            ready(Ok(acc
+                .map(|stat| stat + &objects)
+                .or_else(|| Some(FindStat::default() + &objects))))
         }
+    }
+
+    fn always_true(_: &StreamObject) -> Ready<bool> {
+        ready(true)
+    }
+
+    thread_local! {
+        static COUNTING_TRUE_CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn reset_counting_true_calls() {
+        COUNTING_TRUE_CALLS.with(|count| count.set(0));
+    }
+
+    fn counting_true(_: &StreamObject) -> Ready<bool> {
+        COUNTING_TRUE_CALLS.with(|count| count.set(count.get() + 1));
+        ready(true)
+    }
+
+    fn counting_true_calls() -> usize {
+        COUNTING_TRUE_CALLS.with(Cell::get)
+    }
+
+    fn ok_iterator(
+        batches: Vec<Vec<StreamObject>>,
+    ) -> impl futures::Stream<Item = S3FindResult<Vec<StreamObject>>> {
+        stream::iter(batches.into_iter().map(Ok))
     }
 
     fn make_stream_objects(keys: &[&str]) -> Vec<StreamObject> {
@@ -317,9 +401,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_filter_execute_with_limit() {
+        reset_counting_true_calls();
         let stream_objects = make_stream_objects(&["object1", "object2", "object3"]);
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
         let limit = Some(2);
         let stats = None;
 
@@ -327,19 +412,39 @@ mod tests {
             iterator,
             limit,
             stats,
-            |_: &StreamObject| ready(true),
+            counting_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert_eq!(result.unwrap().total_files, 2);
+        assert_eq!(result.unwrap().unwrap().total_files, 2);
+        assert_eq!(counting_true_calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_with_zero_limit_skips_predicate() {
+        reset_counting_true_calls();
+        let stream_objects = make_stream_objects(&["object1"]);
+        let iterator = ok_iterator(vec![stream_objects]);
+
+        let result = list_filter_execute(
+            iterator,
+            Some(0),
+            None,
+            counting_true,
+            &mut make_stats_accumulator(),
+        )
+        .await;
+
+        assert!(result.unwrap().is_none());
+        assert_eq!(counting_true_calls(), 0);
     }
 
     #[tokio::test]
     async fn test_list_filter_execute_without_limit() {
         let stream_objects = make_stream_objects(&["object1", "object2", "object3"]);
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
         let limit = None;
         let stats = None;
 
@@ -347,19 +452,36 @@ mod tests {
             iterator,
             limit,
             stats,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert_eq!(result.unwrap().total_files, 3);
+        assert_eq!(result.unwrap().unwrap().total_files, 3);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_skips_non_matching_objects() {
+        let stream_objects = make_stream_objects(&["object1", "object2"]);
+        let iterator = ok_iterator(vec![stream_objects]);
+
+        let result = list_filter_execute(
+            iterator,
+            None,
+            None,
+            |_: &StreamObject| ready(false),
+            &mut make_stats_accumulator(),
+        )
+        .await;
+
+        assert!(result.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn test_list_filter_limit_execute() {
         let stream_objects = make_stream_objects(&["object1", "object2", "object3"]);
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
         let limit = 2;
         let stats = None;
 
@@ -367,30 +489,86 @@ mod tests {
             iterator,
             limit,
             stats,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert_eq!(result.unwrap().total_files, 2);
+        assert_eq!(result.unwrap().unwrap().total_files, 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_flushes_full_chunk() {
+        let stream_objects: Vec<_> = (0..=CHUNK)
+            .map(|i| StreamObject::from_object(Object::builder().key(format!("object{i}")).build()))
+            .collect();
+        let iterator = ok_iterator(vec![stream_objects]);
+        let chunk_sizes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let chunk_sizes_for_accumulator = Arc::clone(&chunk_sizes);
+
+        let result =
+            list_filter_execute(iterator, None, None, always_true, &mut move |acc, list| {
+                chunk_sizes_for_accumulator.lock().unwrap().push(list.len());
+                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
+                ready(Ok(acc
+                    .map(|stat| stat + &objects)
+                    .or_else(|| Some(FindStat::default() + &objects))))
+            })
+            .await;
+
+        assert_eq!(result.unwrap().unwrap().total_files, CHUNK + 1);
+        assert_eq!(chunk_sizes.lock().unwrap().as_slice(), &[CHUNK, 1]);
     }
 
     #[tokio::test]
     async fn test_list_filter_unlimited_execute() {
         let stream_objects = make_stream_objects(&["object1", "object2", "object3"]);
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
         let stats = None;
 
         let result = list_filter_unlimited_execute(
             iterator,
             stats,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert_eq!(result.unwrap().total_files, 3);
+        assert_eq!(result.unwrap().unwrap().total_files, 3);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_propagates_iterator_errors() {
+        let iterator = stream::iter(vec![Err(S3FindError::list_objects(anyhow!(
+            "listing failed"
+        )))]);
+
+        let result = list_filter_execute(
+            iterator,
+            None,
+            None,
+            always_true,
+            &mut make_stats_accumulator(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(S3FindError::ListObjects { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_propagates_command_errors() {
+        let stream_objects = make_stream_objects(&["object1"]);
+        let iterator = ok_iterator(vec![stream_objects]);
+
+        let result = list_filter_execute(iterator, None, None, always_true, &mut |_, _| {
+            ready(Err(S3FindError::command_execution(anyhow!(
+                "command failed"
+            ))))
+        })
+        .await;
+
+        assert!(matches!(result, Err(S3FindError::CommandExecution { .. })));
     }
 
     // Tests for list_filter_execute_with_tags and process_tag_batch
@@ -408,7 +586,7 @@ mod tests {
         ]);
 
         let client = make_test_client(vec![]);
-        let stats = Arc::new(TagFetchStats::new());
+        let tag_stats = Arc::new(TagFetchStats::new());
 
         // Create a tag filter that matches env=prod
         let tag_filters = TagFilterList::with_filters(
@@ -424,23 +602,24 @@ mod tests {
             bucket: "test-bucket".to_string(),
             filters: tag_filters,
             config: TagFetchConfig::default().with_concurrency(1),
-            stats: Arc::clone(&stats),
+            stats: Arc::clone(&tag_stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             None, // No limit
             None, // No initial stats
             tag_ctx,
-            |_: &StreamObject| ready(true), // Cheap filter passes all
+            always_true, // Cheap filter passes all
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().total_files, 2);
+        let stats = result.unwrap();
+        assert!(stats.is_some());
+        assert_eq!(stats.unwrap().total_files, 2);
     }
 
     #[tokio::test]
@@ -474,20 +653,85 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             Some(2), // Limit to 2
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().total_files, 2);
+        let stats = result.unwrap();
+        assert!(stats.is_some());
+        assert_eq!(stats.unwrap().total_files, 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_filter_execute_with_tags_limit_keeps_traversal_order() {
+        use crate::arg::TagFilter;
+        use crate::filter::TagFilterList;
+
+        let tag = Tag::builder().key("env").value("prod").build().unwrap();
+        let stream_objects = make_stream_objects_with_tags(&[
+            ("file1.txt", vec![tag.clone()]),
+            ("file2.txt", vec![tag.clone()]),
+            ("file3.txt", vec![tag]),
+        ]);
+
+        let client = make_test_client(vec![]);
+        let stats = Arc::new(TagFetchStats::new());
+        let seen_keys = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let tag_filters = TagFilterList::with_filters(
+            vec![TagFilter {
+                key: "env".to_string(),
+                value: "prod".to_string(),
+            }],
+            vec![],
+        );
+
+        let tag_ctx = TagFilterContext {
+            client,
+            bucket: "test-bucket".to_string(),
+            filters: tag_filters,
+            config: TagFetchConfig::default().with_concurrency(3),
+            stats: Arc::clone(&stats),
+        };
+
+        let iterator = ok_iterator(vec![stream_objects]);
+        let seen_keys_for_accumulator = Arc::clone(&seen_keys);
+
+        let result = list_filter_execute_with_tags(
+            iterator,
+            Some(2),
+            None,
+            tag_ctx,
+            always_true,
+            &mut move |acc, list| {
+                seen_keys_for_accumulator
+                    .lock()
+                    .unwrap()
+                    .extend(list.iter().filter_map(|obj| obj.key().map(str::to_string)));
+
+                let objects: Vec<_> = list.iter().map(|so| so.object.clone()).collect();
+                ready(Ok(acc
+                    .map(|stat| stat + &objects)
+                    .or_else(|| Some(FindStat::default() + &objects))))
+            },
+        )
+        .await;
+
+        let stats = result.unwrap();
+        assert!(stats.is_some());
+        assert_eq!(stats.unwrap().total_files, 2);
+        assert_eq!(
+            seen_keys.lock().unwrap().as_slice(),
+            ["file1.txt", "file2.txt"]
+        );
     }
 
     #[tokio::test]
@@ -520,7 +764,7 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
@@ -533,7 +777,7 @@ mod tests {
         .await;
 
         // No objects should match since cheap filter rejects all
-        assert!(result.is_none());
+        assert!(result.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -567,20 +811,20 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true), // Cheap filter passes all
+            always_true, // Cheap filter passes all
             &mut make_stats_accumulator(),
         )
         .await;
 
         // No objects should match since tag filter rejects all
-        assert!(result.is_none());
+        assert!(result.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -598,7 +842,7 @@ mod tests {
         ];
 
         let client = make_test_client(events);
-        let stats = Arc::new(TagFetchStats::new());
+        let tag_stats = Arc::new(TagFetchStats::new());
 
         let tag_filters = TagFilterList::with_filters(
             vec![TagFilter {
@@ -613,24 +857,28 @@ mod tests {
             bucket: "test-bucket".to_string(),
             filters: tag_filters,
             config: TagFetchConfig::default().with_concurrency(1),
-            stats: Arc::clone(&stats),
+            stats: Arc::clone(&tag_stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().total_files, 2);
-        assert_eq!(stats.success.load(std::sync::atomic::Ordering::Relaxed), 2);
+        let stats = result.unwrap();
+        assert!(stats.is_some());
+        assert_eq!(stats.unwrap().total_files, 2);
+        assert_eq!(
+            tag_stats.success.load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
     }
 
     #[tokio::test]
@@ -658,20 +906,20 @@ mod tests {
         };
 
         // Empty stream
-        let iterator = stream::iter(Vec::<Vec<StreamObject>>::new());
+        let iterator = ok_iterator(Vec::new());
 
         let result = list_filter_execute_with_tags(
             iterator,
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
         // No results from empty stream
-        assert!(result.is_none());
+        assert!(result.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -701,20 +949,20 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             Some(0), // Limit of 0 - should return nothing
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
         // With limit 0, nothing should be processed
-        assert!(result.is_none());
+        assert!(result.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -747,21 +995,22 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert!(stats.is_some());
         // Only file1.txt has owner tag
-        assert_eq!(result.unwrap().total_files, 1);
+        assert_eq!(stats.unwrap().total_files, 1);
     }
 
     #[tokio::test]
@@ -797,21 +1046,22 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert!(stats.is_some());
         // file1.txt and file3.txt have env=prod
-        assert_eq!(result.unwrap().total_files, 2);
+        assert_eq!(stats.unwrap().total_files, 2);
     }
 
     #[tokio::test]
@@ -842,25 +1092,28 @@ mod tests {
         };
 
         // Start with some initial stats
-        let mut initial_stats = FindStat::default();
-        initial_stats.total_files = 5;
-        initial_stats.total_space = 1000;
+        let initial_stats = FindStat {
+            total_files: 5,
+            total_space: 1000,
+            ..FindStat::default()
+        };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             None,
             Some(initial_stats),
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert!(stats.is_some());
         // Initial 5 files + 1 new file = 6
-        assert_eq!(result.unwrap().total_files, 6);
+        assert_eq!(stats.unwrap().total_files, 6);
     }
 
     #[tokio::test]
@@ -901,21 +1154,22 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             None,
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert!(stats.is_some());
         // All 150 objects should match
-        assert_eq!(result.unwrap().total_files, 150);
+        assert_eq!(stats.unwrap().total_files, 150);
     }
 
     #[tokio::test]
@@ -956,21 +1210,22 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         let result = list_filter_execute_with_tags(
             iterator,
             Some(50), // Limit to 50 - should terminate during first batch
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert!(stats.is_some());
         // Only 50 objects should be returned due to limit
-        assert_eq!(result.unwrap().total_files, 50);
+        assert_eq!(stats.unwrap().total_files, 50);
     }
 
     #[tokio::test]
@@ -1011,7 +1266,7 @@ mod tests {
             stats: Arc::clone(&stats),
         };
 
-        let iterator = stream::iter(vec![stream_objects]);
+        let iterator = ok_iterator(vec![stream_objects]);
 
         // Limit to exactly 100 - should exhaust limit after first batch
         let result = list_filter_execute_with_tags(
@@ -1019,13 +1274,14 @@ mod tests {
             Some(100),
             None,
             tag_ctx,
-            |_: &StreamObject| ready(true),
+            always_true,
             &mut make_stats_accumulator(),
         )
         .await;
 
-        assert!(result.is_some());
+        let stats = result.unwrap();
+        assert!(stats.is_some());
         // Exactly 100 objects should match (first batch)
-        assert_eq!(result.unwrap().total_files, 100);
+        assert_eq!(stats.unwrap().total_files, 100);
     }
 }

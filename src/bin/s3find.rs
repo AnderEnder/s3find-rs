@@ -1,20 +1,30 @@
 use std::future::ready;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-
-use anyhow::Error;
 
 use clap::Parser;
 use s3find::adapters::aws;
 use s3find::arg::*;
 use s3find::command::*;
+use s3find::error::S3FindResult;
 use s3find::filter::TagFilterList;
 use s3find::filter_list::FilterList;
 use s3find::run::*;
 use s3find::tag_fetcher::{TagFetchConfig, TagFetchStats};
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> ExitCode {
+    match run_cli().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run_cli() -> S3FindResult<()> {
     let args = FindOpt::parse();
 
     let client = aws::setup_client(&args).await;
@@ -26,7 +36,7 @@ async fn main() -> Result<(), Error> {
     let stats = default_stats(args.summarize);
 
     // Use two-phase filtering if tag filters are configured
-    let stats = if tag_filters.has_filters() {
+    let stats = (if tag_filters.has_filters() {
         let tag_stats = Arc::new(TagFetchStats::new());
 
         // Show warning for large operations
@@ -61,11 +71,12 @@ async fn main() -> Result<(), Error> {
             let failed = tag_stats.failed.load(Ordering::Relaxed);
             let throttled = tag_stats.throttled.load(Ordering::Relaxed);
             let access_denied = tag_stats.access_denied.load(Ordering::Relaxed);
+            let excluded = tag_stats.excluded.load(Ordering::Relaxed);
 
-            if success > 0 || failed > 0 {
+            if success > 0 || failed > 0 || throttled > 0 || access_denied > 0 || excluded > 0 {
                 eprintln!(
-                    "Tag fetch stats: {} success, {} failed, {} throttled, {} access denied",
-                    success, failed, throttled, access_denied
+                    "Tag fetch stats: {} success, {} failed, {} throttled, {} access denied, {} excluded",
+                    success, failed, throttled, access_denied, excluded
                 );
             }
         }
@@ -80,10 +91,12 @@ async fn main() -> Result<(), Error> {
             &mut |acc, x| command.exec(acc, x),
         )
         .await
-    };
+    })?;
 
-    if args.summarize {
-        println!("{}", stats.unwrap());
+    if args.summarize
+        && let Some(stats) = stats
+    {
+        println!("{stats}");
     }
 
     Ok(())
