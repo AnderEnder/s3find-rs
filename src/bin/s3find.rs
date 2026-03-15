@@ -69,14 +69,13 @@ async fn run_cli() -> S3FindResult<()> {
         if args.summarize {
             let success = tag_stats.success.load(Ordering::Relaxed);
             let failed = tag_stats.failed.load(Ordering::Relaxed);
-            let throttled = tag_stats.throttled.load(Ordering::Relaxed);
             let access_denied = tag_stats.access_denied.load(Ordering::Relaxed);
             let excluded = tag_stats.excluded.load(Ordering::Relaxed);
 
-            if success > 0 || failed > 0 || throttled > 0 || access_denied > 0 || excluded > 0 {
+            if success > 0 || failed > 0 || access_denied > 0 || excluded > 0 {
                 eprintln!(
-                    "Tag fetch stats: {} success, {} failed, {} throttled, {} access denied, {} excluded",
-                    success, failed, throttled, access_denied, excluded
+                    "Tag fetch stats: {} success, {} failed, {} access denied, {} excluded",
+                    success, failed, access_denied, excluded
                 );
             }
         }
