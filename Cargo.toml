@@ -36,7 +36,7 @@ futures = "0.3"
 async-stream = "0.3"
 indicatif = "0.18"
 humansize = "2"
-itertools = "0.14"
+itertools = "0.15"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
@@ -50,7 +50,7 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 lazy_static = "1"
-shlex = "1"
+shlex = "2"
 urlencoding = "2"
 
 [dev-dependencies]
