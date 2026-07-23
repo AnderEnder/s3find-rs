@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: cache
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: static build release
         run: |
           docker run --rm -t \
@@ -39,7 +39,7 @@ jobs:
           sudo strip target/x86_64-unknown-linux-musl/release/s3find
           sudo tar -C target/x86_64-unknown-linux-musl/release -czf  $(pwd)/s3find-x86_64-linux.tar.gz s3find
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: s3find-x86_64-linux.tar.gz
         env:
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: static build release
         run: |
           docker run --rm -t \
@@ -60,7 +60,7 @@ jobs:
           sudo strip target/aarch64-unknown-linux-musl/release/s3find
           sudo tar -C target/aarch64-unknown-linux-musl/release -czf  $(pwd)/s3find-aarch64-linux.tar.gz s3find
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: s3find-aarch64-linux.tar.gz
         env:
@@ -70,7 +70,7 @@ jobs:
     runs-on: macOS-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: cache
         uses: Swatinem/rust-cache@v2
@@ -81,7 +81,7 @@ jobs:
       - name: archive
         run: tar -C target/release -czf $(pwd)/s3find-aarch64-osx.tar.gz s3find
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: s3find-aarch64-osx.tar.gz
         env:
@@ -91,7 +91,7 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: cache
         uses: Swatinem/rust-cache@v2
@@ -102,7 +102,7 @@ jobs:
       - name: archive
         run: tar -C target/release -czf $(pwd)/s3find-x86_64-osx.tar.gz s3find
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: s3find-x86_64-osx.tar.gz
         env:
@@ -112,7 +112,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: cache
@@ -125,7 +125,7 @@ jobs:
         run: tar -C target/release -czf $(pwd)/s3find-x86_64-windows.tar.gz s3find.exe
         shell: bash
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: s3find-x86_64-windows.tar.gz
         env:
