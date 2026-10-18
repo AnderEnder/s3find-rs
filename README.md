@@ -76,6 +76,13 @@ cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.17
 cargo zigbuild --release --target x86_64-unknown-freebsd
 ```
 
+Both macOS binaries are built on Apple Silicon; Xcode's toolchain targets Intel Macs directly:
+
+```sh
+rustup target add x86_64-apple-darwin
+cargo build --release --target x86_64-apple-darwin
+```
+
 ## Development
 
 ### Checks
