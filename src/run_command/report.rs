@@ -97,13 +97,11 @@ impl Serialize for ObjectRef<'_> {
         if let Some(version_id) = &self.object.version_id {
             map.serialize_entry("version_id", version_id)?;
         }
-        map.serialize_entry(
-            "url",
-            &S3Url {
-                bucket: self.bucket,
-                key,
-            },
-        )?;
+        let url = S3Url {
+            bucket: self.bucket,
+            key,
+        };
+        map.serialize_entry("url", &url)?;
         map.end()
     }
 }
