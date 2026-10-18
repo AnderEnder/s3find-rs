@@ -22,6 +22,7 @@ use self::report::write_record;
 mod acl;
 mod delete;
 mod exec;
+mod object_copy;
 mod print;
 mod report;
 mod restore;

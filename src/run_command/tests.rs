@@ -1,7 +1,8 @@
 use super::*;
+use crate::adapters::aws::ObjectHead;
 use crate::adapters::aws::{DeleteObjectRequest, RestoreObjectStatus};
 use crate::arg::*;
-use crate::testing::{ExecuteCaptured, FakeS3Client, replay_s3_client};
+use crate::testing::{ExecuteCaptured, FakeS3Client, MultipartCall, replay_s3_client};
 use aws_sdk_s3::primitives::{DateTimeFormat, SdkBody};
 use aws_sdk_s3::{
     primitives::DateTime,
@@ -2858,6 +2859,7 @@ fn made_changes(client: &FakeS3Client) -> bool {
         && client.public_calls.lock().unwrap().is_empty()
         && client.copy_calls.lock().unwrap().is_empty()
         && client.restore_calls.lock().unwrap().is_empty()
+        && client.multipart_calls.lock().unwrap().is_empty()
         && client.get_object_calls.lock().unwrap().is_empty())
 }
 
@@ -3392,5 +3394,162 @@ async fn test_flat_copies_refuse_two_keys_with_one_destination() -> Result<(), E
     );
     assert_eq!(copies(&client).len(), 2);
     assert_eq!(deleted(&client), ["a/x.txt", "a/x.txt"]);
+    Ok(())
+}
+
+const MIB: i64 = 1024 * 1024;
+const GIB: i64 = 1024 * MIB;
+
+fn sized(key: &str, size: i64) -> StreamObject {
+    StreamObject::from_object(Object::builder().key(key).size(size).build())
+}
+
+fn head(size: i64) -> ObjectHead {
+    ObjectHead {
+        size,
+        e_tag: Some("\"abc\"".to_owned()),
+        content_type: Some("video/mp4".to_owned()),
+        metadata: [("owner".to_owned(), "data-team".to_owned())].into(),
+        ..ObjectHead::default()
+    }
+}
+
+fn env_prod() -> Vec<Tag> {
+    vec![Tag::builder().key("env").value("prod").build().unwrap()]
+}
+
+fn dest_bucket(prefix: Option<&str>) -> S3Path {
+    S3Path {
+        bucket: "dest-bucket".to_owned(),
+        prefix: prefix.map(str::to_owned),
+    }
+}
+
+#[tokio::test]
+async fn test_objects_over_5_gib_are_copied_in_parts() -> Result<(), Error> {
+    let size = 6 * GIB;
+    let client = FakeS3Client::default()
+        .with_object_head("test-bucket", "videos/big.mp4", None, head(size))
+        .with_tags("test-bucket", "videos/big.mp4", None, env_prod());
+    let cmd = Cmd::Copy(S3Copy {
+        destination: dest_bucket(Some("archive")),
+        flat: false,
+        storage_class: Some(StorageClassName::from("GLACIER")),
+    });
+
+    let out = cmd
+        .execute_captured(&client, &test_path(), &[sized("videos/big.mp4", size)])
+        .await?;
+
+    assert_eq!(
+        out,
+        "copying: s3://test-bucket/videos%2Fbig.mp4 => s3://dest-bucket/archive/videos/big.mp4\n"
+    );
+    assert!(client.copy_calls.lock().unwrap().is_empty());
+
+    // Metadata and tags carried over, then 12 parts of 512 MiB, each only if
+    // the source still has the ETag it had when the copy started.
+    let parts = (0..12).map(|i| MultipartCall::Part {
+        upload_id: "upload-1".to_owned(),
+        part_number: i + 1,
+        copy_source: "test-bucket/videos%2Fbig.mp4".to_owned(),
+        range: i64::from(i) * 512 * MIB..=i64::from(i + 1) * 512 * MIB - 1,
+        source_e_tag: Some("\"abc\"".to_owned()),
+    });
+    let expected: Vec<_> = [MultipartCall::Create {
+        bucket: "dest-bucket".to_owned(),
+        key: "archive/videos/big.mp4".to_owned(),
+        source: Box::new(head(size)),
+        storage_class: Some("GLACIER".to_owned()),
+        tags: vec![("env".to_owned(), "prod".to_owned())],
+    }]
+    .into_iter()
+    .chain(parts)
+    .chain([MultipartCall::Complete {
+        upload_id: "upload-1".to_owned(),
+        parts: (1..=12).map(|n| (n, format!("etag-{n}"))).collect(),
+    }])
+    .collect();
+    assert_eq!(*client.multipart_calls.lock().unwrap(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_failed_multipart_copy_is_aborted_and_move_deletes_nothing() {
+    let size = 6 * GIB;
+    let client = FakeS3Client::default()
+        .with_object_head("test-bucket", "big.bin", None, head(size))
+        .with_failing_part(3);
+
+    let err = move_to(dest_bucket(None), false)
+        .execute_captured(&client, &test_path(), &[sized("big.bin", size)])
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        format!("{err:#}"),
+        "s3://test-bucket/big.bin: PreconditionFailed"
+    );
+    let calls = client.multipart_calls.lock().unwrap();
+    assert_eq!(
+        calls.last(),
+        Some(&MultipartCall::Abort {
+            upload_id: "upload-1".to_owned()
+        })
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| matches!(call, MultipartCall::Complete { .. }))
+    );
+    assert!(deleted(&client).is_empty());
+}
+
+#[tokio::test]
+async fn test_change_storage_of_a_big_object_copies_it_onto_itself_in_parts() -> Result<(), Error> {
+    let size = 5 * GIB + 1;
+    let client =
+        FakeS3Client::default().with_object_head("test-bucket", "big.bin", None, head(size));
+    // Tags fetched for tag filtering are reused.
+    let mut object = sized("big.bin", size);
+    object.tags = Some(env_prod());
+
+    Cmd::ChangeStorage(ChangeStorage {
+        storage_class: StorageClassName::from("STANDARD_IA"),
+    })
+    .execute_captured(&client, &test_path(), &[object])
+    .await?;
+
+    let calls = client.multipart_calls.lock().unwrap();
+    assert_eq!(
+        calls[0],
+        MultipartCall::Create {
+            bucket: "test-bucket".to_owned(),
+            key: "big.bin".to_owned(),
+            source: Box::new(head(size)),
+            storage_class: Some("STANDARD_IA".to_owned()),
+            tags: vec![("env".to_owned(), "prod".to_owned())],
+        }
+    );
+    assert_eq!(calls.len(), 1 + 11 + 1);
+    assert!(client.get_tag_calls.lock().unwrap().is_empty());
+    assert!(client.copy_calls.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dry_run_of_a_big_copy_makes_no_requests() -> Result<(), Error> {
+    let client = FakeS3Client::default();
+
+    copy_to(dest_bucket(None), false)
+        .execute_with(
+            &client,
+            &test_path(),
+            &[sized("big.bin", 6 * GIB)],
+            dry_run(false),
+        )
+        .await?;
+
+    assert!(!made_changes(&client));
     Ok(())
 }
