@@ -309,15 +309,25 @@ async fn test_command_errors_stop_listing() {
 }
 
 #[test]
-fn test_from_opts_sets_concurrency() {
-    let client = FakeS3Client::default;
+fn test_from_opts_sets_command_options() {
+    let options =
+        |args: &[&str]| Pipeline::from_opts(&opts(args), FakeS3Client::default()).command_options;
+
+    assert_eq!(options(&["s3://bucket"]), CommandOptions::default());
     assert_eq!(
-        Pipeline::from_opts(&opts(&["s3://bucket"]), client()).concurrency,
-        DEFAULT_CONCURRENCY
-    );
-    assert_eq!(
-        Pipeline::from_opts(&opts(&["s3://bucket", "--concurrency", "7"]), client()).concurrency,
-        7
+        options(&[
+            "s3://bucket",
+            "--concurrency",
+            "7",
+            "--json",
+            "delete",
+            "--dry-run"
+        ]),
+        CommandOptions {
+            concurrency: 7,
+            json: true,
+            dry_run: true,
+        }
     );
 }
 

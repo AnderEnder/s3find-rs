@@ -4,21 +4,25 @@
 //! implement [`RunCommand`] for that struct in a module here, and add the
 //! variant to the `for_each_command!` list below.
 
+use std::fmt;
 use std::io::Write;
 use std::pin::pin;
-use std::process::ExitStatus;
 
 use anyhow::{Context, Error};
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, stream};
+use serde::Serialize;
 
 use crate::adapters::aws::S3Client;
-use crate::arg::{Cmd, DoNothing, S3Path};
+use crate::arg::{Cmd, DoNothing, FindOpt, S3Path};
 use crate::object::StreamObject;
+
+use self::report::write_record;
 
 mod acl;
 mod delete;
 mod exec;
 mod print;
+mod report;
 mod restore;
 mod tag;
 mod transfer;
@@ -28,49 +32,82 @@ use self::acl::generate_s3_url;
 #[cfg(test)]
 use self::print::ObjectRecord;
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct ExecStatus {
-    pub status: ExitStatus,
-    pub runcommand: String,
-}
-
 /// Default for `--concurrency`.
 pub const DEFAULT_CONCURRENCY: usize = 32;
 
-/// What a command needs to run: S3 access, the searched path and an output sink.
+/// How commands run and report, from the CLI options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandOptions {
+    /// Most requests to keep in flight for commands that make one per object.
+    pub concurrency: usize,
+    /// Write one JSON object per line instead of text.
+    pub json: bool,
+    /// Report what commands that change objects would do, without doing it.
+    pub dry_run: bool,
+}
+
+impl Default for CommandOptions {
+    fn default() -> Self {
+        Self {
+            concurrency: DEFAULT_CONCURRENCY,
+            json: false,
+            dry_run: false,
+        }
+    }
+}
+
+impl CommandOptions {
+    pub fn from_opts(opts: &FindOpt) -> Self {
+        Self {
+            concurrency: opts.concurrency.into(),
+            json: opts.json,
+            dry_run: opts.dry_run,
+        }
+    }
+}
+
+/// What a command needs to run: S3 access, the searched path, an output sink
+/// and how to run.
 pub struct CommandContext<'a, C> {
     pub client: &'a C,
     /// The path being searched; every object in a batch lives in `path.bucket`.
     pub path: &'a S3Path,
     /// Where results and progress go (stdout in the CLI).
     pub out: &'a mut (dyn Write + Send),
-    /// Most requests to keep in flight for commands that make one per object.
-    pub concurrency: usize,
+    pub options: CommandOptions,
 }
 
 impl<C: S3Client> CommandContext<'_, C> {
-    /// Runs `request` on each object with up to `concurrency` in flight and
-    /// writes the line each one returns, in input order.
+    /// Writes the result of a command that changes objects, marked as a
+    /// preview under `--dry-run`.
+    fn report(&mut self, record: &(impl fmt::Display + Serialize)) -> Result<(), Error> {
+        write_record(self.out, record, self.options.json, self.options.dry_run)
+    }
+
+    /// For commands that change objects: runs `request` on each object with
+    /// up to `concurrency` in flight and reports each record it returns, in
+    /// input order. Under `--dry-run`, `request` must not change anything.
     ///
     /// The first error stops the batch and is reported with the object it
     /// came from; requests already in flight are dropped.
-    async fn for_each_object<'o, Fut>(
+    async fn for_each_object<'o, R, Fut>(
         &mut self,
         objects: impl Iterator<Item = &'o StreamObject> + Send + 'o,
         request: impl FnMut(&'o StreamObject) -> Fut + Send + 'o,
     ) -> Result<(), Error>
     where
-        Fut: Future<Output = Result<String, Error>> + Send + 'o,
+        R: fmt::Display + Serialize + Send + 'o,
+        Fut: Future<Output = Result<R, Error>> + Send + 'o,
         Self: 'o,
     {
-        let mut lines = pin!(in_order(
+        let mut records = pin!(in_order(
             &self.path.bucket,
             objects,
-            self.concurrency,
+            self.options.concurrency,
             request
         ));
-        while let Some(line) = lines.try_next().await? {
-            writeln!(self.out, "{line}")?;
+        while let Some(record) = records.try_next().await? {
+            self.report(&record)?;
         }
         Ok(())
     }

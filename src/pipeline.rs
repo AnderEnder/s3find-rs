@@ -14,7 +14,7 @@ use crate::error::{S3FindError, S3FindResult};
 use crate::filter::FilterList;
 use crate::listing::{ListingOptions, list_objects};
 use crate::object::StreamObject;
-use crate::run_command::{CommandContext, DEFAULT_CONCURRENCY, RunCommand};
+use crate::run_command::{CommandContext, CommandOptions, RunCommand};
 use crate::stats::FindStat;
 use crate::tag_fetcher::{TagFetchStats, TagFetcher};
 
@@ -38,7 +38,7 @@ pub struct Pipeline<C, K = Cmd> {
     tag_stage: Option<TagStage>,
     limit: Option<usize>,
     command: K,
-    concurrency: usize,
+    command_options: CommandOptions,
     summarize: bool,
 }
 
@@ -53,7 +53,7 @@ impl<C: S3Client> Pipeline<C> {
                 opts.tag_concurrency.into(),
             )
             .with_limit(opts.limit)
-            .with_concurrency(opts.concurrency.into())
+            .with_command_options(CommandOptions::from_opts(opts))
             .with_summary(opts.summarize)
     }
 }
@@ -68,7 +68,7 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
             tag_stage: None,
             limit: None,
             command,
-            concurrency: DEFAULT_CONCURRENCY,
+            command_options: CommandOptions::default(),
             summarize: false,
         }
     }
@@ -95,9 +95,9 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
         self
     }
 
-    /// Most requests a command keeps in flight when it makes one per object.
-    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
-        self.concurrency = concurrency;
+    /// Concurrency, output format and dry run for the command.
+    pub fn with_command_options(mut self, options: CommandOptions) -> Self {
+        self.command_options = options;
         self
     }
 
@@ -207,7 +207,7 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
             client: &self.client,
             path: &self.listing.path,
             out,
-            concurrency: self.concurrency,
+            options: self.command_options,
         };
         self.command
             .execute(&mut ctx, batch)

@@ -95,6 +95,24 @@ The authorization flow is the following chain:
   * use AWS instance IAM profile
   * use AWS container IAM profile
 "#
+    ),
+    after_long_help(
+        r#"Examples:
+  s3find s3://bucket/logs --name '*.gz' --mtime +30d ls
+  s3find s3://bucket --bytes-size +1G --summarize nothing
+  s3find s3://bucket --limit 10 --json print
+  s3find s3://bucket/tmp --name '*.tmp' delete --dry-run
+  s3find s3://bucket/data copy s3://backup/data --dry-run --json
+
+Output:
+  Results are written to stdout, one per line. Warnings, progress bars and
+  errors go to stderr. Use --json for one JSON object per line, and
+  --dry-run to preview commands that change objects.
+
+Exit status:
+  0  success, including when nothing matched
+  1  listing or a command failed
+  2  invalid arguments"#
     )
 )]
 pub struct FindOpt {
@@ -293,6 +311,39 @@ times out."#
     /// Print summary statistics
     #[arg(name = "summarize", long, short)]
     pub summarize: bool,
+
+    /// Write results as JSON Lines: one JSON object per line
+    #[arg(
+        name = "json",
+        long,
+        global = true,
+        long_help = r#"Write results as JSON Lines: one JSON object per line on stdout.
+
+ls and print write one object per line with its metadata (bucket, key, url,
+size, last_modified, storage_class, e_tag, owner and version fields).
+Commands that change objects write one line per object with an "action"
+field (delete, copy, move, download, tags, public, restore, change-storage,
+exec) and its details. With --summarize the last line is {"summary": {...}}.
+Errors are written to stderr as {"error": "..."}.
+
+Overrides print --format. May be given before or after the command."#
+    )]
+    pub json: bool,
+
+    /// Show what a command would change without changing anything
+    #[arg(
+        name = "dry-run",
+        long,
+        global = true,
+        long_help = r#"Show what a command would change without changing anything.
+
+Objects are listed and filtered as usual, but delete, copy, move, download,
+tags, public, restore, change-storage and exec make no changes and run
+nothing. Each result line is prefixed with "[dry-run] ", or has
+"dry_run": true with --json. Read-only commands run normally.
+May be given before or after the command."#
+    )]
+    pub dry_run: bool,
 
     /// Include all object versions (uses ListObjectVersions API)
     #[arg(

@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::{FutureExt, Stream, TryStreamExt};
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 use crate::adapters::aws::S3Client;
 use crate::error::{S3FindResult, TagFetchError};
@@ -50,6 +51,17 @@ impl TagFetchStats {
         ]
         .iter()
         .all(|counter| counter.load(Ordering::Relaxed) == 0)
+    }
+}
+
+impl Serialize for TagFetchStats {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut stats = serializer.serialize_struct("TagFetchStats", 4)?;
+        stats.serialize_field("success", &self.success.load(Ordering::Relaxed))?;
+        stats.serialize_field("failed", &self.failed.load(Ordering::Relaxed))?;
+        stats.serialize_field("access_denied", &self.access_denied.load(Ordering::Relaxed))?;
+        stats.serialize_field("excluded", &self.excluded.load(Ordering::Relaxed))?;
+        stats.end()
     }
 }
 

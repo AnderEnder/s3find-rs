@@ -2,6 +2,9 @@ use std::fmt;
 
 use aws_sdk_s3::types::Object;
 use humansize::{BINARY, make_format};
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+
+use crate::tag_fetcher::TagFetchStats;
 
 /// Summary statistics over the objects a command was executed on.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -40,6 +43,30 @@ impl FindStat {
             files => self.total_space / files as i64,
         }
     }
+}
+
+impl Serialize for FindStat {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut stat = serializer.serialize_struct("FindStat", 7)?;
+        stat.serialize_field("total_files", &self.total_files)?;
+        stat.serialize_field("total_space", &self.total_space)?;
+        stat.serialize_field("max_size", &self.max_size)?;
+        stat.serialize_field("max_key", &self.max_key)?;
+        stat.serialize_field("min_size", &self.min_size)?;
+        stat.serialize_field("min_key", &self.min_key)?;
+        stat.serialize_field("average_size", &self.average_size())?;
+        stat.end()
+    }
+}
+
+/// `--summarize` output with `--json`: the statistics, plus tag fetch counters
+/// when tags were fetched.
+#[derive(serde::Serialize)]
+pub struct Summary<'a> {
+    #[serde(flatten)]
+    pub stats: &'a FindStat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag_fetch: Option<&'a TagFetchStats>,
 }
 
 impl fmt::Display for FindStat {
@@ -193,6 +220,44 @@ mod tests {
 
         assert_eq!(stat.max_key, "second");
         assert_eq!(stat.min_key, "first");
+    }
+
+    #[test]
+    fn test_summary_json() {
+        let mut stat = FindStat::default();
+        record_all(
+            &mut stat,
+            &[
+                Object::builder().key("a").size(10).build(),
+                Object::builder().key("b").size(30).build(),
+            ],
+        );
+        let tag_fetch = TagFetchStats::new();
+        tag_fetch.record_success();
+
+        let summary = |tag_fetch| {
+            serde_json::to_value(Summary {
+                stats: &stat,
+                tag_fetch,
+            })
+            .unwrap()
+        };
+
+        let expected = serde_json::json!({
+            "total_files": 2,
+            "total_space": 40,
+            "max_size": 30,
+            "max_key": "b",
+            "min_size": 10,
+            "min_key": "a",
+            "average_size": 20,
+        });
+        assert_eq!(summary(None), expected);
+
+        let mut with_tags = expected;
+        with_tags["tag_fetch"] =
+            serde_json::json!({"success": 1, "failed": 0, "access_denied": 0, "excluded": 0});
+        assert_eq!(summary(Some(&tag_fetch)), with_tags);
     }
 
     #[test]
