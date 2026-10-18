@@ -24,7 +24,7 @@ jobs:
           cargo package
           cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
 
-  release-linux:
+  release-cross-compile:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,6 +49,10 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             zig-target: aarch64-unknown-linux-gnu.2.17
             asset: s3find-aarch64-linux-gnu
+          # FreeBSD 14 or newer. Its system allocator is already jemalloc.
+          - target: x86_64-unknown-freebsd
+            zig-target: x86_64-unknown-freebsd
+            asset: s3find-x86_64-freebsd
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -69,7 +73,7 @@ jobs:
       - name: build release
         run: cargo zigbuild --release --locked --target ${{ matrix.zig-target }} ${{ matrix.args }}
       - name: smoke test
-        if: startsWith(matrix.target, 'x86_64')
+        if: startsWith(matrix.target, 'x86_64-unknown-linux')
         run: target/${{ matrix.target }}/release/s3find --version
       - name: archive
         run: tar -C target/${{ matrix.target }}/release -czf ${{ matrix.asset }}.tar.gz s3find
