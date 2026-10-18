@@ -79,11 +79,7 @@ impl From<&StreamObject> for ObjectRecord {
                 .unwrap_or_default(),
             version_id: stream_obj.version_id.clone(),
             is_latest: stream_obj.is_latest,
-            is_delete_marker: if stream_obj.is_delete_marker {
-                Some(true)
-            } else {
-                None
-            },
+            is_delete_marker: stream_obj.is_delete_marker.then_some(true),
         }
     }
 }
@@ -110,7 +106,7 @@ impl AdvancedPrint {
             object
                 .last_modified
                 .and_then(|x| x.fmt(DateTimeFormat::DateTime).ok())
-                .unwrap_or("None".to_string()),
+                .unwrap_or_else(|| "None".to_owned()),
             bucket,
             stream_obj.display_key(),
             object

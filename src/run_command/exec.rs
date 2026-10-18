@@ -31,18 +31,16 @@ impl Exec {
                 .status
                 .code()
                 .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_string());
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let message = if stderr.is_empty() {
-                format!("command `{command_str}` failed with status {status}")
-            } else {
-                format!("command `{command_str}` failed with status {status}: {stderr}")
+                .unwrap_or_else(|| "terminated by signal".to_owned());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let message = match stderr.trim() {
+                "" => format!("command `{command_str}` failed with status {status}"),
+                stderr => format!("command `{command_str}` failed with status {status}: {stderr}"),
             };
             return Err(anyhow!(message));
         }
 
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        writeln!(io, "{output_str}")?;
+        writeln!(io, "{}", String::from_utf8_lossy_owned(output.stdout))?;
 
         Ok(ExecStatus {
             status: output.status,

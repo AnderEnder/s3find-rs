@@ -80,7 +80,7 @@ async fn copy_objects<C: S3Client>(
 ) -> Result<(), Error> {
     for object in live_objects(objects) {
         let key = object.require_key()?;
-        let target = combine_keys(flat, key, &destination.prefix);
+        let target = combine_keys(flat, key, destination.prefix.as_deref());
         let source_path = build_copy_source(&ctx.path.bucket, key, object.version_id.as_deref());
 
         writeln!(

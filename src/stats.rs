@@ -1,7 +1,7 @@
 use std::fmt;
 
 use aws_sdk_s3::types::Object;
-use humansize::*;
+use humansize::{BINARY, make_format};
 
 /// Summary statistics over the objects a command was executed on.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -43,7 +43,7 @@ impl FindStat {
 }
 
 impl fmt::Display for FindStat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let file_size = make_format(BINARY);
         let total_space = file_size(self.total_space as u64);
         let max_size = file_size(self.max_size.unwrap_or_default() as u64);

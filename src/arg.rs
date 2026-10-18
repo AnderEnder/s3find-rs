@@ -19,7 +19,9 @@ const INVALID_PREFIXES: &[&str] = &["sthree-.", "amzn-s3-demo-", "xn--"];
 const INVALID_SUFFIXES: &[&str] = &["-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"];
 
 static S3_PATH_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/(.*))?$"#).unwrap());
+    LazyLock::new(|| Regex::new(r"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/(.*))?$").unwrap());
+
+static FIND_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\w+):(\w+)$").unwrap());
 
 /// Validates an S3 bucket name according to AWS rules:
 /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
@@ -552,12 +554,6 @@ pub enum FindError {
     TimeParse,
     #[error("Cannot parse tag")]
     TagParseError,
-    #[error("Cannot parse tag key")]
-    TagKeyParseError,
-    #[error("Cannot parse tag value")]
-    TagValueParseError,
-    #[error("Invalid days value: it should be in between 1 and 365")]
-    RestoreDaysParseError,
     #[error("Invalid tag filter format. Expected KEY=VALUE, got: {0}")]
     TagFilterParseError(String),
     #[error("Tag filter key cannot be empty")]
@@ -574,28 +570,41 @@ impl FromStr for S3Path {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let captures = S3_PATH_REGEX
-            .captures(s)
-            .ok_or(FindError::S3Parse(s.to_string()))?;
+        let invalid = || FindError::S3Parse(s.to_owned());
+        let captures = S3_PATH_REGEX.captures(s).ok_or_else(invalid)?;
 
-        let bucket = captures
-            .get(1)
-            .map(|x| x.as_str().to_owned())
-            .ok_or(FindError::S3Parse(s.to_string()))?;
-
+        let bucket = captures[1].to_owned();
         if !validate_bucket_name(&bucket) {
-            return Err(FindError::S3Parse(s.to_string()).into());
+            return Err(invalid().into());
         }
 
-        let prefix = captures.get(3).map(|x| {
-            let s = x.as_str();
-            // Strip trailing slashes for consistent behavior
-            let trimmed = s.trim_end_matches('/');
-            trimmed.to_owned()
-        });
+        // Strip trailing slashes for consistent behavior
+        let prefix = captures
+            .get(3)
+            .map(|prefix| prefix.as_str().trim_end_matches('/').to_owned());
 
         Ok(S3Path { bucket, prefix })
     }
+}
+
+/// Splits a `[+|-]<number>[unit]` value such as `+5k` into its sign, number
+/// and unit.
+fn split_signed_quantity(s: &str) -> Option<(Option<char>, i64, Option<char>)> {
+    let (sign, rest) = match s.strip_prefix(['+', '-']) {
+        Some(rest) => (s.chars().next(), rest),
+        None => (None, s),
+    };
+    let digits_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let (digits, unit) = rest.split_at(digits_end);
+
+    let mut unit = unit.chars();
+    let (unit_char, extra) = (unit.next(), unit.next());
+    if extra.is_some() {
+        return None;
+    }
+    Some((sign, digits.parse().ok()?, unit_char))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -609,39 +618,24 @@ impl FromStr for FindSize {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"^([+-]?)(\d*)([kMGTP]?)$")?;
-        let m = re.captures(s).ok_or(FindError::SizeParse)?;
+        let (sign, number, unit) = split_signed_quantity(s).ok_or(FindError::SizeParse)?;
 
-        let sign = m
-            .get(1)
-            .ok_or(FindError::SizeParse)?
-            .as_str()
-            .chars()
-            .next();
-        let number: i64 = m.get(2).ok_or(FindError::SizeParse)?.as_str().parse()?;
-        let metric = m
-            .get(3)
-            .ok_or(FindError::SizeParse)?
-            .as_str()
-            .chars()
-            .next();
-
-        let bytes = match metric {
-            None => number,
-            Some('k') => number * 1024,
-            Some('M') => number * 1024_i64.pow(2),
-            Some('G') => number * 1024_i64.pow(3),
-            Some('T') => number * 1024_i64.pow(4),
-            Some('P') => number * 1024_i64.pow(5),
+        let unit_bytes = match unit {
+            None => 1,
+            Some('k') => 1024,
+            Some('M') => 1024_i64.pow(2),
+            Some('G') => 1024_i64.pow(3),
+            Some('T') => 1024_i64.pow(4),
+            Some('P') => 1024_i64.pow(5),
             Some(_) => return Err(FindError::SizeParse.into()),
         };
+        let bytes = number.checked_mul(unit_bytes).ok_or(FindError::SizeParse)?;
 
-        match sign {
-            Some('+') => Ok(FindSize::Bigger(bytes)),
-            Some('-') => Ok(FindSize::Lower(bytes)),
-            None => Ok(FindSize::Equal(bytes)),
-            Some(_) => Err(FindError::SizeParse.into()),
-        }
+        Ok(match sign {
+            Some('+') => FindSize::Bigger(bytes),
+            Some('-') => FindSize::Lower(bytes),
+            _ => FindSize::Equal(bytes),
+        })
     }
 }
 
@@ -658,39 +652,29 @@ impl FromStr for FindTime {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"^([+-]?)(\d*)([smhdw]?)$")?;
-        let m = re.captures(s).ok_or(FindError::TimeParse)?;
+        const MINUTE: i64 = 60;
+        const HOUR: i64 = 60 * MINUTE;
+        const DAY: i64 = 24 * HOUR;
+        const WEEK: i64 = 7 * DAY;
 
-        let sign = m
-            .get(1)
-            .ok_or(FindError::TimeParse)?
-            .as_str()
-            .chars()
-            .next();
-        let number: i64 = m.get(2).ok_or(FindError::TimeParse)?.as_str().parse()?;
-        let metric = m
-            .get(3)
-            .ok_or(FindError::TimeParse)?
-            .as_str()
-            .chars()
-            .next();
+        let (sign, number, unit) = split_signed_quantity(s).ok_or(FindError::TimeParse)?;
 
-        let seconds = match metric {
-            None => number,
-            Some('s') => number,
-            Some('m') => number * 60,
-            Some('h') => number * 3600,
-            Some('d') => number * 3600 * 24,
-            Some('w') => number * 3600 * 24 * 7,
+        let unit_seconds = match unit {
+            None | Some('s') => 1,
+            Some('m') => MINUTE,
+            Some('h') => HOUR,
+            Some('d') => DAY,
+            Some('w') => WEEK,
             Some(_) => return Err(FindError::TimeParse.into()),
         };
+        let seconds = number
+            .checked_mul(unit_seconds)
+            .ok_or(FindError::TimeParse)?;
 
-        match sign {
-            Some('-') => Ok(FindTime::Upper(seconds)),
-            Some('+') => Ok(FindTime::Lower(seconds)),
-            None => Ok(FindTime::Lower(seconds)),
-            Some(_) => Err(FindError::TimeParse.into()),
-        }
+        Ok(match sign {
+            Some('-') => FindTime::Upper(seconds),
+            _ => FindTime::Lower(seconds),
+        })
     }
 }
 
@@ -718,15 +702,11 @@ impl FromStr for FindTag {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"^(\w+):(\w+)$")?;
-        let m = re.captures(s).ok_or(FindError::TagParseError)?;
-
-        let key = m.get(1).ok_or(FindError::TagKeyParseError)?.as_str();
-        let value = m.get(2).ok_or(FindError::TagValueParseError)?.as_str();
+        let captures = FIND_TAG_REGEX.captures(s).ok_or(FindError::TagParseError)?;
 
         Ok(FindTag {
-            key: key.to_string(),
-            value: value.to_string(),
+            key: captures[1].to_owned(),
+            value: captures[2].to_owned(),
         })
     }
 }
@@ -743,21 +723,18 @@ impl FromStr for TagFilter {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let parts: Vec<&str> = s.splitn(2, '=').collect();
-        if parts.len() != 2 {
-            return Err(FindError::TagFilterParseError(s.to_string()).into());
-        }
+        let (key, value) = s
+            .split_once('=')
+            .ok_or_else(|| FindError::TagFilterParseError(s.to_owned()))?;
 
-        let key = parts[0].trim();
-        let value = parts[1].trim();
-
+        let key = key.trim();
         if key.is_empty() {
             return Err(FindError::TagFilterEmptyKey.into());
         }
 
         Ok(TagFilter {
-            key: key.to_string(),
-            value: value.to_string(),
+            key: key.to_owned(),
+            value: value.trim().to_owned(),
         })
     }
 }
@@ -949,6 +926,10 @@ mod tests {
         assert!(FindSize::from_str("+k").is_err());
         assert!(FindSize::from_str("10Z").is_err());
         assert!(FindSize::from_str("10a5k").is_err());
+        assert!(FindSize::from_str("10kk").is_err());
+        assert!(FindSize::from_str("++10").is_err());
+        assert!(FindSize::from_str("-+10").is_err());
+        assert!(FindSize::from_str("10000P").is_err(), "overflows i64");
     }
 
     #[test]
@@ -979,6 +960,12 @@ mod tests {
         assert!(FindTime::from_str("+d").is_err());
         assert!(FindTime::from_str("10y").is_err());
         assert!(FindTime::from_str("10a5d").is_err());
+        assert!(FindTime::from_str("10dd").is_err());
+        assert!(FindTime::from_str("+-10").is_err());
+        assert!(
+            FindTime::from_str("99999999999999999w").is_err(),
+            "overflows i64"
+        );
     }
 
     #[test]
