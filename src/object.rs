@@ -36,23 +36,31 @@ impl StreamObject {
 
     /// Create from an ObjectVersion (versioned listing).
     pub fn from_version(version: ObjectVersion) -> Self {
+        let ObjectVersion {
+            key,
+            size,
+            last_modified,
+            e_tag,
+            storage_class,
+            owner,
+            version_id,
+            is_latest,
+            ..
+        } = version;
+
         let object = Object::builder()
-            .set_key(version.key.clone())
-            .set_size(version.size)
-            .set_last_modified(version.last_modified)
-            .set_e_tag(version.e_tag.clone())
-            .set_storage_class(
-                version
-                    .storage_class
-                    .map(|sc| ObjectStorageClass::from(sc.as_str())),
-            )
-            .set_owner(version.owner.clone())
+            .set_key(key)
+            .set_size(size)
+            .set_last_modified(last_modified)
+            .set_e_tag(e_tag)
+            .set_storage_class(storage_class.map(|class| ObjectStorageClass::from(class.as_str())))
+            .set_owner(owner)
             .build();
 
         Self {
             object,
-            version_id: version.version_id,
-            is_latest: version.is_latest,
+            version_id,
+            is_latest,
             is_delete_marker: false,
             tags: None,
         }
@@ -60,17 +68,26 @@ impl StreamObject {
 
     /// Create from a DeleteMarkerEntry (versioned listing).
     pub fn from_delete_marker(marker: DeleteMarkerEntry) -> Self {
+        let DeleteMarkerEntry {
+            key,
+            last_modified,
+            owner,
+            version_id,
+            is_latest,
+            ..
+        } = marker;
+
         let object = Object::builder()
-            .set_key(marker.key.clone())
+            .set_key(key)
             .size(0)
-            .set_last_modified(marker.last_modified)
-            .set_owner(marker.owner.clone())
+            .set_last_modified(last_modified)
+            .set_owner(owner)
             .build();
 
         Self {
             object,
-            version_id: marker.version_id,
-            is_latest: marker.is_latest,
+            version_id,
+            is_latest,
             is_delete_marker: true,
             tags: None,
         }
@@ -93,11 +110,11 @@ impl StreamObject {
         let key = self.object.key().unwrap_or("");
         match (&self.version_id, self.is_latest, self.is_delete_marker) {
             (Some(vid), Some(true), true) => {
-                format!("{}?versionId={} (latest) (delete marker)", key, vid)
+                format!("{key}?versionId={vid} (latest) (delete marker)")
             }
-            (Some(vid), Some(true), false) => format!("{}?versionId={} (latest)", key, vid),
-            (Some(vid), _, true) => format!("{}?versionId={} (delete marker)", key, vid),
-            (Some(vid), _, false) => format!("{}?versionId={}", key, vid),
+            (Some(vid), Some(true), false) => format!("{key}?versionId={vid} (latest)"),
+            (Some(vid), _, true) => format!("{key}?versionId={vid} (delete marker)"),
+            (Some(vid), _, false) => format!("{key}?versionId={vid}"),
             (None, _, _) => key.to_string(),
         }
     }
@@ -123,8 +140,7 @@ impl StreamObject {
     pub fn has_tag_key(&self, key: &str) -> bool {
         self.tags
             .as_ref()
-            .map(|tags| tags.iter().any(|t| t.key() == key))
-            .unwrap_or(false)
+            .is_some_and(|tags| tags.iter().any(|t| t.key() == key))
     }
 }
 

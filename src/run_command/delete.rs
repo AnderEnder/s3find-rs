@@ -1,17 +1,15 @@
 use anyhow::Error;
-use async_trait::async_trait;
 
-use crate::adapters::aws::DeleteObjectRequest;
+use crate::adapters::aws::{DeleteObjectRequest, S3Client};
 use crate::arg::MultipleDelete;
 use crate::object::StreamObject;
 
 use super::{CommandContext, RunCommand};
 
-#[async_trait]
 impl RunCommand for MultipleDelete {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         // Delete markers are included: deleting one by version id undeletes the object.
@@ -37,7 +35,7 @@ impl RunCommand for MultipleDelete {
             let version_info = deleted
                 .version_id
                 .as_ref()
-                .map(|v| format!(" (version: {})", v))
+                .map(|v| format!(" (version: {v})"))
                 .unwrap_or_default();
             writeln!(
                 ctx.out,

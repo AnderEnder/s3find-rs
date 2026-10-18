@@ -1,11 +1,11 @@
 use std::io::Write;
 
 use anyhow::Error;
-use async_trait::async_trait;
-use aws_smithy_types::date_time::Format;
+use aws_sdk_s3::primitives::DateTimeFormat;
 use csv::WriterBuilder;
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::aws::S3Client;
 use crate::arg::{AdvancedPrint, FastPrint, PrintFormat};
 use crate::object::StreamObject;
 
@@ -23,11 +23,10 @@ impl FastPrint {
     }
 }
 
-#[async_trait]
 impl RunCommand for FastPrint {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in objects {
@@ -70,7 +69,7 @@ impl From<&StreamObject> for ObjectRecord {
             size: object.size.unwrap_or_default(),
             last_modified: object
                 .last_modified
-                .and_then(|x| x.fmt(Format::DateTime).ok())
+                .and_then(|x| x.fmt(DateTimeFormat::DateTime).ok())
                 .unwrap_or_default(),
             key: object.key.clone().unwrap_or_default(),
             storage_class: object
@@ -80,11 +79,7 @@ impl From<&StreamObject> for ObjectRecord {
                 .unwrap_or_default(),
             version_id: stream_obj.version_id.clone(),
             is_latest: stream_obj.is_latest,
-            is_delete_marker: if stream_obj.is_delete_marker {
-                Some(true)
-            } else {
-                None
-            },
+            is_delete_marker: stream_obj.is_delete_marker.then_some(true),
         }
     }
 }
@@ -110,8 +105,8 @@ impl AdvancedPrint {
             object.size.unwrap_or_default(),
             object
                 .last_modified
-                .and_then(|x| x.fmt(Format::DateTime).ok())
-                .unwrap_or("None".to_string()),
+                .and_then(|x| x.fmt(DateTimeFormat::DateTime).ok())
+                .unwrap_or_else(|| "None".to_owned()),
             bucket,
             stream_obj.display_key(),
             object
@@ -149,11 +144,10 @@ impl AdvancedPrint {
     }
 }
 
-#[async_trait]
 impl RunCommand for AdvancedPrint {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         match self.format {

@@ -1,11 +1,10 @@
 use super::*;
-use crate::testing::{FakeS3Client, ListCall, opts};
-use aws_config::BehaviorVersion;
+use crate::testing::{FakeS3Client, ListCall, opts, replay_s3_client};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::primitives::DateTime;
+use aws_sdk_s3::primitives::SdkBody;
 use aws_sdk_s3::types::{DeleteMarkerEntry, ObjectVersion};
 use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
-use aws_smithy_types::body::SdkBody;
 use http::{HeaderValue, StatusCode};
 
 fn options(prefix: Option<&str>, page_size: u16, maxdepth: Option<usize>) -> ListingOptions {
@@ -28,7 +27,7 @@ fn versioned(prefix: Option<&str>) -> ListingOptions {
 }
 
 async fn collect(
-    client: &dyn S3Client,
+    client: &impl S3Client,
     options: &ListingOptions,
 ) -> S3FindResult<Vec<StreamObject>> {
     list_objects(client, options).try_collect().await
@@ -312,19 +311,7 @@ fn replay(events: Vec<(&str, StatusCode, &str)>) -> (Client, StaticReplayClient)
             ReplayEvent::new(request, response)
         })
         .collect();
-    let replay_client = StaticReplayClient::new(events);
-
-    let client = Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                "test", "test", None, None, "test",
-            ))
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-    (client, replay_client)
+    replay_s3_client(events)
 }
 
 fn list_result(body: &str) -> String {

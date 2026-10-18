@@ -1,41 +1,27 @@
-const DELIMETER: char = '/';
+const DELIMITER: char = '/';
 
-trait S3Key {
-    fn key_name(self) -> Self;
-    fn join_key(self, dest: &Self) -> Self;
+/// The last segment of a key: `some/path` → `path`.
+fn key_name(key: &str) -> &str {
+    key.rsplit(DELIMITER).next().unwrap_or(key)
 }
 
-impl S3Key for String {
-    #[inline]
-    fn key_name(self) -> Self {
-        self.rsplit(DELIMETER)
-            .next()
-            .map(|x| x.to_owned())
-            .unwrap_or(self)
-    }
-
-    #[inline]
-    fn join_key(mut self, dest: &Self) -> Self {
-        if !self.ends_with(DELIMETER) && !self.is_empty() {
-            self.push(DELIMETER);
-        }
-        self.push_str(dest);
-        self
+/// Joins a key onto a prefix with a single `/` between them.
+fn join_key(prefix: &str, key: &str) -> String {
+    if prefix.is_empty() || prefix.ends_with(DELIMITER) {
+        format!("{prefix}{key}")
+    } else {
+        format!("{prefix}{DELIMITER}{key}")
     }
 }
 
-#[inline]
-pub fn combine_keys(flat: bool, source: &str, destination: &Option<String>) -> String {
-    let key = if flat {
-        source.to_owned().key_name()
-    } else {
-        source.to_owned()
-    };
+/// The destination key for `source` when copying under `destination`;
+/// `flat` keeps only the source's last segment.
+pub fn combine_keys(flat: bool, source: &str, destination: Option<&str>) -> String {
+    let key = if flat { key_name(source) } else { source };
 
-    if let Some(destination) = destination {
-        destination.to_owned().join_key(&key)
-    } else {
-        key
+    match destination {
+        Some(prefix) => join_key(prefix, key),
+        None => key.to_owned(),
     }
 }
 
@@ -45,39 +31,42 @@ mod tests {
 
     #[test]
     fn test_key_name() {
-        assert_eq!("path".to_owned().key_name(), "path");
-        assert_eq!("some/path".to_owned().key_name(), "path");
-        assert_eq!("".to_owned().key_name(), "");
-        assert_eq!("some/path/".to_owned().key_name(), "");
+        assert_eq!(key_name("path"), "path");
+        assert_eq!(key_name("some/path"), "path");
+        assert_eq!(key_name(""), "");
+        assert_eq!(key_name("some/path/"), "");
     }
 
     #[test]
     fn test_join_key() {
-        assert_eq!("some".to_owned().join_key(&"path".to_string()), "some/path");
-        assert_eq!("some".to_owned().join_key(&"".to_string()), "some/");
-        assert_eq!("".to_owned().join_key(&"path".to_string()), "path");
-        assert_eq!("".to_owned().join_key(&"".to_string()), "");
+        assert_eq!(join_key("some", "path"), "some/path");
+        assert_eq!(join_key("some/", "path"), "some/path");
+        assert_eq!(join_key("some", ""), "some/");
+        assert_eq!(join_key("", "path"), "path");
+        assert_eq!(join_key("", ""), "");
     }
 
     #[test]
     fn test_combine_keys() {
+        let destination = Some("somepath/anotherpath");
+
         assert_eq!(
-            &combine_keys(false, "path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/path",
+            combine_keys(false, "path", destination),
+            "somepath/anotherpath/path"
         );
         assert_eq!(
-            &combine_keys(true, "path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/path",
+            combine_keys(true, "path", destination),
+            "somepath/anotherpath/path"
         );
         assert_eq!(
-            &combine_keys(false, "some/path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/some/path",
+            combine_keys(false, "some/path", destination),
+            "somepath/anotherpath/some/path"
         );
         assert_eq!(
-            &combine_keys(true, "some/path", &Some("somepath/anotherpath".to_owned())),
-            "somepath/anotherpath/path",
+            combine_keys(true, "some/path", destination),
+            "somepath/anotherpath/path"
         );
-        assert_eq!(&combine_keys(false, "some/path", &None), "some/path",);
-        assert_eq!(&combine_keys(true, "some/path", &None), "path",);
+        assert_eq!(combine_keys(false, "some/path", None), "some/path");
+        assert_eq!(combine_keys(true, "some/path", None), "path");
     }
 }

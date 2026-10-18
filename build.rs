@@ -1,57 +1,36 @@
-use std::fs;
-use std::io::{self, Write};
-use std::process::exit;
+use std::env;
+use std::fs::{self, File};
+use std::path::PathBuf;
 
 use clap::CommandFactory;
 use clap_complete::aot::{Shell, generate};
 
 include!("src/arg.rs");
 
+/// Writes shell completions to `$SHELL_COMPLETIONS_DIR`, or `$OUT_DIR` by default.
 fn main() {
-    if !version_check::is_min_version("1.31").unwrap_or(false) {
-        writeln!(&mut io::stderr(), "This crate requires rustc >= 1.31").unwrap();
-        exit(1);
-    }
+    println!("cargo::rerun-if-changed=src/arg.rs");
+    println!("cargo::rerun-if-env-changed=SHELL_COMPLETIONS_DIR");
 
-    let var = std::env::var_os("SHELL_COMPLETIONS_DIR").or_else(|| std::env::var_os("OUT_DIR"));
-    let outdir = match var {
-        None => return,
-        Some(outdir) => std::path::PathBuf::from(outdir),
+    let Some(outdir) = env::var_os("SHELL_COMPLETIONS_DIR").or_else(|| env::var_os("OUT_DIR"))
+    else {
+        return;
     };
-    fs::create_dir_all(&outdir).unwrap();
+    let outdir = PathBuf::from(outdir);
+    fs::create_dir_all(&outdir).expect("create the completions directory");
 
     let mut cmd = FindOpt::command();
     let name = cmd.get_name().to_string();
 
-    eprintln!("Generating completion file ...");
-    generate(
-        Shell::Bash,
-        &mut cmd,
-        &name,
-        &mut fs::File::create(outdir.join(format!("{}.bash", name))).unwrap(),
-    );
-    generate(
-        Shell::Elvish,
-        &mut cmd,
-        &name,
-        &mut fs::File::create(outdir.join(format!("{}.elvish", name))).unwrap(),
-    );
-    generate(
-        Shell::Fish,
-        &mut cmd,
-        &name,
-        &mut fs::File::create(outdir.join(format!("{}.fish", name))).unwrap(),
-    );
-    generate(
-        Shell::Zsh,
-        &mut cmd,
-        &name,
-        &mut fs::File::create(outdir.join(format!("{}.zsh", name))).unwrap(),
-    );
-    generate(
-        Shell::PowerShell,
-        &mut cmd,
-        &name,
-        &mut fs::File::create(outdir.join(format!("{}.ps1", name))).unwrap(),
-    );
+    for (shell, extension) in [
+        (Shell::Bash, "bash"),
+        (Shell::Elvish, "elvish"),
+        (Shell::Fish, "fish"),
+        (Shell::Zsh, "zsh"),
+        (Shell::PowerShell, "ps1"),
+    ] {
+        let path = outdir.join(format!("{name}.{extension}"));
+        let mut file = File::create(&path).expect("create a completion file");
+        generate(shell, &mut cmd, &name, &mut file);
+    }
 }

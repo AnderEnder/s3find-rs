@@ -4,30 +4,28 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::Error;
-use async_trait::async_trait;
 use aws_sdk_s3::types::{MetadataDirective, StorageClass};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::adapters::aws::DeleteObjectRequest;
-use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path};
+use crate::adapters::aws::{DeleteObjectRequest, S3Client};
+use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path, StorageClassName};
 use crate::error::FunctionError;
 use crate::object::StreamObject;
 use crate::utils::combine_keys;
 
 use super::{CommandContext, RunCommand, build_copy_source, live_objects};
 
-#[async_trait]
 impl RunCommand for Download {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in live_objects(objects) {
             let key = object.require_key()?;
 
             let file_path = match &object.version_id {
-                Some(vid) => Path::new(&self.destination).join(format!("{}.v{}", key, vid)),
+                Some(vid) => Path::new(&self.destination).join(format!("{key}.v{vid}")),
                 None => Path::new(&self.destination).join(key),
             };
             let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
@@ -71,18 +69,18 @@ impl RunCommand for Download {
 }
 
 /// Copies live objects under `destination`, printing `verb: source => target`.
-async fn copy_objects(
-    ctx: &mut CommandContext<'_>,
+async fn copy_objects<C: S3Client>(
+    ctx: &mut CommandContext<'_, C>,
     objects: &[StreamObject],
     destination: &S3Path,
     flat: bool,
-    storage_class: Option<&StorageClass>,
+    storage_class: Option<&StorageClassName>,
     metadata_directive: Option<MetadataDirective>,
     verb: &str,
 ) -> Result<(), Error> {
     for object in live_objects(objects) {
         let key = object.require_key()?;
-        let target = combine_keys(flat, key, &destination.prefix);
+        let target = combine_keys(flat, key, destination.prefix.as_deref());
         let source_path = build_copy_source(&ctx.path.bucket, key, object.version_id.as_deref());
 
         writeln!(
@@ -96,7 +94,7 @@ async fn copy_objects(
                 &destination.bucket,
                 &target,
                 &source_path,
-                storage_class.cloned(),
+                storage_class.map(StorageClass::from),
                 metadata_directive.clone(),
             )
             .await?;
@@ -104,11 +102,10 @@ async fn copy_objects(
     Ok(())
 }
 
-#[async_trait]
 impl RunCommand for S3Copy {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         copy_objects(
@@ -124,11 +121,10 @@ impl RunCommand for S3Copy {
     }
 }
 
-#[async_trait]
 impl RunCommand for S3Move {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         copy_objects(
@@ -162,11 +158,10 @@ impl RunCommand for S3Move {
     }
 }
 
-#[async_trait]
 impl RunCommand for ChangeStorage {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in live_objects(objects) {
@@ -174,7 +169,7 @@ impl RunCommand for ChangeStorage {
 
             writeln!(
                 ctx.out,
-                "Changing storage class for s3://{}/{} to {:?}",
+                "Changing storage class for s3://{}/{} to {}",
                 ctx.path.bucket,
                 object.display_key(),
                 self.storage_class
@@ -188,7 +183,7 @@ impl RunCommand for ChangeStorage {
                     &ctx.path.bucket,
                     key,
                     &source_path,
-                    Some(self.storage_class.clone()),
+                    Some(StorageClass::from(&self.storage_class)),
                     Some(MetadataDirective::Copy),
                 )
                 .await?;

@@ -1,10 +1,13 @@
-use aws_sdk_s3::types::ObjectStorageClass;
-use aws_sdk_s3::types::StorageClass;
-use aws_sdk_s3::types::Tier;
-use aws_types::region::Region;
+// Command-line options.
+//
+// `build.rs` includes this file to generate shell completions, so it may only
+// use std and the crates listed under `[build-dependencies]`, and never the
+// AWS SDK, which would otherwise be compiled a second time for the build script.
+
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::Pattern;
 use regex::Regex;
+use std::fmt;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -16,7 +19,9 @@ const INVALID_PREFIXES: &[&str] = &["sthree-.", "amzn-s3-demo-", "xn--"];
 const INVALID_SUFFIXES: &[&str] = &["-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"];
 
 static S3_PATH_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/(.*))?$"#).unwrap());
+    LazyLock::new(|| Regex::new(r"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/(.*))?$").unwrap());
+
+static FIND_TAG_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\w+):(\w+)$").unwrap());
 
 /// Validates an S3 bucket name according to AWS rules:
 /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
@@ -56,10 +61,6 @@ fn validate_bucket_name(bucket: &str) -> bool {
     }
 
     true
-}
-
-fn region(s: &str) -> std::result::Result<Region, clap::Error> {
-    Ok(Region::new(s.to_owned()))
 }
 
 fn parse_restore_days(s: &str) -> std::result::Result<i32, clap::Error> {
@@ -118,8 +119,8 @@ pub struct FindOpt {
     pub aws_secret_key: Option<String>,
 
     // The region to use. If not specified, will use the region from AWS profile or default to us-east-1
-    #[arg(name = "aws-region", long, value_parser=region)]
-    pub aws_region: Option<Region>,
+    #[arg(name = "aws-region", long)]
+    pub aws_region: Option<String>,
 
     /// Custom S3 endpoint URL for non-AWS S3-compatible services (e.g., MinIO, Ceph)
     #[arg(name = "endpoint-url", long)]
@@ -160,7 +161,7 @@ Valid values are:
     STANDARD_IA
     Unknown values are also supported"#
     )]
-    pub storage_class: Option<ObjectStorageClass>,
+    pub storage_class: Option<StorageClassName>,
 
     /// Filter objects by tag key=value pair (requires GetObjectTagging permission)
     #[arg(
@@ -448,7 +449,7 @@ pub struct S3Copy {
 
     /// Storage class for the copied objects
     #[arg(long = "storage-class")]
-    pub storage_class: Option<StorageClass>,
+    pub storage_class: Option<StorageClassName>,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
@@ -463,7 +464,7 @@ pub struct S3Move {
 
     /// Storage class for the moved objects
     #[arg(long = "storage-class")]
-    pub storage_class: Option<StorageClass>,
+    pub storage_class: Option<StorageClassName>,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
@@ -483,23 +484,63 @@ pub struct Restore {
     pub days: i32,
 
     /// Retrieval tier for restoring objects
-    #[arg(long, default_value = "Standard")]
-    pub tier: Tier,
+    #[arg(long, default_value = "Standard", ignore_case = true)]
+    pub tier: RestoreTier,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
 pub struct ChangeStorage {
     /// New storage class to apply to objects
     #[arg(name = "class")]
-    pub storage_class: StorageClass,
+    pub storage_class: StorageClassName,
 }
 
 impl Default for Restore {
     fn default() -> Self {
         Self {
             days: 1,
-            tier: Tier::Standard,
+            tier: RestoreTier::Standard,
         }
+    }
+}
+
+/// How fast S3 restores an archived object; faster tiers cost more.
+#[derive(ValueEnum, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum RestoreTier {
+    /// The default tier
+    #[default]
+    #[value(name = "Standard")]
+    Standard,
+    /// The slowest and cheapest tier
+    #[value(name = "Bulk")]
+    Bulk,
+    /// The fastest tier; not available for DEEP_ARCHIVE
+    #[value(name = "Expedited")]
+    Expedited,
+}
+
+/// A storage class as S3 names it, such as `STANDARD_IA`.
+///
+/// Any name is accepted, so classes added to S3 later and those of
+/// S3-compatible services work too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageClassName(String);
+
+impl StorageClassName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for StorageClassName {
+    fn from(name: &str) -> Self {
+        Self(name.to_owned())
+    }
+}
+
+impl fmt::Display for StorageClassName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -513,12 +554,6 @@ pub enum FindError {
     TimeParse,
     #[error("Cannot parse tag")]
     TagParseError,
-    #[error("Cannot parse tag key")]
-    TagKeyParseError,
-    #[error("Cannot parse tag value")]
-    TagValueParseError,
-    #[error("Invalid days value: it should be in between 1 and 365")]
-    RestoreDaysParseError,
     #[error("Invalid tag filter format. Expected KEY=VALUE, got: {0}")]
     TagFilterParseError(String),
     #[error("Tag filter key cannot be empty")]
@@ -535,28 +570,41 @@ impl FromStr for S3Path {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let captures = S3_PATH_REGEX
-            .captures(s)
-            .ok_or(FindError::S3Parse(s.to_string()))?;
+        let invalid = || FindError::S3Parse(s.to_owned());
+        let captures = S3_PATH_REGEX.captures(s).ok_or_else(invalid)?;
 
-        let bucket = captures
-            .get(1)
-            .map(|x| x.as_str().to_owned())
-            .ok_or(FindError::S3Parse(s.to_string()))?;
-
+        let bucket = captures[1].to_owned();
         if !validate_bucket_name(&bucket) {
-            return Err(FindError::S3Parse(s.to_string()).into());
+            return Err(invalid().into());
         }
 
-        let prefix = captures.get(3).map(|x| {
-            let s = x.as_str();
-            // Strip trailing slashes for consistent behavior
-            let trimmed = s.trim_end_matches('/');
-            trimmed.to_owned()
-        });
+        // Strip trailing slashes for consistent behavior
+        let prefix = captures
+            .get(3)
+            .map(|prefix| prefix.as_str().trim_end_matches('/').to_owned());
 
         Ok(S3Path { bucket, prefix })
     }
+}
+
+/// Splits a `[+|-]<number>[unit]` value such as `+5k` into its sign, number
+/// and unit.
+fn split_signed_quantity(s: &str) -> Option<(Option<char>, i64, Option<char>)> {
+    let (sign, rest) = match s.strip_prefix(['+', '-']) {
+        Some(rest) => (s.chars().next(), rest),
+        None => (None, s),
+    };
+    let digits_end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    let (digits, unit) = rest.split_at(digits_end);
+
+    let mut unit = unit.chars();
+    let (unit_char, extra) = (unit.next(), unit.next());
+    if extra.is_some() {
+        return None;
+    }
+    Some((sign, digits.parse().ok()?, unit_char))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -570,39 +618,24 @@ impl FromStr for FindSize {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"^([+-]?)(\d*)([kMGTP]?)$")?;
-        let m = re.captures(s).ok_or(FindError::SizeParse)?;
+        let (sign, number, unit) = split_signed_quantity(s).ok_or(FindError::SizeParse)?;
 
-        let sign = m
-            .get(1)
-            .ok_or(FindError::SizeParse)?
-            .as_str()
-            .chars()
-            .next();
-        let number: i64 = m.get(2).ok_or(FindError::SizeParse)?.as_str().parse()?;
-        let metric = m
-            .get(3)
-            .ok_or(FindError::SizeParse)?
-            .as_str()
-            .chars()
-            .next();
-
-        let bytes = match metric {
-            None => number,
-            Some('k') => number * 1024,
-            Some('M') => number * 1024_i64.pow(2),
-            Some('G') => number * 1024_i64.pow(3),
-            Some('T') => number * 1024_i64.pow(4),
-            Some('P') => number * 1024_i64.pow(5),
+        let unit_bytes = match unit {
+            None => 1,
+            Some('k') => 1024,
+            Some('M') => 1024_i64.pow(2),
+            Some('G') => 1024_i64.pow(3),
+            Some('T') => 1024_i64.pow(4),
+            Some('P') => 1024_i64.pow(5),
             Some(_) => return Err(FindError::SizeParse.into()),
         };
+        let bytes = number.checked_mul(unit_bytes).ok_or(FindError::SizeParse)?;
 
-        match sign {
-            Some('+') => Ok(FindSize::Bigger(bytes)),
-            Some('-') => Ok(FindSize::Lower(bytes)),
-            None => Ok(FindSize::Equal(bytes)),
-            Some(_) => Err(FindError::SizeParse.into()),
-        }
+        Ok(match sign {
+            Some('+') => FindSize::Bigger(bytes),
+            Some('-') => FindSize::Lower(bytes),
+            _ => FindSize::Equal(bytes),
+        })
     }
 }
 
@@ -619,39 +652,29 @@ impl FromStr for FindTime {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"^([+-]?)(\d*)([smhdw]?)$")?;
-        let m = re.captures(s).ok_or(FindError::TimeParse)?;
+        const MINUTE: i64 = 60;
+        const HOUR: i64 = 60 * MINUTE;
+        const DAY: i64 = 24 * HOUR;
+        const WEEK: i64 = 7 * DAY;
 
-        let sign = m
-            .get(1)
-            .ok_or(FindError::TimeParse)?
-            .as_str()
-            .chars()
-            .next();
-        let number: i64 = m.get(2).ok_or(FindError::TimeParse)?.as_str().parse()?;
-        let metric = m
-            .get(3)
-            .ok_or(FindError::TimeParse)?
-            .as_str()
-            .chars()
-            .next();
+        let (sign, number, unit) = split_signed_quantity(s).ok_or(FindError::TimeParse)?;
 
-        let seconds = match metric {
-            None => number,
-            Some('s') => number,
-            Some('m') => number * 60,
-            Some('h') => number * 3600,
-            Some('d') => number * 3600 * 24,
-            Some('w') => number * 3600 * 24 * 7,
+        let unit_seconds = match unit {
+            None | Some('s') => 1,
+            Some('m') => MINUTE,
+            Some('h') => HOUR,
+            Some('d') => DAY,
+            Some('w') => WEEK,
             Some(_) => return Err(FindError::TimeParse.into()),
         };
+        let seconds = number
+            .checked_mul(unit_seconds)
+            .ok_or(FindError::TimeParse)?;
 
-        match sign {
-            Some('-') => Ok(FindTime::Upper(seconds)),
-            Some('+') => Ok(FindTime::Lower(seconds)),
-            None => Ok(FindTime::Lower(seconds)),
-            Some(_) => Err(FindError::TimeParse.into()),
-        }
+        Ok(match sign {
+            Some('-') => FindTime::Upper(seconds),
+            _ => FindTime::Lower(seconds),
+        })
     }
 }
 
@@ -679,15 +702,11 @@ impl FromStr for FindTag {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let re = Regex::new(r"^(\w+):(\w+)$")?;
-        let m = re.captures(s).ok_or(FindError::TagParseError)?;
-
-        let key = m.get(1).ok_or(FindError::TagKeyParseError)?.as_str();
-        let value = m.get(2).ok_or(FindError::TagValueParseError)?.as_str();
+        let captures = FIND_TAG_REGEX.captures(s).ok_or(FindError::TagParseError)?;
 
         Ok(FindTag {
-            key: key.to_string(),
-            value: value.to_string(),
+            key: captures[1].to_owned(),
+            value: captures[2].to_owned(),
         })
     }
 }
@@ -704,21 +723,18 @@ impl FromStr for TagFilter {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, anyhow::Error> {
-        let parts: Vec<&str> = s.splitn(2, '=').collect();
-        if parts.len() != 2 {
-            return Err(FindError::TagFilterParseError(s.to_string()).into());
-        }
+        let (key, value) = s
+            .split_once('=')
+            .ok_or_else(|| FindError::TagFilterParseError(s.to_owned()))?;
 
-        let key = parts[0].trim();
-        let value = parts[1].trim();
-
+        let key = key.trim();
         if key.is_empty() {
             return Err(FindError::TagFilterEmptyKey.into());
         }
 
         Ok(TagFilter {
-            key: key.to_string(),
-            value: value.to_string(),
+            key: key.to_owned(),
+            value: value.trim().to_owned(),
         })
     }
 }
@@ -748,21 +764,6 @@ impl FromStr for TagExistsFilter {
 mod tests {
     use super::*;
     use clap::Parser;
-
-    #[test]
-    fn region_correct() {
-        let region_result = region("us-west-2");
-        assert!(region_result.is_ok());
-
-        let r = region_result.unwrap();
-        assert_eq!(r.as_ref(), "us-west-2");
-
-        let region_result = region("eu-central-1");
-        assert!(region_result.is_ok());
-
-        let r = region_result.unwrap();
-        assert_eq!(r.as_ref(), "eu-central-1");
-    }
 
     #[test]
     fn s3path_correct() {
@@ -867,8 +868,7 @@ mod tests {
         for case in invalid_cases {
             assert!(
                 case.parse::<S3Path>().is_err(),
-                "Should reject invalid bucket name: {}",
-                case
+                "Should reject invalid bucket name: {case}"
             );
         }
 
@@ -926,6 +926,10 @@ mod tests {
         assert!(FindSize::from_str("+k").is_err());
         assert!(FindSize::from_str("10Z").is_err());
         assert!(FindSize::from_str("10a5k").is_err());
+        assert!(FindSize::from_str("10kk").is_err());
+        assert!(FindSize::from_str("++10").is_err());
+        assert!(FindSize::from_str("-+10").is_err());
+        assert!(FindSize::from_str("10000P").is_err(), "overflows i64");
     }
 
     #[test]
@@ -956,6 +960,12 @@ mod tests {
         assert!(FindTime::from_str("+d").is_err());
         assert!(FindTime::from_str("10y").is_err());
         assert!(FindTime::from_str("10a5d").is_err());
+        assert!(FindTime::from_str("10dd").is_err());
+        assert!(FindTime::from_str("+-10").is_err());
+        assert!(
+            FindTime::from_str("99999999999999999w").is_err(),
+            "overflows i64"
+        );
     }
 
     #[test]
@@ -1041,10 +1051,7 @@ mod tests {
     fn test_aws_region() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--aws-region", "eu-west-1"]);
 
-        assert_eq!(
-            args.aws_region.as_ref().map(|r| r.as_ref()),
-            Some("eu-west-1")
-        );
+        assert_eq!(args.aws_region.as_deref(), Some("eu-west-1"));
     }
 
     #[test]
@@ -1087,7 +1094,33 @@ mod tests {
     fn test_storage_class_filter() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--storage-class", "STANDARD"]);
 
-        assert_eq!(args.storage_class, Some(ObjectStorageClass::Standard));
+        assert_eq!(args.storage_class, Some(StorageClassName::from("STANDARD")));
+    }
+
+    #[test]
+    fn test_storage_class_accepts_any_name() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--storage-class", "COLD"]);
+
+        let storage_class = args.storage_class.unwrap();
+        assert_eq!(storage_class.as_str(), "COLD");
+        assert_eq!(storage_class.to_string(), "COLD");
+    }
+
+    #[test]
+    fn test_restore_tier_is_validated_ignoring_case() {
+        let tier = |value: &str| {
+            FindOpt::try_parse_from(["s3find", "s3://mybucket", "restore", "--tier", value]).map(
+                |args| match args.cmd {
+                    Some(Cmd::Restore(restore)) => restore.tier,
+                    other => panic!("unexpected command: {other:?}"),
+                },
+            )
+        };
+
+        assert_eq!(tier("Expedited").unwrap(), RestoreTier::Expedited);
+        assert_eq!(tier("bulk").unwrap(), RestoreTier::Bulk);
+        assert_eq!(tier("STANDARD").unwrap(), RestoreTier::Standard);
+        assert!(tier("Fastest").is_err());
     }
 
     #[test]
@@ -1227,7 +1260,7 @@ mod tests {
                     prefix: Some("dest".to_string()),
                 },
                 flat: false,
-                storage_class: Some(StorageClass::Glacier),
+                storage_class: Some(StorageClassName::from("GLACIER")),
             }))
         );
     }
@@ -1278,7 +1311,7 @@ mod tests {
             args_defaults.cmd,
             Some(Cmd::Restore(Restore {
                 days: 1,
-                tier: Tier::Standard,
+                tier: RestoreTier::Standard,
             }))
         );
 
@@ -1296,7 +1329,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 7,
-                tier: Tier::Bulk,
+                tier: RestoreTier::Bulk,
             }))
         );
 
@@ -1306,7 +1339,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 365,
-                tier: Tier::Standard, // Default tier
+                tier: RestoreTier::Standard, // Default tier
             }))
         );
 
@@ -1317,7 +1350,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 1, // Default days
-                tier: Tier::Expedited,
+                tier: RestoreTier::Expedited,
             }))
         );
 
@@ -1335,13 +1368,13 @@ mod tests {
             "Standard",
         ]);
 
-        assert_eq!(args.storage_class, Some(ObjectStorageClass::Glacier));
+        assert_eq!(args.storage_class, Some(StorageClassName::from("GLACIER")));
         assert_eq!(args.name.len(), 1);
         assert_eq!(
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 30,
-                tier: Tier::Standard,
+                tier: RestoreTier::Standard,
             }))
         );
     }
@@ -1353,7 +1386,7 @@ mod tests {
         assert_eq!(restore_default.days, 1, "Default days should be 1");
         assert_eq!(
             restore_default.tier,
-            Tier::Standard,
+            RestoreTier::Standard,
             "Default tier should be Standard"
         );
 
@@ -1433,7 +1466,10 @@ mod tests {
         assert_eq!(args.path.prefix, Some("archives".to_string()));
         assert_eq!(args.name.len(), 1);
         assert_eq!(args.regex.len(), 1);
-        assert_eq!(args.storage_class, Some(ObjectStorageClass::DeepArchive));
+        assert_eq!(
+            args.storage_class,
+            Some(StorageClassName::from("DEEP_ARCHIVE"))
+        );
         assert_eq!(args.mtime.len(), 1);
         assert_eq!(args.mtime[0], FindTime::Upper(90 * 24 * 3600)); // -90d
         assert_eq!(args.size.len(), 1);
@@ -1444,7 +1480,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 14,
-                tier: Tier::Standard,
+                tier: RestoreTier::Standard,
             }))
         );
     }
@@ -1494,7 +1530,7 @@ mod tests {
                     prefix: Some("dest".to_string()),
                 },
                 flat: false,
-                storage_class: Some(StorageClass::IntelligentTiering),
+                storage_class: Some(StorageClassName::from("INTELLIGENT_TIERING")),
             }))
         );
     }
@@ -1513,7 +1549,7 @@ mod tests {
         assert_eq!(
             args.cmd,
             Some(Cmd::ChangeStorage(ChangeStorage {
-                storage_class: StorageClass::Glacier,
+                storage_class: StorageClassName::from("GLACIER"),
             }))
         );
 
@@ -1527,7 +1563,7 @@ mod tests {
         assert_eq!(
             args.cmd,
             Some(Cmd::ChangeStorage(ChangeStorage {
-                storage_class: StorageClass::DeepArchive,
+                storage_class: StorageClassName::from("DEEP_ARCHIVE"),
             }))
         );
     }
@@ -1562,34 +1598,30 @@ mod tests {
     #[test]
     fn test_bucket_name_prefix_suffix_validation() {
         for &prefix in INVALID_PREFIXES {
-            let test_bucket = format!("{}bucket", prefix);
+            let test_bucket = format!("{prefix}bucket");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid prefix: {}",
-                prefix
+                "Should reject bucket name with invalid prefix: {prefix}"
             );
 
-            let test_bucket = format!("{}valid-bucket-name", prefix);
+            let test_bucket = format!("{prefix}valid-bucket-name");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid prefix even with valid suffix: {}",
-                prefix
+                "Should reject bucket name with invalid prefix even with valid suffix: {prefix}"
             );
         }
 
         for &suffix in INVALID_SUFFIXES {
-            let test_bucket = format!("bucket{}", suffix);
+            let test_bucket = format!("bucket{suffix}");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid suffix: {}",
-                suffix
+                "Should reject bucket name with invalid suffix: {suffix}"
             );
 
-            let test_bucket = format!("valid-bucket-name{}", suffix);
+            let test_bucket = format!("valid-bucket-name{suffix}");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid suffix even with valid prefix: {}",
-                suffix
+                "Should reject bucket name with invalid suffix even with valid prefix: {suffix}"
             );
         }
 
@@ -1607,8 +1639,7 @@ mod tests {
         for case in valid_cases {
             assert!(
                 validate_bucket_name(case),
-                "Should accept bucket name that is similar but valid: {}",
-                case
+                "Should accept bucket name that is similar but valid: {case}"
             );
         }
     }

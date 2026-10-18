@@ -1,8 +1,7 @@
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use async_trait::async_trait;
 use aws_sdk_s3::types::{Object, Tag};
 use futures::stream;
 
@@ -35,11 +34,10 @@ impl Recorder {
     }
 }
 
-#[async_trait]
 impl RunCommand for Recorder {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        _: &mut CommandContext<'_>,
+        _: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), anyhow::Error> {
         if self.fail {
@@ -84,8 +82,8 @@ fn listing() -> ListingOptions {
     ListingOptions::from_opts(&opts(&["s3://test-bucket"]))
 }
 
-fn pipeline(client: FakeS3Client, recorder: &Recorder) -> Pipeline {
-    Pipeline::new(Arc::new(client), listing(), Box::new(recorder.clone()))
+fn pipeline(client: FakeS3Client, recorder: &Recorder) -> Pipeline<FakeS3Client, Recorder> {
+    Pipeline::new(client, listing(), recorder.clone())
 }
 
 fn keyed(key: &str) -> StreamObject {
@@ -119,7 +117,7 @@ fn env_prod() -> FilterList {
 }
 
 async fn process(
-    pipeline: &Pipeline,
+    pipeline: &Pipeline<FakeS3Client, impl RunCommand>,
     items: impl IntoIterator<Item = StreamObject>,
 ) -> S3FindResult<Option<FindStat>> {
     pipeline.process(objects(items), &mut Vec::new()).await
@@ -168,8 +166,8 @@ async fn test_limit_stops_filtering_early() {
 async fn test_zero_limit_does_no_work() {
     let recorder = Recorder::default();
     let counter = CountingFilter::default();
-    let client = Arc::new(FakeS3Client::default().with_objects(&[("a", 1)]));
-    let pipeline = Pipeline::new(client.clone(), listing(), Box::new(recorder.clone()))
+    let client = FakeS3Client::default().with_objects(&[("a", 1)]);
+    let pipeline = Pipeline::new(client, listing(), recorder.clone())
         .with_filters(FilterList::new().with(counter.clone()))
         .with_limit(Some(0));
 
@@ -177,25 +175,23 @@ async fn test_zero_limit_does_no_work() {
 
     assert!(recorder.batches.lock().unwrap().is_empty());
     assert_eq!(counter.calls(), 0);
-    assert!(client.list_calls.lock().unwrap().is_empty());
+    assert!(pipeline.client().list_calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn test_limit_stops_listing_early() {
-    let client =
-        Arc::new(FakeS3Client::default().with_objects(&[("a", 1), ("b", 1), ("c", 1), ("d", 1)]));
+    let client = FakeS3Client::default().with_objects(&[("a", 1), ("b", 1), ("c", 1), ("d", 1)]);
     let recorder = Recorder::default();
     let listing = ListingOptions {
         page_size: 1,
         ..listing()
     };
-    let pipeline =
-        Pipeline::new(client.clone(), listing, Box::new(recorder.clone())).with_limit(Some(2));
+    let pipeline = Pipeline::new(client, listing, recorder.clone()).with_limit(Some(2));
 
     pipeline.run(&mut Vec::new()).await.unwrap();
 
     assert_eq!(recorder.keys(), ["a", "b"]);
-    assert_eq!(client.list_calls.lock().unwrap().len(), 2);
+    assert_eq!(pipeline.client().list_calls.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -303,8 +299,7 @@ async fn test_tag_filters_fetch_tags() {
 #[tokio::test]
 async fn test_tags_are_only_fetched_for_cheap_filter_matches() {
     let recorder = Recorder::default();
-    let client = Arc::new(FakeS3Client::default());
-    let pipeline = Pipeline::new(client.clone(), listing(), Box::new(recorder.clone()))
+    let pipeline = Pipeline::new(FakeS3Client::default(), listing(), recorder.clone())
         .with_filters(FilterList::new().with(crate::arg::FindSize::Bigger(5)))
         .with_tag_filters(env_prod(), 4);
 
@@ -312,7 +307,8 @@ async fn test_tags_are_only_fetched_for_cheap_filter_matches() {
     let big = StreamObject::from_object(Object::builder().key("big.txt").size(10).build());
     process(&pipeline, [small, big]).await.unwrap();
 
-    let fetched: Vec<_> = client
+    let fetched: Vec<_> = pipeline
+        .client()
         .get_tag_calls
         .lock()
         .unwrap()
@@ -395,7 +391,7 @@ fn listed_bucket() -> FakeS3Client {
 }
 
 async fn run_cli(client: FakeS3Client, args: &[&str]) -> (String, Option<FindStat>) {
-    let pipeline = Pipeline::from_opts(&opts(args), Arc::new(client));
+    let pipeline = Pipeline::from_opts(&opts(args), client);
     let mut out = Vec::new();
     let stats = pipeline.run(&mut out).await.unwrap();
     (String::from_utf8(out).unwrap(), stats)
@@ -458,7 +454,7 @@ async fn test_from_opts_filters_on_tags() {
 
     let pipeline = Pipeline::from_opts(
         &opts(&["s3://test-bucket", "--tag", "env=prod", "lstags"]),
-        Arc::new(client),
+        client,
     );
     let mut out = Vec::new();
     pipeline.run(&mut out).await.unwrap();
@@ -474,10 +470,9 @@ async fn test_from_opts_filters_on_tags() {
 
 #[tokio::test]
 async fn test_from_opts_runs_side_effect_commands() {
-    let client = Arc::new(listed_bucket());
     let pipeline = Pipeline::from_opts(
         &opts(&["s3://test-bucket/logs/old", "delete"]),
-        client.clone(),
+        listed_bucket(),
     );
 
     let mut out = Vec::new();
@@ -487,12 +482,12 @@ async fn test_from_opts_runs_side_effect_commands() {
         String::from_utf8(out).unwrap(),
         "deleted: s3://test-bucket/logs/old/app.log\n"
     );
-    assert_eq!(client.delete_calls.lock().unwrap().len(), 1);
+    assert_eq!(pipeline.client().delete_calls.lock().unwrap().len(), 1);
 }
 
 #[test]
 fn test_buffered_output_follows_command() {
-    let client = || Arc::new(FakeS3Client::default()) as Arc<dyn S3Client>;
+    let client = FakeS3Client::default;
 
     assert!(Pipeline::from_opts(&opts(&["s3://bkt", "ls"]), client()).buffered_output());
     assert!(Pipeline::from_opts(&opts(&["s3://bkt", "print"]), client()).buffered_output());

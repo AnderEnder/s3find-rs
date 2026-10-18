@@ -1,14 +1,13 @@
 use super::*;
 use crate::adapters::aws::{DeleteObjectRequest, RestoreObjectStatus};
-use crate::testing::{ExecuteCaptured, FakeS3Client};
-use aws_config::BehaviorVersion;
+use crate::arg::*;
+use crate::testing::{ExecuteCaptured, FakeS3Client, replay_s3_client};
+use aws_sdk_s3::primitives::{DateTimeFormat, SdkBody};
 use aws_sdk_s3::{
     primitives::DateTime,
-    types::{Object, ObjectStorageClass, StorageClass, Tag, Tier},
+    types::{Object, ObjectStorageClass, Tag},
 };
-use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
-use aws_smithy_types::body::SdkBody;
-use aws_smithy_types::date_time::Format;
+use aws_smithy_runtime::client::http::test_util::ReplayEvent;
 use http::{HeaderValue, StatusCode};
 use std::fs;
 use std::path::PathBuf;
@@ -27,7 +26,7 @@ fn test_advanced_print_object() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -35,7 +34,7 @@ fn test_advanced_print_object() -> Result<(), Error> {
     cmd.print_stream_object(&mut buf, bucket, &stream_obj)?;
     let out = std::str::from_utf8(&buf)?;
 
-    println!("{}", out);
+    println!("{out}");
     assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
     assert!(out.contains("None"));
     assert!(out.contains("4997288"));
@@ -65,7 +64,6 @@ async fn test_multiple_delete_with_fake_client_records_version_ids() -> Result<(
     ];
 
     Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &objects)
         .await?;
 
@@ -98,7 +96,6 @@ async fn test_multiple_delete_empty_input_skips_delete_request() -> Result<(), E
     };
 
     Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &[])
         .await?;
 
@@ -117,7 +114,6 @@ async fn test_multiple_delete_missing_key_returns_error() {
     let objects = vec![StreamObject::from_object(Object::builder().build())];
 
     let err = Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &objects)
         .await
         .unwrap_err();
@@ -149,7 +145,6 @@ async fn test_set_tags_with_fake_client_records_tags() -> Result<(), Error> {
             },
         ],
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -188,7 +183,6 @@ async fn test_list_tags_with_fake_client_fetches_tags() -> Result<(), Error> {
     }];
 
     Cmd::LsTags(ListTags {})
-        .into_command()
         .execute_captured(&client, &path, &objects)
         .await?;
 
@@ -225,7 +219,6 @@ async fn test_download_with_fake_client_writes_file() -> Result<(), Error> {
         destination: temp_dir.path().to_string_lossy().to_string(),
         force: true,
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -257,9 +250,8 @@ async fn test_s3_copy_with_fake_client_records_request() -> Result<(), Error> {
             prefix: Some("archive".to_string()),
         },
         flat: false,
-        storage_class: Some(StorageClass::Glacier),
+        storage_class: Some(StorageClassName::from("GLACIER")),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -294,9 +286,8 @@ async fn test_s3_move_with_fake_client_records_copy_and_delete() -> Result<(), E
             prefix: Some("archive".to_string()),
         },
         flat: false,
-        storage_class: Some(StorageClass::StandardIa),
+        storage_class: Some(StorageClassName::from("STANDARD_IA")),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -332,9 +323,8 @@ async fn test_s3_move_delete_markers_only_skips_delete_request() -> Result<(), E
             prefix: Some("archive".to_string()),
         },
         flat: false,
-        storage_class: Some(StorageClass::StandardIa),
+        storage_class: Some(StorageClassName::from("STANDARD_IA")),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -369,9 +359,8 @@ async fn test_restore_with_fake_client_records_request() -> Result<(), Error> {
 
     Cmd::Restore(Restore {
         days: 7,
-        tier: Tier::Bulk,
+        tier: RestoreTier::Bulk,
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -406,7 +395,7 @@ fn test_advanced_print_object_with_owner_no_date_no_storage() -> Result<(), Erro
     cmd.print_stream_object(&mut buf, bucket, &stream_obj)?;
     let out = std::str::from_utf8(&buf)?;
 
-    println!("Output with owner, no date, no storage: {}", out);
+    println!("Output with owner, no date, no storage: {out}");
     assert!(out.contains("abc123456789"));
     assert!(out.contains("test-owner"));
     assert!(out.contains("1234567"));
@@ -429,7 +418,7 @@ fn test_fast_print_object() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -530,7 +519,7 @@ fn test_advanced_print_json() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -570,7 +559,7 @@ fn test_advanced_print_csv() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
@@ -582,7 +571,7 @@ fn test_advanced_print_csv() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::ReducedRedundancy)
         .last_modified(DateTime::from_str(
             "2020-01-01T12:30:45.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
@@ -595,7 +584,7 @@ fn test_advanced_print_csv() -> Result<(), Error> {
     cmd.print_csv_stream_objects(&mut buf, &[stream_obj1.clone(), stream_obj2.clone()])?;
 
     let output = String::from_utf8(buf.clone()).unwrap();
-    println!("CSV Output:\n{}", output);
+    println!("CSV Output:\n{output}");
 
     let record1: ObjectRecord = (&stream_obj1).into();
     let record2: ObjectRecord = (&stream_obj2).into();
@@ -634,12 +623,12 @@ async fn test_advanced_print() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Print(AdvancedPrint::default()).into_command();
+    let cmd = Cmd::Print(AdvancedPrint::default());
     let client = FakeS3Client::default();
 
     let path = S3Path {
@@ -658,7 +647,9 @@ async fn smoke_advanced_print_json_execute() -> Result<(), Error> {
         .key("folder/file1.txt")
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
 
@@ -667,14 +658,15 @@ async fn smoke_advanced_print_json_execute() -> Result<(), Error> {
         .key("folder/file2.txt")
         .size(200)
         .storage_class(ObjectStorageClass::IntelligentTiering)
-        .last_modified(DateTime::from_str("2023-02-15T12:30:45.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-02-15T12:30:45.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
 
     let cmd = Cmd::Print(AdvancedPrint {
         format: PrintFormat::Json,
-    })
-    .into_command();
+    });
 
     let client = FakeS3Client::default();
     let path = S3Path {
@@ -694,7 +686,9 @@ async fn smoke_advanced_print_csv_execute() -> Result<(), Error> {
         .key("data/report.csv")
         .size(5000)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
 
@@ -703,14 +697,15 @@ async fn smoke_advanced_print_csv_execute() -> Result<(), Error> {
         .key("data/archive.zip")
         .size(10000)
         .storage_class(ObjectStorageClass::DeepArchive)
-        .last_modified(DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-04-20T14:25:10.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
 
     let cmd = Cmd::Print(AdvancedPrint {
         format: PrintFormat::Csv,
-    })
-    .into_command();
+    });
 
     let client = FakeS3Client::default();
     let path = S3Path {
@@ -732,12 +727,12 @@ async fn test_fastprint() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Ls(FastPrint {}).into_command();
+    let cmd = Cmd::Ls(FastPrint {});
     let client = FakeS3Client::default();
 
     let path = S3Path {
@@ -758,12 +753,12 @@ async fn smoke_donothing() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Nothing(DoNothing {}).into_command();
+    let cmd = Cmd::Nothing(DoNothing {});
     let client = FakeS3Client::default();
 
     let path = S3Path {
@@ -785,15 +780,14 @@ async fn smoke_exec() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
 
     let cmd = Cmd::Exec(Exec {
         utility: "echo {}".to_owned(),
-    })
-    .into_command();
+    });
 
     let client = FakeS3Client::default();
 
@@ -823,16 +817,6 @@ fn test_generate_s3_url() {
     );
 }
 
-fn make_s3_test_credentials() -> aws_sdk_s3::config::Credentials {
-    aws_sdk_s3::config::Credentials::new(
-        "ATESTCLIENT",
-        "astestsecretkey",
-        Some("atestsessiontoken".to_string()),
-        None,
-        "",
-    )
-}
-
 #[tokio::test]
 async fn test_download_with_replay_client() -> Result<(), Error> {
     let temp_dir = tempdir()?;
@@ -844,7 +828,9 @@ async fn test_download_with_replay_client() -> Result<(), Error> {
         .key(key)
         .size(14) // Size of "Test content\n"
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj = StreamObject::from_object(object);
 
@@ -852,7 +838,7 @@ async fn test_download_with_replay_client() -> Result<(), Error> {
 
     let req = http::Request::builder()
         .method("GET")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file.txt?x-id=GetObject")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -866,22 +852,12 @@ async fn test_download_with_replay_client() -> Result<(), Error> {
 
     let events = vec![ReplayEvent::new(req, resp)];
 
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let cmd = Cmd::Download(Download {
         destination: temp_path.clone(),
         force: true,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -896,6 +872,7 @@ async fn test_download_with_replay_client() -> Result<(), Error> {
     let downloaded_content = fs::read_to_string(&file_path)?;
     assert_eq!(downloaded_content, "Test content\n");
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -917,7 +894,7 @@ async fn test_download_skips_existing_file_and_continues() -> Result<(), Error> 
 
     let req = http::Request::builder()
         .method("GET")
-        .uri("https://test-bucket.s3.amazonaws.com/test/new.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/new.txt?x-id=GetObject")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -928,20 +905,12 @@ async fn test_download_skips_existing_file_and_continues() -> Result<(), Error> 
         .body(SdkBody::from("new content\n"))
         .unwrap();
 
-    let client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(StaticReplayClient::new(vec![ReplayEvent::new(req, resp)]))
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(vec![ReplayEvent::new(req, resp)]);
 
     let cmd = Cmd::Download(Download {
         destination: temp_path.clone(),
         force: false,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -957,6 +926,7 @@ async fn test_download_skips_existing_file_and_continues() -> Result<(), Error> 
         "new content\n"
     );
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -970,7 +940,9 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
 
@@ -979,13 +951,15 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
 
     let req1 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt?acl")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file1.txt?acl")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -996,7 +970,7 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
 
     let req2 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt?acl")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file2.txt?acl")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1007,18 +981,9 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
 
     let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
 
-    let replay_client = StaticReplayClient::new(events);
+    let (client, replay) = replay_s3_client(events);
 
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-
-    let cmd = Cmd::Public(SetPublic {}).into_command();
+    let cmd = Cmd::Public(SetPublic {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1028,6 +993,7 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
     cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1038,7 +1004,7 @@ async fn test_set_public_defaults_region_when_client_region_is_missing() -> Resu
         ..Default::default()
     };
     let stream_obj = StreamObject::from_object(Object::builder().key("test/file.txt").build());
-    let cmd = Cmd::Public(SetPublic {}).into_command();
+    let cmd = Cmd::Public(SetPublic {});
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
@@ -1067,7 +1033,9 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1075,13 +1043,17 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/?delete")
-        .body(SdkBody::empty()) // In a real request this would contain XML with keys to delete
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/?delete")
+        .body(SdkBody::from(
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/file1.txt</Key></Object><Object><Key>test/file2.txt</Key></Object></Delete>"#,
+        ))
         .unwrap();
 
     let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1102,18 +1074,9 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
 
     let events = vec![ReplayEvent::new(req, resp)];
 
-    let replay_client = StaticReplayClient::new(events);
+    let (client, replay) = replay_s3_client(events);
 
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-
-    let cmd = Cmd::Delete(MultipleDelete {}).into_command();
+    let cmd = Cmd::Delete(MultipleDelete {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1125,6 +1088,7 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
     cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1134,8 +1098,10 @@ async fn test_multiple_delete_propagates_request_failure() {
 
     let req = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/?delete")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/?delete")
+        .body(SdkBody::from(
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/file1.txt</Key></Object></Delete>"#,
+        ))
         .unwrap();
 
     let resp = http::Response::builder()
@@ -1150,14 +1116,7 @@ async fn test_multiple_delete_propagates_request_failure() {
         ))
         .unwrap();
 
-    let client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(StaticReplayClient::new(vec![ReplayEvent::new(req, resp)]))
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(vec![ReplayEvent::new(req, resp)]);
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1165,11 +1124,11 @@ async fn test_multiple_delete_propagates_request_failure() {
     };
 
     let result = Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &[StreamObject::from_object(object)])
         .await;
 
     assert!(result.is_err());
+    replay.assert_requests_match(&[]);
 }
 
 #[tokio::test]
@@ -1178,8 +1137,10 @@ async fn test_multiple_delete_propagates_partial_delete_failure() {
 
     let req = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/?delete")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/?delete")
+        .body(SdkBody::from(
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/file1.txt</Key></Object></Delete>"#,
+        ))
         .unwrap();
 
     let resp = http::Response::builder()
@@ -1197,14 +1158,7 @@ async fn test_multiple_delete_propagates_partial_delete_failure() {
         ))
         .unwrap();
 
-    let client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(StaticReplayClient::new(vec![ReplayEvent::new(req, resp)]))
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(vec![ReplayEvent::new(req, resp)]);
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1212,11 +1166,11 @@ async fn test_multiple_delete_propagates_partial_delete_failure() {
     };
 
     let result = Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &[StreamObject::from_object(object)])
         .await;
 
     assert!(result.is_err());
+    replay.assert_requests_match(&[]);
 }
 
 #[tokio::test]
@@ -1229,7 +1183,9 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1237,13 +1193,17 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt?tagging")
-        .body(SdkBody::empty()) // In a real request this would contain XML with tags
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file1.txt?tagging")
+        .body(SdkBody::from(
+            r#"<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>tag1</Key><Value>value1</Value></Tag><Tag><Key>tag2</Key><Value>value2</Value></Tag></TagSet></Tagging>"#,
+        ))
         .unwrap();
 
     let resp1 = http::Response::builder()
@@ -1253,8 +1213,10 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
 
     let req2 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt?tagging")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file2.txt?tagging")
+        .body(SdkBody::from(
+            r#"<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>tag1</Key><Value>value1</Value></Tag><Tag><Key>tag2</Key><Value>value2</Value></Tag></TagSet></Tagging>"#,
+        ))
         .unwrap();
 
     let resp2 = http::Response::builder()
@@ -1264,16 +1226,7 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
 
     let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
 
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let tags = vec![
         FindTag {
@@ -1286,7 +1239,7 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         },
     ];
 
-    let cmd = Cmd::Tags(SetTags { tags }).into_command();
+    let cmd = Cmd::Tags(SetTags { tags });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1298,20 +1251,13 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
     cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
 #[tokio::test]
 async fn test_set_tags_rejects_too_many_tags() {
-    let replay_client = StaticReplayClient::new(vec![]);
-    let client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(vec![]);
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1329,12 +1275,11 @@ async fn test_set_tags_rejects_too_many_tags() {
             })
             .collect(),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await;
 
     assert!(result.is_err());
-    replay_client.assert_requests_match(&[]);
+    replay.assert_requests_match(&[]);
 }
 
 #[tokio::test]
@@ -1347,7 +1292,9 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1355,12 +1302,14 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
         .method("GET")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt?tagging")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file1.txt?tagging")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1386,7 +1335,7 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
 
     let req2 = http::Request::builder()
         .method("GET")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt?tagging")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file2.txt?tagging")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1408,18 +1357,9 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
 
     let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
 
-    let replay_client = StaticReplayClient::new(events);
+    let (client, replay) = replay_s3_client(events);
 
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1431,6 +1371,7 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
     cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1444,13 +1385,15 @@ async fn test_list_tags_with_version_id() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     // Request includes versionId query parameter
     let req1 = http::Request::builder()
         .method("GET")
-        .uri("https://test-bucket.s3.amazonaws.com/test/versioned.txt?tagging&versionId=v123")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/versioned.txt?tagging&versionId=v123")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1472,18 +1415,9 @@ async fn test_list_tags_with_version_id() -> Result<(), Error> {
 
     let events = vec![ReplayEvent::new(req1, resp1)];
 
-    let replay_client = StaticReplayClient::new(events);
+    let (client, replay) = replay_s3_client(events);
 
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1501,6 +1435,7 @@ async fn test_list_tags_with_version_id() -> Result<(), Error> {
 
     cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1517,7 +1452,9 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1525,22 +1462,15 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     // No HTTP events needed - tags are cached
-    let replay_client = StaticReplayClient::new(vec![]);
+    let (client, replay) = replay_s3_client(vec![]);
 
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1567,6 +1497,7 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
     cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1580,22 +1511,15 @@ async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     // No HTTP events needed - delete marker should be skipped
-    let replay_client = StaticReplayClient::new(vec![]);
+    let (client, replay) = replay_s3_client(vec![]);
 
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1614,6 +1538,7 @@ async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
     // Execute - should skip the delete marker without making API calls
     cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1627,7 +1552,9 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1635,13 +1562,15 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/dest/file1.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file1.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/dest/file1.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile1.txt")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1659,8 +1588,8 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
 
     let req2 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/dest/file2.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file2.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/dest/file2.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile2.txt")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1678,16 +1607,7 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
 
     let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
 
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let destination = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1698,8 +1618,7 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: None,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1711,6 +1630,7 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
     cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1723,13 +1643,15 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
         .key(key)
         .size(1000)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/archive/file_to_copy.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file_to_copy.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/archive/file_to_copy.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile_to_copy.txt")
         .header("x-amz-storage-class", "GLACIER")
         .body(SdkBody::empty())
         .unwrap();
@@ -1747,16 +1669,7 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req, resp)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let destination = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1766,9 +1679,8 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
     let cmd = Cmd::Copy(S3Copy {
         destination,
         flat: true,
-        storage_class: Some(StorageClass::Glacier),
-    })
-    .into_command();
+        storage_class: Some(StorageClassName::from("GLACIER")),
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1778,6 +1690,7 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
     let stream_obj = StreamObject::from_object(object);
     cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1790,13 +1703,15 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
         .key(key)
         .size(1000)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req_copy = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/archive/file_to_move.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file_to_move.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/archive/file_to_move.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile_to_move.txt")
         .header("x-amz-storage-class", "INTELLIGENT_TIERING")
         .body(SdkBody::empty())
         .unwrap();
@@ -1815,8 +1730,10 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
 
     let req_delete = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/?delete")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/?delete")
+        .body(SdkBody::from(
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/file_to_move.txt</Key></Object></Delete>"#,
+        ))
         .unwrap();
 
     let resp_delete_body = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1837,16 +1754,7 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
         ReplayEvent::new(req_delete, resp_delete),
     ];
 
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let destination = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1856,9 +1764,8 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
     let cmd = Cmd::Move(S3Move {
         destination,
         flat: true,
-        storage_class: Some(StorageClass::IntelligentTiering),
-    })
-    .into_command();
+        storage_class: Some(StorageClassName::from("INTELLIGENT_TIERING")),
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1868,6 +1775,7 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
     let stream_obj = StreamObject::from_object(object);
     cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -1881,7 +1789,9 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1889,13 +1799,15 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req_copy1 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/dest/file1.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file1.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/dest/file1.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile1.txt")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1913,8 +1825,8 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
 
     let req_copy2 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/dest/file2.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file2.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/dest/file2.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile2.txt")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -1932,8 +1844,10 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
 
     let req_delete = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/?delete")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/?delete")
+        .body(SdkBody::from(
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/file1.txt</Key></Object><Object><Key>test/file2.txt</Key></Object></Delete>"#,
+        ))
         .unwrap();
 
     let resp_delete_body = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1958,16 +1872,7 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         ReplayEvent::new(req_delete, resp_delete),
     ];
 
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let destination = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1978,8 +1883,7 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: None,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1991,6 +1895,7 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
     cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2006,7 +1911,9 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let deeparchive_object = Object::builder()
@@ -2014,7 +1921,9 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(10000)
         .storage_class(ObjectStorageClass::DeepArchive)
-        .last_modified(DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-04-20T14:25:10.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let restored_object = Object::builder()
@@ -2022,7 +1931,9 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key3)
         .size(15000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-05-15T11:30:20.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-05-15T11:30:20.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let invalid_state_object = Object::builder()
@@ -2030,13 +1941,17 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key4)
         .size(20000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-06-25T16:45:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-06-25T16:45:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let glacier_request = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/archive1.dat?restore")
-        .body(SdkBody::empty()) // In a real request this would contain XML with restore parameters
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/archive1.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>7</Days><GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let glacier_response = http::Response::builder()
@@ -2046,8 +1961,10 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
 
     let deeparchive_request = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/archive2.dat?restore")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/archive2.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>7</Days><GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let deeparchive_response = http::Response::builder()
@@ -2057,8 +1974,10 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
 
     let request_with_inprogress = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/already_in_progress.dat?restore")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/already_in_progress.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>7</Days><GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let inprogress_response_body = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -2077,8 +1996,10 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
 
     let request_with_objectstate_error = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/invalid_state.dat?restore")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/invalid_state.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>7</Days><GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let invalid_objectstate_response_body = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -2105,22 +2026,12 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         ),
     ];
 
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let cmd = Cmd::Restore(Restore {
         days: 7,
-        tier: aws_sdk_s3::types::Tier::Standard,
-    })
-    .into_command();
+        tier: RestoreTier::Standard,
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2139,6 +2050,7 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
     )
     .await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2151,13 +2063,17 @@ async fn test_restore_with_standard_tier() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let request_successful = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/standard_retrieval.dat?restore")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/standard_retrieval.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>7</Days><GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let resp = http::Response::builder()
@@ -2166,20 +2082,11 @@ async fn test_restore_with_standard_tier() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(request_successful, resp)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let restore_cmd = Restore {
         days: 7,
-        tier: aws_sdk_s3::types::Tier::Standard,
+        tier: RestoreTier::Standard,
     };
 
     let path = S3Path {
@@ -2192,6 +2099,7 @@ async fn test_restore_with_standard_tier() -> Result<(), Error> {
         .await;
     assert!(result.is_ok(), "Standard tier restore should succeed");
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2204,13 +2112,17 @@ async fn test_restore_with_expedited_tier() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/expedited_retrieval.dat?restore")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/expedited_retrieval.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>2</Days><GlacierJobParameters><Tier>Expedited</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let resp = http::Response::builder()
@@ -2219,20 +2131,11 @@ async fn test_restore_with_expedited_tier() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req, resp)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let restore_cmd = Restore {
         days: 2,
-        tier: aws_sdk_s3::types::Tier::Expedited,
+        tier: RestoreTier::Expedited,
     };
 
     let path = S3Path {
@@ -2245,6 +2148,7 @@ async fn test_restore_with_expedited_tier() -> Result<(), Error> {
         .await;
     assert!(result.is_ok(), "Expedited tier restore should succeed");
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2257,13 +2161,17 @@ async fn test_restore_with_bulk_tier() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::DeepArchive)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/bulk_retrieval.dat?restore")
-        .body(SdkBody::empty()) // In a real request this would contain XML with Bulk tier
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/bulk_retrieval.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>30</Days><GlacierJobParameters><Tier>Bulk</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let resp = http::Response::builder()
@@ -2272,20 +2180,11 @@ async fn test_restore_with_bulk_tier() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req, resp)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let restore_cmd = Restore {
         days: 30,
-        tier: aws_sdk_s3::types::Tier::Bulk,
+        tier: RestoreTier::Bulk,
     };
 
     let path = S3Path {
@@ -2302,6 +2201,7 @@ async fn test_restore_with_bulk_tier() -> Result<(), Error> {
         .await;
     assert!(result.is_ok(), "Bulk tier restore should succeed");
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2314,24 +2214,17 @@ async fn test_restore_with_non_glacier_objects() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Standard) // Standard storage, not Glacier
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let events: Vec<ReplayEvent> = vec![];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let restore_cmd = Restore {
         days: 7,
-        tier: aws_sdk_s3::types::Tier::Standard,
+        tier: RestoreTier::Standard,
     };
 
     let path = S3Path {
@@ -2351,6 +2244,7 @@ async fn test_restore_with_non_glacier_objects() -> Result<(), Error> {
         "Non-Glacier objects should be skipped without error"
     );
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2363,13 +2257,17 @@ async fn test_restore_with_maximum_days() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/test/long_term_retrieval.dat?restore")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/long_term_retrieval.dat?restore")
+        .body(SdkBody::from(
+            r#"<RestoreRequest xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Days>365</Days><GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters></RestoreRequest>"#,
+        ))
         .unwrap();
 
     let resp = http::Response::builder()
@@ -2378,20 +2276,11 @@ async fn test_restore_with_maximum_days() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req, resp)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let restore_cmd = Restore {
         days: 365,
-        tier: aws_sdk_s3::types::Tier::Standard,
+        tier: RestoreTier::Standard,
     };
 
     let path = S3Path {
@@ -2404,6 +2293,7 @@ async fn test_restore_with_maximum_days() -> Result<(), Error> {
         .await;
     assert!(result.is_ok(), "Restore with maximum days should succeed");
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2417,7 +2307,9 @@ async fn test_change_storage_class() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -2425,13 +2317,15 @@ async fn test_change_storage_class() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file1.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file1.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile1.txt")
         .header("x-amz-metadata-directive", "COPY")
         .header("x-amz-storage-class", "GLACIER")
         .body(SdkBody::empty())
@@ -2451,8 +2345,8 @@ async fn test_change_storage_class() -> Result<(), Error> {
 
     let req2 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file2.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file2.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile2.txt")
         .header("x-amz-metadata-directive", "COPY")
         .header("x-amz-storage-class", "GLACIER")
         .body(SdkBody::empty())
@@ -2471,21 +2365,11 @@ async fn test_change_storage_class() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req1, resp1), ReplayEvent::new(req2, resp2)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let cmd = Cmd::ChangeStorage(ChangeStorage {
-        storage_class: StorageClass::Glacier,
-    })
-    .into_command();
+        storage_class: StorageClassName::from("GLACIER"),
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2494,9 +2378,16 @@ async fn test_change_storage_class() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
+    let output = cmd
+        .execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    assert_eq!(
+        output,
+        "Changing storage class for s3://test-bucket/test/file1.txt to GLACIER\n\
+         Changing storage class for s3://test-bucket/test/file2.txt to GLACIER\n"
+    );
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2552,7 +2443,9 @@ fn test_advanced_print_json_with_version_fields() -> Result<(), Error> {
         .is_latest(false)
         .size(1024)
         .storage_class(ObjectVersionStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-06-15T10:30:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-06-15T10:30:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let stream_obj = StreamObject::from_version(version);
@@ -2565,7 +2458,7 @@ fn test_advanced_print_json_with_version_fields() -> Result<(), Error> {
     cmd.print_json_stream_object(&mut buf, &stream_obj)?;
 
     let output = String::from_utf8(buf).unwrap();
-    println!("JSON with version: {}", output);
+    println!("JSON with version: {output}");
 
     // Verify version fields are present in JSON output
     assert!(output.contains("\"version_id\":\"v1234\""));
@@ -2583,7 +2476,9 @@ fn test_advanced_print_json_with_delete_marker() -> Result<(), Error> {
         .key("data/deleted.txt")
         .version_id("dm789")
         .is_latest(true)
-        .last_modified(DateTime::from_str("2023-07-20T14:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-07-20T14:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let stream_obj = StreamObject::from_delete_marker(marker);
@@ -2596,7 +2491,7 @@ fn test_advanced_print_json_with_delete_marker() -> Result<(), Error> {
     cmd.print_json_stream_object(&mut buf, &stream_obj)?;
 
     let output = String::from_utf8(buf).unwrap();
-    println!("JSON with delete marker: {}", output);
+    println!("JSON with delete marker: {output}");
 
     // Verify version and delete marker fields are present
     assert!(output.contains("\"version_id\":\"dm789\""));
@@ -2623,8 +2518,10 @@ async fn test_delete_versioned_object() -> Result<(), Error> {
     // The delete request should include versionId
     let req = http::Request::builder()
         .method("POST")
-        .uri("https://test-bucket.s3.amazonaws.com/?delete")
-        .body(SdkBody::empty())
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/?delete")
+        .body(SdkBody::from(
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/versioned-file.txt</Key><VersionId>v123abc</VersionId></Object></Delete>"#,
+        ))
         .unwrap();
 
     let resp_body = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -2642,18 +2539,9 @@ async fn test_delete_versioned_object() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req, resp)];
-    let replay_client = StaticReplayClient::new(events);
+    let (client, replay) = replay_s3_client(events);
 
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-
-    let cmd = Cmd::Delete(MultipleDelete {}).into_command();
+    let cmd = Cmd::Delete(MultipleDelete {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2662,6 +2550,7 @@ async fn test_delete_versioned_object() -> Result<(), Error> {
 
     cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2682,10 +2571,10 @@ async fn test_copy_versioned_object() -> Result<(), Error> {
     // Copy request should include versionId in x-amz-copy-source
     let req = http::Request::builder()
         .method("PUT")
-        .uri("https://dest-bucket.s3.amazonaws.com/dest/file.txt")
+        .uri("https://dest-bucket.s3.us-east-1.amazonaws.com/dest/file.txt?x-id=CopyObject")
         .header(
             "x-amz-copy-source",
-            "source-bucket/source/file.txt?versionId=srcver123",
+            "source-bucket/source%2Ffile.txt?versionId=srcver123",
         )
         .body(SdkBody::empty())
         .unwrap();
@@ -2703,16 +2592,7 @@ async fn test_copy_versioned_object() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req, resp)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     let destination = S3Path {
         bucket: "dest-bucket".to_owned(),
@@ -2723,8 +2603,7 @@ async fn test_copy_versioned_object() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: None,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "source-bucket".to_owned(),
@@ -2733,6 +2612,7 @@ async fn test_copy_versioned_object() -> Result<(), Error> {
 
     cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2753,7 +2633,7 @@ async fn test_download_versioned_object() -> Result<(), Error> {
     // Download request should include versionId parameter
     let req = http::Request::builder()
         .method("GET")
-        .uri("https://test-bucket.s3.amazonaws.com/downloads/file.txt?versionId=dlver456")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/downloads/file.txt?x-id=GetObject&versionId=dlver456")
         .body(SdkBody::empty())
         .unwrap();
 
@@ -2765,16 +2645,7 @@ async fn test_download_versioned_object() -> Result<(), Error> {
         .unwrap();
 
     let events = vec![ReplayEvent::new(req, resp)];
-    let replay_client = StaticReplayClient::new(events);
-
-    let client: aws_sdk_s3::Client = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(make_s3_test_credentials())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
+    let (client, replay) = replay_s3_client(events);
 
     // Create a temp directory for download
     let temp_dir = std::env::temp_dir().join("s3find_test_versioned_download");
@@ -2783,8 +2654,7 @@ async fn test_download_versioned_object() -> Result<(), Error> {
     let cmd = Cmd::Download(Download {
         destination: temp_dir.to_string_lossy().to_string(),
         force: true,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2796,5 +2666,6 @@ async fn test_download_versioned_object() -> Result<(), Error> {
     // Clean up
     let _ = std::fs::remove_dir_all(&temp_dir);
 
+    replay.assert_requests_match(&[]);
     Ok(())
 }

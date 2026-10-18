@@ -1,6 +1,6 @@
 use anyhow::Error;
-use async_trait::async_trait;
 
+use crate::adapters::aws::S3Client;
 use crate::arg::SetPublic;
 use crate::object::StreamObject;
 
@@ -15,19 +15,15 @@ pub(crate) fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
         .join("/");
 
     match region {
-        "us-east-1" => format!("https://{}.s3.amazonaws.com/{}", bucket, encoded_key),
-        _ => format!(
-            "https://{}.s3-{}.amazonaws.com/{}",
-            bucket, region, encoded_key
-        ),
+        "us-east-1" => format!("https://{bucket}.s3.amazonaws.com/{encoded_key}"),
+        _ => format!("https://{bucket}.s3-{region}.amazonaws.com/{encoded_key}"),
     }
 }
 
-#[async_trait]
 impl RunCommand for SetPublic {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         let region = ctx

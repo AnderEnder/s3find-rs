@@ -1,17 +1,16 @@
 use anyhow::Error;
-use async_trait::async_trait;
 use aws_sdk_s3::types::Tag;
 
+use crate::adapters::aws::S3Client;
 use crate::arg::{ListTags, SetTags};
 use crate::object::StreamObject;
 
 use super::{CommandContext, RunCommand, live_objects};
 
-#[async_trait]
 impl RunCommand for SetTags {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         let tags = self
@@ -53,11 +52,10 @@ fn format_tags(tags: &[Tag]) -> String {
         .join(",")
 }
 
-#[async_trait]
 impl RunCommand for ListTags {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in live_objects(objects) {
