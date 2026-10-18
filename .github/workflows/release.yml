@@ -85,44 +85,45 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-osx:
-    runs-on: macOS-latest
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+            asset: s3find-aarch64-osx
+          # Cross-compiled on Apple Silicon: the Intel runners are several
+          # times slower. Smoke-tested under Rosetta 2.
+          - target: x86_64-apple-darwin
+            arch: x86_64
+            asset: s3find-x86_64-osx
     steps:
       - name: checkout
         uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - name: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - name: cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: macos-aarch64
+          shared-key: ${{ matrix.target }}
+      - name: install Rosetta 2
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
       - name: build release
-        run: cargo build --release --verbose
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: check architecture
+        run: test "$(lipo -archs target/${{ matrix.target }}/release/s3find)" = "${{ matrix.arch }}"
+      - name: smoke test
+        run: target/${{ matrix.target }}/release/s3find --version
       - name: archive
-        run: tar -C target/release -czf $(pwd)/s3find-aarch64-osx.tar.gz s3find
+        run: tar -C target/${{ matrix.target }}/release -czf ${{ matrix.asset }}.tar.gz s3find
       - name: publish release
         uses: softprops/action-gh-release@v3
         with:
-          files: s3find-aarch64-osx.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  release-osx-x86_64:
-    runs-on: macos-15-intel
-    steps:
-      - name: checkout
-        uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: macos-x86_64
-      - name: build release
-        run: cargo build --release --verbose
-      - name: archive
-        run: tar -C target/release -czf $(pwd)/s3find-x86_64-osx.tar.gz s3find
-      - name: publish release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: s3find-x86_64-osx.tar.gz
+          files: ${{ matrix.asset }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -140,7 +141,7 @@ jobs:
       - name: build release
         run: cargo build --release --verbose
       - name: archive
-        run: tar -C target/release -czf $(pwd)/s3find-x86_64-windows.tar.gz s3find.exe
+        run: tar -C target/release -czf s3find-x86_64-windows.tar.gz s3find.exe
         shell: bash
       - name: publish release
         uses: softprops/action-gh-release@v3
