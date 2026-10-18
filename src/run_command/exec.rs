@@ -30,24 +30,46 @@ impl fmt::Display for Executed<'_> {
 }
 
 impl Exec {
-    /// The utility's command line with `{}` replaced by `target`.
-    pub(crate) fn command_line(&self, target: &str) -> String {
-        self.utility.replace("{}", target)
+    /// The program and arguments to run for `target`: the utility split into
+    /// words like a shell would, then `{}` replaced in each word, so a target
+    /// with spaces or quotes stays inside its word.
+    pub(crate) fn command(&self, target: &str) -> Result<Vec<String>, Error> {
+        let words = shlex::split(&self.utility).ok_or(FunctionError::CommandlineParse)?;
+        if words.is_empty() {
+            return Err(FunctionError::CommandlineParse.into());
+        }
+        Ok(words
+            .iter()
+            .map(|word| word.replace("{}", target))
+            .collect())
     }
 }
 
-/// Runs a command line and returns what it wrote to stdout. A non-zero exit
-/// is an error that includes what it wrote to stderr.
-pub(crate) async fn run(command_line: &str) -> Result<String, Error> {
-    let split = shlex::split(command_line).ok_or(FunctionError::CommandlineParse)?;
-    let (command_name, command_args) =
-        split.split_first().ok_or(FunctionError::CommandlineParse)?;
+/// `command` as a shell would need it typed, for output and errors.
+fn command_line(command: &[String]) -> String {
+    shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
+}
 
-    let output = Command::new(command_name)
-        .args(command_args)
-        .output()
-        .await?;
+/// What `{}` stands for: the object's `s3://` URL, with `?versionId=` when
+/// listed by version.
+fn target(bucket: &str, object: &StreamObject) -> String {
+    let key = object.key().unwrap_or_default();
+    match &object.version_id {
+        Some(version_id) => format!("s3://{bucket}/{key}?versionId={version_id}"),
+        None => format!("s3://{bucket}/{key}"),
+    }
+}
+
+/// Runs a program and returns what it wrote to stdout. A non-zero exit is an
+/// error that includes what it wrote to stderr.
+pub(crate) async fn run(command: &[String]) -> Result<String, Error> {
+    let (program, args) = command
+        .split_first()
+        .ok_or(FunctionError::CommandlineParse)?;
+
+    let output = Command::new(program).args(args).output().await?;
     if !output.status.success() {
+        let command_line = command_line(command);
         let status = output
             .status
             .code()
@@ -73,8 +95,7 @@ impl RunCommand for Exec {
         // One at a time, like `find -exec`: the utility may not be safe to run
         // concurrently.
         for object in objects {
-            let object = ObjectRef::new(&ctx.path.bucket, object);
-            let command = self.command_line(&object.to_string());
+            let command = self.command(&target(&ctx.path.bucket, object))?;
             let stdout = if ctx.options.dry_run {
                 None
             } else {
@@ -82,8 +103,8 @@ impl RunCommand for Exec {
             };
             ctx.report(&Executed {
                 action: "exec",
-                object,
-                command,
+                object: ObjectRef::new(&ctx.path.bucket, object),
+                command: command_line(&command),
                 stdout,
             })?;
         }

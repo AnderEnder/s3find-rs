@@ -47,13 +47,13 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 csv = "1"
 shlex = "2"
+tempfile = "3"
 urlencoding = "2"
 mimalloc = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["net", "sync", "test-util", "time"] }
 aws-smithy-runtime = { version = "1", features = ["test-util"] }
-tempfile = "3"
 http = "1"
 testcontainers = "0.28"
 assert_cmd = "2"

@@ -587,6 +587,47 @@ fn test_option_warnings() {
     );
 }
 
+#[test]
+fn test_option_warnings_note_destinations_inside_the_searched_path() {
+    let nested_note = "Note: the destination is inside the searched path; \
+        objects already under it are skipped";
+    for args in [
+        ["s3://bkt", "copy", "s3://bkt/backup"],
+        ["s3://bkt/data", "move", "s3://bkt/data/archive"],
+    ] {
+        assert_eq!(option_warnings(&opts(&args)), [nested_note], "{args:?}");
+    }
+
+    for args in [
+        &["s3://bkt/data", "copy", "s3://bkt/archive"][..],
+        &["s3://bkt", "copy", "s3://other/backup"],
+        &["s3://bkt", "move", "--flat", "s3://bkt/backup"],
+        &["s3://bkt", "ls"],
+    ] {
+        assert!(option_warnings(&opts(args)).is_empty(), "{args:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_flat_copy_collisions_are_caught_across_batches() {
+    let command = opts(&["s3://test-bucket", "copy", "--flat", "s3://dest-bucket"])
+        .cmd
+        .unwrap();
+    let pipeline = Pipeline::new(FakeS3Client::default(), listing(), command);
+    let first_batch = (0..BATCH_SIZE).map(|i| keyed(&format!("a/{i:04}.txt")));
+
+    let err = process(&pipeline, first_batch.chain([keyed("b/0000.txt")]))
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("s3://test-bucket/a/0000.txt and s3://test-bucket/b/0000.txt"),
+        "{err}"
+    );
+    assert_eq!(pipeline.client.copy_calls.lock().unwrap().len(), BATCH_SIZE);
+}
+
 /// Pins the examples in the `--maxdepth` help text.
 #[tokio::test]
 async fn test_maxdepth_help_examples() {

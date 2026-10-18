@@ -4,6 +4,7 @@
 //! implement [`RunCommand`] for that struct in a module here, and add the
 //! variant to the `for_each_command!` list below.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::pin::pin;
@@ -67,7 +68,7 @@ impl CommandOptions {
 }
 
 /// What a command needs to run: S3 access, the searched path, an output sink
-/// and how to run.
+/// and how to run. One context serves every batch of a run.
 pub struct CommandContext<'a, C> {
     pub client: &'a C,
     /// The path being searched; every object in a batch lives in `path.bucket`.
@@ -75,6 +76,26 @@ pub struct CommandContext<'a, C> {
     /// Where results and progress go (stdout in the CLI).
     pub out: &'a mut (dyn Write + Send),
     pub options: CommandOptions,
+    /// Destination keys claimed by `--flat` copies so far in this run, each
+    /// with the source key copied there.
+    flat_destinations: HashMap<String, String>,
+}
+
+impl<'a, C> CommandContext<'a, C> {
+    pub fn new(
+        client: &'a C,
+        path: &'a S3Path,
+        out: &'a mut (dyn Write + Send),
+        options: CommandOptions,
+    ) -> Self {
+        Self {
+            client,
+            path,
+            out,
+            options,
+            flat_destinations: HashMap::new(),
+        }
+    }
 }
 
 impl<C: S3Client> CommandContext<'_, C> {

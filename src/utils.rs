@@ -1,3 +1,5 @@
+use crate::arg::S3Path;
+
 const DELIMITER: char = '/';
 
 /// The last segment of a key: `some/path` → `path`.
@@ -23,6 +25,14 @@ pub fn combine_keys(flat: bool, source: &str, destination: Option<&str>) -> Stri
         Some(prefix) => join_key(prefix, key),
         None => key.to_owned(),
     }
+}
+
+/// Whether copies made under `destination` are themselves under `source`, so
+/// a find over `source` would list them too.
+pub fn copies_are_listed(source: &S3Path, destination: &S3Path) -> bool {
+    let destination_dir = combine_keys(false, "", destination.prefix.as_deref());
+    source.bucket == destination.bucket
+        && destination_dir.starts_with(source.prefix.as_deref().unwrap_or_default())
 }
 
 #[cfg(test)]

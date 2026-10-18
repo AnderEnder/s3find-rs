@@ -1,3 +1,5 @@
+use std::fmt;
+
 use anyhow::{Error, anyhow};
 use aws_config::{BehaviorVersion, Region, meta::credentials::CredentialsProviderChain};
 use aws_sdk_s3::{
@@ -26,6 +28,52 @@ pub struct DeleteObjectRequest {
 pub struct DeletedObjectInfo {
     pub key: Option<String>,
     pub version_id: Option<String>,
+}
+
+/// What one DeleteObjects call did: S3 deletes the keys it can and reports
+/// the rest.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeleteOutcome {
+    pub deleted: Vec<DeletedObjectInfo>,
+    pub failed: Vec<DeleteFailure>,
+}
+
+impl DeleteOutcome {
+    /// An error naming every key that wasn't deleted, if any.
+    pub fn check(&self) -> Result<(), Error> {
+        if self.failed.is_empty() {
+            return Ok(());
+        }
+        let details = self
+            .failed
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(anyhow!(
+            "failed to delete {} of the objects: {details}",
+            self.failed.len()
+        ))
+    }
+}
+
+/// A key S3 didn't delete, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteFailure {
+    pub key: String,
+    pub version_id: Option<String>,
+    pub code: String,
+    pub message: String,
+}
+
+impl fmt::Display for DeleteFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.key)?;
+        if let Some(version_id) = &self.version_id {
+            write!(f, "?versionId={version_id}")?;
+        }
+        write!(f, ": {} ({})", self.code, self.message)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -120,11 +168,13 @@ pub trait S3Client: Send + Sync {
         request: ListVersionsRequest<'_>,
     ) -> impl Future<Output = Result<VersionsPage, Error>> + Send;
 
+    /// Deletes up to 1000 keys. Keys S3 refuses to delete are reported in the
+    /// outcome, not as an error.
     fn delete_objects(
         &self,
         bucket: &str,
         objects: Vec<DeleteObjectRequest>,
-    ) -> impl Future<Output = Result<Vec<DeletedObjectInfo>, Error>> + Send;
+    ) -> impl Future<Output = Result<DeleteOutcome, Error>> + Send;
 
     fn put_object_tagging(
         &self,
@@ -293,9 +343,9 @@ impl S3Client for Client {
         &self,
         bucket: &str,
         objects: Vec<DeleteObjectRequest>,
-    ) -> Result<Vec<DeletedObjectInfo>, Error> {
+    ) -> Result<DeleteOutcome, Error> {
         if objects.is_empty() {
-            return Ok(Vec::new());
+            return Ok(DeleteOutcome::default());
         }
 
         let objects = objects
@@ -318,26 +368,7 @@ impl S3Client for Client {
             .await
             .map_err(sdk_error)?;
 
-        let delete_errors = response.errors.unwrap_or_default();
-        if !delete_errors.is_empty() {
-            let details = delete_errors
-                .iter()
-                .map(|error| {
-                    let key = error.key().unwrap_or("<unknown>");
-                    let version = error
-                        .version_id()
-                        .map(|value| format!("?versionId={value}"))
-                        .unwrap_or_default();
-                    let code = error.code().unwrap_or("Unknown");
-                    let message = error.message().unwrap_or("unknown delete error");
-                    format!("{key}{version}: {code} ({message})")
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!("delete_objects partially failed: {details}"));
-        }
-
-        Ok(response
+        let deleted = response
             .deleted
             .unwrap_or_default()
             .into_iter()
@@ -345,7 +376,21 @@ impl S3Client for Client {
                 key: object.key,
                 version_id: object.version_id,
             })
-            .collect())
+            .collect();
+        let failed = response
+            .errors
+            .unwrap_or_default()
+            .into_iter()
+            .map(|error| DeleteFailure {
+                key: error.key.unwrap_or_else(|| "<unknown>".to_owned()),
+                version_id: error.version_id,
+                code: error.code.unwrap_or_else(|| "Unknown".to_owned()),
+                message: error
+                    .message
+                    .unwrap_or_else(|| "unknown delete error".to_owned()),
+            })
+            .collect();
+        Ok(DeleteOutcome { deleted, failed })
     }
 
     async fn put_object_tagging(
@@ -655,12 +700,33 @@ mod tests {
                 .build(),
         );
 
-        let deleted = S3Client::delete_objects(&client, "test-bucket", Vec::new())
+        let outcome = S3Client::delete_objects(&client, "test-bucket", Vec::new())
             .await
             .unwrap();
 
-        assert!(deleted.is_empty());
+        assert_eq!(outcome, DeleteOutcome::default());
         replay_client.assert_requests_match(&[]);
+    }
+
+    #[test]
+    fn test_delete_outcome_names_each_failed_key() {
+        let failure = |key: &str, version_id: Option<&str>| DeleteFailure {
+            key: key.to_owned(),
+            version_id: version_id.map(str::to_owned),
+            code: "AccessDenied".to_owned(),
+            message: "Access Denied".to_owned(),
+        };
+        assert!(DeleteOutcome::default().check().is_ok());
+
+        let outcome = DeleteOutcome {
+            deleted: Vec::new(),
+            failed: vec![failure("a.txt", None), failure("b.txt", Some("v1"))],
+        };
+        assert_eq!(
+            outcome.check().unwrap_err().to_string(),
+            "failed to delete 2 of the objects: a.txt: AccessDenied (Access Denied), \
+             b.txt?versionId=v1: AccessDenied (Access Denied)"
+        );
     }
 
     #[test]

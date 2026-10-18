@@ -1,21 +1,23 @@
+use std::borrow::Cow;
+use std::collections::hash_map::Entry;
 use std::fmt;
 use std::fs;
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
 use std::pin::pin;
 
-use anyhow::Error;
+use anyhow::{Error, anyhow, bail};
 use aws_sdk_s3::types::{MetadataDirective, StorageClass};
 use futures::TryStreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde::Serialize;
+use tempfile::NamedTempFile;
 
 use crate::adapters::aws::{DeleteObjectRequest, S3Client};
 use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path, StorageClassName};
 use crate::error::FunctionError;
 use crate::object::StreamObject;
-use crate::utils::combine_keys;
+use crate::utils::{combine_keys, copies_are_listed};
 
 use super::report::ObjectRef;
 use super::{CommandContext, RunCommand, build_copy_source, in_order, live_objects};
@@ -68,7 +70,9 @@ impl RunCommand for Download {
 
 impl Download {
     /// Downloads one object, showing its progress among `bars`, unless its
-    /// file exists and `--force` wasn't given, or this is a dry run.
+    /// file exists and `--force` wasn't given, or this is a dry run. A folder
+    /// marker (a key ending in `/`, as the S3 console creates) becomes a
+    /// directory.
     async fn download<'a>(
         &self,
         client: &impl S3Client,
@@ -79,12 +83,8 @@ impl Download {
         style: &ProgressStyle,
     ) -> Result<Downloaded<'a>, Error> {
         let key = object.require_key()?;
-
-        let file_path = match &object.version_id {
-            Some(vid) => Path::new(&self.destination).join(format!("{key}.v{vid}")),
-            None => Path::new(&self.destination).join(key),
-        };
-        let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
+        let is_folder = key.ends_with('/');
+        let file_path = local_path(&self.destination, key, object.version_id.as_deref())?;
         let file_name = file_path
             .to_str()
             .ok_or(FunctionError::FileNameParseError)?;
@@ -93,9 +93,13 @@ impl Download {
             action: "download",
             object: ObjectRef::new(bucket, object),
             path: file_name.to_owned(),
-            skipped: file_path.exists() && !self.force,
+            skipped: !is_folder && file_path.exists() && !self.force,
         };
         if record.skipped || dry_run {
+            return Ok(record);
+        }
+        if is_folder {
+            fs::create_dir_all(&file_path)?;
             return Ok(record);
         }
 
@@ -103,8 +107,11 @@ impl Download {
             .get_object(bucket, key, object.version_id.as_deref())
             .await?;
 
+        let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
         fs::create_dir_all(dir_path)?;
-        let mut output = File::create(&file_path)?;
+        // Renamed into place once complete, so a failed or cancelled download
+        // never leaves a partial file that a later run would skip as existing.
+        let mut output = partial_file(dir_path)?;
 
         let size = object.object.size.unwrap_or_default() as u64;
         let bar = bars.add(
@@ -116,10 +123,42 @@ impl Download {
             output.write_all(&bytes)?;
             bar.inc(bytes.len() as u64);
         }
+        // Keep only the io::Error, so the temporary file is dropped and deleted.
+        output.persist(&file_path).map_err(|err| err.error)?;
         bar.finish_and_clear();
 
         Ok(record)
     }
+}
+
+/// Where `key` downloads to under `destination`; versions get a `.v{id}`
+/// suffix. Keys that would land outside `destination`, through `..` or an
+/// absolute path, are refused.
+fn local_path(destination: &str, key: &str, version_id: Option<&str>) -> Result<PathBuf, Error> {
+    let relative = match version_id {
+        Some(vid) if !key.ends_with('/') => Cow::Owned(format!("{key}.v{vid}")),
+        _ => Cow::Borrowed(key),
+    };
+    let stays_inside = Path::new(relative.as_ref())
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
+    if !stays_inside {
+        bail!("refusing to download outside {destination}");
+    }
+    Ok(Path::new(destination).join(relative.as_ref()))
+}
+
+/// A temporary file in `dir` for a download in progress; dropping it deletes it.
+fn partial_file(dir: &Path) -> io::Result<NamedTempFile> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".s3find-").suffix(".part");
+    // Like `File::create`: permissions follow the umask instead of owner-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+    builder.tempfile_in(dir)
 }
 
 /// A copied or moved object.
@@ -156,19 +195,28 @@ struct CopyOptions<'a> {
     verb: &'static str,
 }
 
-/// Copies live objects under `options.destination`.
-async fn copy_objects<C: S3Client>(
+impl CopyOptions<'_> {
+    /// The key `key` is copied to in the destination bucket.
+    fn target(&self, key: &str) -> String {
+        combine_keys(self.flat, key, self.destination.prefix.as_deref())
+    }
+}
+
+/// Copies live objects under `options.destination` and returns the objects
+/// it copied (see [`objects_to_copy`]).
+async fn copy_objects<'o, C: S3Client>(
     ctx: &mut CommandContext<'_, C>,
-    objects: &[StreamObject],
-    options: CopyOptions<'_>,
-) -> Result<(), Error> {
+    objects: &'o [StreamObject],
+    options: &CopyOptions<'_>,
+) -> Result<Vec<&'o StreamObject>, Error> {
+    let copies = objects_to_copy(ctx, objects, options)?;
+
     let (client, source_bucket) = (ctx.client, &ctx.path.bucket);
     let dry_run = ctx.options.dry_run;
-    let options = &options;
-    ctx.for_each_object(live_objects(objects), |object| async move {
+    ctx.for_each_object(copies.iter().copied(), |object| async move {
         let key = object.require_key()?;
         let destination = options.destination;
-        let target = combine_keys(options.flat, key, destination.prefix.as_deref());
+        let target = options.target(key);
         let source = build_copy_source(source_bucket, key, object.version_id.as_deref());
 
         if !dry_run {
@@ -191,7 +239,60 @@ async fn copy_objects<C: S3Client>(
             verb: options.verb,
         })
     })
-    .await
+    .await?;
+    Ok(copies)
+}
+
+/// The live objects of a batch to copy, checked before anything is copied.
+///
+/// Skips an object already where its copy would go. When the destination is
+/// inside the searched path, the copies are listed too, so without `--flat`
+/// objects already under the destination are skipped as well: copying them
+/// would nest the destination in itself again and again.
+///
+/// With `--flat`, two different keys copied to the same key are an error, in
+/// this batch or an earlier one: only one copy would survive, and `move` would
+/// delete both sources.
+fn objects_to_copy<'o, C>(
+    ctx: &mut CommandContext<'_, C>,
+    objects: &'o [StreamObject],
+    options: &CopyOptions<'_>,
+) -> Result<Vec<&'o StreamObject>, Error> {
+    let source_bucket = &ctx.path.bucket;
+    let destination = options.destination;
+    let same_bucket = *source_bucket == destination.bucket;
+    let destination_dir = combine_keys(false, "", destination.prefix.as_deref());
+    let skip_nested = !options.flat && copies_are_listed(ctx.path, destination);
+
+    let mut copies = Vec::new();
+    for object in live_objects(objects) {
+        let key = object.require_key()?;
+        let target = options.target(key);
+        let in_place = same_bucket && target == key;
+        if in_place || (skip_nested && key.starts_with(destination_dir.as_str())) {
+            continue;
+        }
+
+        if options.flat {
+            match ctx.flat_destinations.entry(target) {
+                // Another version of the same key.
+                Entry::Occupied(entry) if entry.get() == key => {}
+                Entry::Occupied(entry) => {
+                    return Err(anyhow!(
+                        "s3://{source_bucket}/{} and s3://{source_bucket}/{key} would both be copied to s3://{}/{}",
+                        entry.get(),
+                        destination.bucket,
+                        entry.key(),
+                    ));
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(key.to_owned());
+                }
+            }
+        }
+        copies.push(object);
+    }
+    Ok(copies)
 }
 
 impl RunCommand for S3Copy {
@@ -208,7 +309,8 @@ impl RunCommand for S3Copy {
             action: "copy",
             verb: "copying",
         };
-        copy_objects(ctx, objects, options).await
+        copy_objects(ctx, objects, &options).await?;
+        Ok(())
     }
 }
 
@@ -226,9 +328,14 @@ impl RunCommand for S3Move {
             action: "move",
             verb: "moving",
         };
-        copy_objects(ctx, objects, options).await?;
+        // Only what was copied is deleted: never an object moved onto itself.
+        let copied = copy_objects(ctx, objects, &options).await?;
+        if copied.is_empty() || ctx.options.dry_run {
+            return Ok(());
+        }
 
-        let key_list = live_objects(objects)
+        let key_list = copied
+            .into_iter()
             .map(|object| {
                 Ok(DeleteObjectRequest {
                     key: object.require_key()?.to_owned(),
@@ -236,15 +343,10 @@ impl RunCommand for S3Move {
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
-
-        if key_list.is_empty() || ctx.options.dry_run {
-            return Ok(());
-        }
-
         ctx.client
             .delete_objects(&ctx.path.bucket, key_list)
-            .await?;
-        Ok(())
+            .await?
+            .check()
     }
 }
 

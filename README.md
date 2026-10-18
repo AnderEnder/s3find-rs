@@ -105,7 +105,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 ### Behavior Notes
 
 - Listing failures and subcommand failures return a non-zero exit code instead of succeeding with partial output.
-- `download` skips existing destination files and continues with the remaining objects unless `--force` is set.
+- `download` skips existing destination files and continues with the remaining objects unless `--force` is set. Each file is written under a temporary name and renamed when complete, so an interrupted download never leaves a partial file. Keys ending in `/` (folder markers) become directories, and keys that would be written outside the destination (`../`, a leading `/`) are refused.
+- `exec` replaces `{}` within each word of `--utility` after splitting it like a shell, so a key with spaces or quotes is always passed as a single argument. For object versions, `{}` is `s3://bucket/key?versionId=...`.
+- `copy` and `move` skip objects that are already where their copy would go, and `move` never deletes them. When the destination is inside the searched path, objects already under it are skipped too, so copies aren't copied again. With `--flat`, two different keys that would land on the same destination key are an error, caught before anything in their batch is copied.
+- When `delete` or `move` can't delete some keys, the keys that were deleted are still reported, and the error names each key that wasn't.
 - With tag filters enabled, result order stays aligned with S3 traversal order, and `--limit` applies to that ordered match set.
 - `--summarize` prints normal summary statistics and, when tag filters are used, tag fetch statistics including `excluded` objects.
 - Commands that make one S3 request per object (`copy`, `move`, `download`, `tags`, `lstags`, `public`, `restore`, `change-storage`) keep up to `--concurrency` requests in flight (default: 32) and still print results in traversal order. On an error they stop, but requests already in flight may have completed; `--concurrency 1` processes one object at a time. `exec` always runs one command at a time.

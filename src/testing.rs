@@ -15,8 +15,8 @@ use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClien
 use clap::Parser;
 
 use crate::adapters::aws::{
-    DeleteObjectRequest, DeletedObjectInfo, ListObjectsRequest, ListVersionsRequest, ObjectsPage,
-    RestoreObjectStatus, S3Client, VersionMarker, VersionsPage,
+    DeleteObjectRequest, DeleteOutcome, DeletedObjectInfo, ListObjectsRequest, ListVersionsRequest,
+    ObjectsPage, RestoreObjectStatus, S3Client, VersionMarker, VersionsPage,
 };
 use crate::arg::{FindOpt, S3Path};
 use crate::error::TagFetchError;
@@ -80,12 +80,7 @@ impl<T: RunCommand> ExecuteCaptured for T {
         options: CommandOptions,
     ) -> Result<String, Error> {
         let mut out = Vec::new();
-        let mut ctx = CommandContext {
-            client,
-            path,
-            out: &mut out,
-            options,
-        };
+        let mut ctx = CommandContext::new(client, path, &mut out, options);
         self.execute(&mut ctx, objects).await?;
         Ok(String::from_utf8(out)?)
     }
@@ -397,19 +392,23 @@ impl S3Client for FakeS3Client {
         &self,
         bucket: &str,
         objects: Vec<DeleteObjectRequest>,
-    ) -> Result<Vec<DeletedObjectInfo>, Error> {
+    ) -> Result<DeleteOutcome, Error> {
         self.delete_calls
             .lock()
             .unwrap()
             .push((bucket.to_string(), objects.clone()));
 
-        Ok(objects
+        let deleted = objects
             .into_iter()
             .map(|object| DeletedObjectInfo {
                 key: Some(object.key),
                 version_id: object.version_id,
             })
-            .collect())
+            .collect();
+        Ok(DeleteOutcome {
+            deleted,
+            failed: Vec::new(),
+        })
     }
 
     async fn put_object_tagging(

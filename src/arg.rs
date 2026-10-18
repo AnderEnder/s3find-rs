@@ -511,7 +511,8 @@ pub struct S3Copy {
     #[arg(name = "destination")]
     pub destination: S3Path,
 
-    /// Copy keys like files
+    /// Keep only the last part of each key (a/b/c.txt -> c.txt); two keys
+    /// with the same last part are an error
     #[arg(long = "flat")]
     pub flat: bool,
 
@@ -526,7 +527,8 @@ pub struct S3Move {
     #[arg(name = "destination")]
     pub destination: S3Path,
 
-    /// Copy keys like files
+    /// Keep only the last part of each key (a/b/c.txt -> c.txt); two keys
+    /// with the same last part are an error
     #[arg(long = "flat")]
     pub flat: bool,
 

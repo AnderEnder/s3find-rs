@@ -75,7 +75,9 @@ impl RunCommand for MultipleDelete {
             return Ok(());
         }
 
-        for deleted in ctx.client.delete_objects(bucket, key_list).await? {
+        // Report what was deleted even when some keys weren't.
+        let outcome = ctx.client.delete_objects(bucket, key_list).await?;
+        for deleted in &outcome.deleted {
             let record = Deleted::new(
                 bucket,
                 deleted.key.as_deref().unwrap_or(""),
@@ -84,6 +86,6 @@ impl RunCommand for MultipleDelete {
             ctx.report(&record)?;
         }
 
-        Ok(())
+        outcome.check()
     }
 }
