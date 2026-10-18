@@ -37,7 +37,9 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
 Github Release page provides ready-to-use binaries for:
 
 * Windows (x86_64)
-* Linux (x86_64 and ARM)
+* Linux (x86_64 and ARM), in two flavors:
+  * `s3find-<arch>-linux.tar.gz`: a static musl binary that runs on any Linux, including Alpine and scratch containers
+  * `s3find-<arch>-linux-gnu.tar.gz`: a glibc binary for distributions with glibc 2.17 or newer (RHEL/CentOS 7, Ubuntu 14.04, Debian 8 and later)
 * macOS (x86_64 and ARM)
 
 Binaries for both architectures allow you to run s3find natively on Intel-based and ARM-based machines (like Apple M1/M2/M3/M4, AWS Graviton, and Raspberry Pi).
@@ -58,6 +60,16 @@ cargo install --git https://github.com/AnderEnder/s3find-rs
 
 # Install from crates.io
 cargo install s3find
+```
+
+The release workflow builds the Linux binaries with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild), which needs [zig](https://ziglang.org/):
+
+```sh
+# Static musl binary; the mimalloc feature replaces musl's slow allocator
+cargo zigbuild --release --target x86_64-unknown-linux-musl --features mimalloc
+
+# glibc binary that runs on glibc 2.17 or newer
+cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.17
 ```
 
 ## Development

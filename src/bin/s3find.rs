@@ -7,6 +7,10 @@ use s3find::arg::FindOpt;
 use s3find::error::S3FindResult;
 use s3find::pipeline::{Pipeline, option_warnings};
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run_cli().await {
