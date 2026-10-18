@@ -438,7 +438,7 @@ async fn test_exec() -> Result<(), Error> {
     };
 
     let path = "s3://test/somepath/otherpath";
-    let out = exec::run(&cmd.command_line(path)).await?;
+    let out = exec::run(&cmd.command(path)?).await?;
 
     assert!(out.contains("test"));
     assert!(out.contains("s3://test/somepath/otherpath"));
@@ -453,7 +453,7 @@ async fn test_exec_supports_quoted_arguments() -> Result<(), Error> {
     };
 
     let path = "s3://test/somepath/otherpath";
-    let out = exec::run(&cmd.command_line(path)).await?;
+    let out = exec::run(&cmd.command(path)?).await?;
 
     assert_eq!(out.trim(), format!("test {path}"));
     Ok(())
@@ -466,7 +466,9 @@ async fn test_exec_propagates_non_zero_status() {
         utility: "sh -c 'exit 7'".to_owned(),
     };
 
-    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
+    let err = exec::run(&cmd.command("ignored").unwrap())
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("failed with status 7"));
 }
 
@@ -477,7 +479,9 @@ async fn test_exec_propagates_stderr_output() {
         utility: "sh -c 'echo boom 1>&2; exit 7'".to_owned(),
     };
 
-    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
+    let err = exec::run(&cmd.command("ignored").unwrap())
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("failed with status 7: boom"));
 }
 
@@ -488,7 +492,9 @@ async fn test_exec_propagates_non_zero_status() {
         utility: "cmd /C exit 7".to_owned(),
     };
 
-    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
+    let err = exec::run(&cmd.command("ignored").unwrap())
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("failed with status 7"));
 }
 
@@ -499,7 +505,9 @@ async fn test_exec_propagates_stderr_output() {
         utility: "cmd /C \"echo boom 1>&2 && exit 7\"".to_owned(),
     };
 
-    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
+    let err = exec::run(&cmd.command("ignored").unwrap())
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("failed with status 7: boom"));
 }
 
@@ -1125,14 +1133,12 @@ async fn test_multiple_delete_propagates_request_failure() {
 }
 
 #[tokio::test]
-async fn test_multiple_delete_propagates_partial_delete_failure() {
-    let object = Object::builder().key("test/file1.txt").size(100).build();
-
+async fn test_multiple_delete_reports_deleted_keys_when_others_fail() {
     let req = http::Request::builder()
         .method("POST")
         .uri("https://test-bucket.s3.us-east-1.amazonaws.com/?delete")
         .body(SdkBody::from(
-            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/file1.txt</Key></Object></Delete>"#,
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>test/file1.txt</Key></Object><Object><Key>test/file2.txt</Key></Object></Delete>"#,
         ))
         .unwrap();
 
@@ -1142,8 +1148,12 @@ async fn test_multiple_delete_propagates_partial_delete_failure() {
         .body(SdkBody::from(
             r#"<?xml version="1.0" encoding="UTF-8"?>
                 <DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-                    <Error>
+                    <Deleted>
                         <Key>test/file1.txt</Key>
+                    </Deleted>
+                    <Error>
+                        <Key>test/file2.txt</Key>
+                        <VersionId>v2</VersionId>
                         <Code>AccessDenied</Code>
                         <Message>Access Denied</Message>
                     </Error>
@@ -1152,17 +1162,24 @@ async fn test_multiple_delete_propagates_partial_delete_failure() {
         .unwrap();
 
     let (client, replay) = replay_s3_client(vec![ReplayEvent::new(req, resp)]);
+    let objects = [object("test/file1.txt"), object("test/file2.txt")];
 
-    let path = S3Path {
-        bucket: "test-bucket".to_owned(),
-        prefix: None,
-    };
+    let path = test_path();
+    let mut out = Vec::new();
+    let mut ctx = CommandContext::new(&client, &path, &mut out, CommandOptions::default());
+    let err = MultipleDelete {}
+        .execute(&mut ctx, &objects)
+        .await
+        .unwrap_err();
 
-    let result = Cmd::Delete(MultipleDelete {})
-        .execute_captured(&client, &path, &[StreamObject::from_object(object)])
-        .await;
-
-    assert!(result.is_err());
+    assert_eq!(
+        err.to_string(),
+        "failed to delete 1 of the objects: test/file2.txt?versionId=v2: AccessDenied (Access Denied)"
+    );
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "deleted: s3://test-bucket/test/file1.txt\n"
+    );
     replay.assert_requests_match(&[]);
 }
 
@@ -3067,4 +3084,313 @@ async fn test_exec_json_includes_command_and_stdout() {
             "stdout": "found s3://test-bucket/dir/file.txt\n",
         })]
     );
+}
+
+fn object(key: &str) -> StreamObject {
+    StreamObject::from_object(Object::builder().key(key).size(4).build())
+}
+
+fn version(key: &str, version_id: &str) -> StreamObject {
+    let mut object = object(key);
+    object.version_id = Some(version_id.to_owned());
+    object.is_latest = Some(true);
+    object
+}
+
+fn download_to(destination: &std::path::Path, force: bool) -> Cmd {
+    Cmd::Download(Download {
+        destination: destination.to_string_lossy().to_string(),
+        force,
+    })
+}
+
+#[tokio::test]
+async fn test_download_refuses_keys_outside_the_destination() -> Result<(), Error> {
+    let root = tempdir()?;
+    let cmd = download_to(&root.path().join("downloads"), true);
+
+    for key in ["../escaped.txt", "dir/../../escaped.txt", "/escaped.txt"] {
+        let client = FakeS3Client::default().with_object_body("test-bucket", key, None, b"data");
+        let err = cmd
+            .execute_captured(&client, &test_path(), &[object(key)])
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("refusing to download outside"),
+            "{key}: {err:#}"
+        );
+        assert!(client.get_object_calls.lock().unwrap().is_empty(), "{key}");
+    }
+    assert!(!root.path().join("escaped.txt").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_download_turns_folder_markers_into_directories() -> Result<(), Error> {
+    let dir = tempdir()?;
+    let client =
+        FakeS3Client::default().with_object_body("test-bucket", "photos/a.jpg", None, b"jpg");
+    // A versioned marker is still the folder, not a file inside it.
+    let objects = [
+        object("photos/"),
+        object("photos/a.jpg"),
+        version("empty/", "v1"),
+    ];
+
+    let out = download_to(dir.path(), false)
+        .execute_captured(&client, &test_path(), &objects)
+        .await?;
+
+    assert!(dir.path().join("empty").is_dir());
+    assert_eq!(fs::read_dir(dir.path().join("empty"))?.count(), 0);
+    assert_eq!(fs::read(dir.path().join("photos/a.jpg"))?, b"jpg");
+    assert_eq!(client.get_object_calls.lock().unwrap().len(), 1);
+    assert_eq!(out.lines().count(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_failed_download_leaves_no_partial_file() -> Result<(), Error> {
+    let dir = tempdir()?;
+    // A directory where the file belongs makes moving the download into place fail.
+    fs::create_dir_all(dir.path().join("file.txt/inner"))?;
+    let client = FakeS3Client::default().with_object_body("test-bucket", "file.txt", None, b"data");
+
+    let result = download_to(dir.path(), true)
+        .execute_captured(&client, &test_path(), &[object("file.txt")])
+        .await;
+
+    assert!(result.is_err());
+    let names: Vec<_> = fs::read_dir(dir.path())?
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["file.txt"]);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_downloaded_files_get_default_permissions() -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir()?;
+    let client = FakeS3Client::default().with_object_body("test-bucket", "file.txt", None, b"data");
+    download_to(dir.path(), false)
+        .execute_captured(&client, &test_path(), &[object("file.txt")])
+        .await?;
+
+    let created = dir.path().join("created.txt");
+    fs::File::create(&created)?;
+    let mode = |path: PathBuf| fs::metadata(path).map(|metadata| metadata.permissions().mode());
+    assert_eq!(mode(dir.path().join("file.txt"))?, mode(created)?);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_exec_passes_each_target_as_one_argument() -> Result<(), Error> {
+    let key = r#"dir/it's a "file".txt"#;
+    let cmd = Cmd::Exec(Exec {
+        utility: "printf '<%s>' {}".to_owned(),
+    });
+    let client = FakeS3Client::default();
+
+    let out = cmd
+        .execute_captured(&client, &test_path(), &[object(key)])
+        .await?;
+    assert_eq!(out, format!("<s3://test-bucket/{key}>\n"));
+
+    // The reported command line, pasted into a shell, runs the same arguments.
+    let preview = cmd
+        .execute_with(&client, &test_path(), &[object(key)], dry_run(true))
+        .await?;
+    let record: serde_json::Value = serde_json::from_str(&preview)?;
+    let command = record["command"].as_str().unwrap();
+    assert_eq!(
+        shlex::split(command).unwrap(),
+        ["printf", "<%s>", &format!("s3://test-bucket/{key}")]
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_exec_target_of_a_version_is_its_url() -> Result<(), Error> {
+    let cmd = Cmd::Exec(Exec {
+        utility: "echo {}".to_owned(),
+    });
+
+    let out = cmd
+        .execute_captured(
+            &FakeS3Client::default(),
+            &test_path(),
+            &[version("a.txt", "v1")],
+        )
+        .await?;
+
+    assert_eq!(out, "s3://test-bucket/a.txt?versionId=v1\n\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_exec_rejects_unusable_utilities() {
+    for utility in ["", "  ", "echo 'unclosed {}"] {
+        let exec = Exec {
+            utility: utility.to_owned(),
+        };
+        assert!(exec.command("s3://b/k").is_err(), "{utility:?}");
+    }
+    assert!(exec::run(&[]).await.is_err());
+}
+
+fn bucket_path(prefix: Option<&str>) -> S3Path {
+    S3Path {
+        bucket: "test-bucket".to_owned(),
+        prefix: prefix.map(str::to_owned),
+    }
+}
+
+fn move_to(destination: S3Path, flat: bool) -> Cmd {
+    Cmd::Move(S3Move {
+        destination,
+        flat,
+        storage_class: Some(StorageClassName::from("STANDARD_IA")),
+    })
+}
+
+fn copy_to(destination: S3Path, flat: bool) -> Cmd {
+    Cmd::Copy(S3Copy {
+        destination,
+        flat,
+        storage_class: None,
+    })
+}
+
+/// Source and destination key of each copy, in order.
+fn copies(client: &FakeS3Client) -> Vec<(String, String)> {
+    let mut copies: Vec<_> = client
+        .copy_calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| (call.copy_source.clone(), call.key.clone()))
+        .collect();
+    copies.sort();
+    copies
+}
+
+fn deleted(client: &FakeS3Client) -> Vec<String> {
+    client
+        .delete_calls
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|(_, objects)| objects.iter().map(|object| object.key.clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn test_move_never_deletes_an_object_moved_onto_itself() -> Result<(), Error> {
+    let photos = bucket_path(Some("photos"));
+    let objects = [object("photos/a.jpg"), object("photos/2020/b.jpg")];
+
+    // Flattening photos/ into itself: photos/a.jpg is already where it would go.
+    let client = FakeS3Client::default();
+    move_to(photos.clone(), true)
+        .execute_captured(&client, &photos, &objects)
+        .await?;
+    assert_eq!(
+        copies(&client),
+        [(
+            "test-bucket/photos%2F2020%2Fb.jpg".to_owned(),
+            "photos/b.jpg".to_owned()
+        )]
+    );
+    assert_eq!(deleted(&client), ["photos/2020/b.jpg"]);
+
+    // Every object is already in place at the root of its own bucket.
+    let client = FakeS3Client::default();
+    let out = move_to(bucket_path(None), false)
+        .execute_captured(&client, &photos, &objects)
+        .await?;
+    assert_eq!(out, "");
+    assert!(copies(&client).is_empty());
+    assert!(deleted(&client).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_copy_into_the_searched_path_skips_objects_under_the_destination() -> Result<(), Error>
+{
+    let client = FakeS3Client::default();
+    let objects = [
+        object("a.txt"),
+        object("backup/a.txt"),
+        object("backup/backup/a.txt"),
+    ];
+
+    let out = copy_to(bucket_path(Some("backup")), false)
+        .execute_captured(&client, &bucket_path(None), &objects)
+        .await?;
+
+    assert_eq!(
+        out,
+        "copying: s3://test-bucket/a.txt => s3://test-bucket/backup/a.txt\n"
+    );
+    assert_eq!(copies(&client).len(), 1);
+
+    // Copies made outside the searched path aren't listed, so nothing is skipped.
+    let client = FakeS3Client::default();
+    copy_to(bucket_path(Some("backup")), false)
+        .execute_captured(
+            &client,
+            &bucket_path(Some("backup/old")),
+            &[object("backup/old/a.txt")],
+        )
+        .await?;
+    assert_eq!(
+        copies(&client),
+        [(
+            "test-bucket/backup%2Fold%2Fa.txt".to_owned(),
+            "backup/backup/old/a.txt".to_owned()
+        )]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_flat_copies_refuse_two_keys_with_one_destination() -> Result<(), Error> {
+    let client = FakeS3Client::default();
+    let path = test_path();
+    let cmd = move_to(
+        S3Path {
+            bucket: "dest-bucket".to_owned(),
+            prefix: Some("flat".to_owned()),
+        },
+        true,
+    );
+    let mut out = Vec::new();
+    let mut ctx = CommandContext::new(&client, &path, &mut out, CommandOptions::default());
+
+    // Versions of one key may share a destination.
+    cmd.execute(
+        &mut ctx,
+        &[version("a/x.txt", "v2"), version("a/x.txt", "v1")],
+    )
+    .await?;
+
+    // A different key with the same name is refused, even in a later batch,
+    // before anything in its batch is copied or deleted.
+    let err = cmd
+        .execute(&mut ctx, &[object("b/y.txt"), object("b/x.txt")])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "s3://test-bucket/a/x.txt and s3://test-bucket/b/x.txt would both be copied to s3://dest-bucket/flat/x.txt"
+    );
+    assert_eq!(copies(&client).len(), 2);
+    assert_eq!(deleted(&client), ["a/x.txt", "a/x.txt"]);
+    Ok(())
 }

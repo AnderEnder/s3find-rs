@@ -9,7 +9,7 @@ use futures::future::try_join;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 
 use crate::adapters::aws::S3Client;
-use crate::arg::{Cmd, FindOpt};
+use crate::arg::{Cmd, FindOpt, S3Copy, S3Move};
 use crate::error::{S3FindError, S3FindResult};
 use crate::filter::FilterList;
 use crate::listing::{ListingOptions, list_objects};
@@ -17,6 +17,7 @@ use crate::object::StreamObject;
 use crate::run_command::{CommandContext, CommandOptions, RunCommand};
 use crate::stats::FindStat;
 use crate::tag_fetcher::{TagFetchStats, TagFetcher};
+use crate::utils::copies_are_listed;
 
 /// Most objects handed to a command at once; DeleteObjects accepts up to 1000 keys.
 pub const BATCH_SIZE: usize = 1000;
@@ -157,19 +158,21 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
         mut matches: impl Stream<Item = S3FindResult<StreamObject>> + Unpin,
         out: &mut (dyn Write + Send),
     ) -> S3FindResult<Option<FindStat>> {
+        let mut ctx =
+            CommandContext::new(&self.client, &self.listing.path, out, self.command_options);
         let mut stats = self.summarize.then(FindStat::default);
         let mut batch = Vec::with_capacity(BATCH_SIZE);
 
         while let Some(object) = matches.try_next().await? {
             batch.push(object);
             if batch.len() == BATCH_SIZE {
-                self.execute(&batch, stats.as_mut(), out).await?;
+                self.execute(&mut ctx, &batch, stats.as_mut()).await?;
                 batch.clear();
             }
         }
 
         if !batch.is_empty() {
-            self.execute(&batch, stats.as_mut(), out).await?;
+            self.execute(&mut ctx, &batch, stats.as_mut()).await?;
         }
 
         Ok(stats)
@@ -199,18 +202,12 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
 
     async fn execute(
         &self,
+        ctx: &mut CommandContext<'_, C>,
         batch: &[StreamObject],
         stats: Option<&mut FindStat>,
-        out: &mut (dyn Write + Send),
     ) -> S3FindResult<()> {
-        let mut ctx = CommandContext {
-            client: &self.client,
-            path: &self.listing.path,
-            out,
-            options: self.command_options,
-        };
         self.command
-            .execute(&mut ctx, batch)
+            .execute(ctx, batch)
             .await
             .map_err(S3FindError::command_execution)?;
         ctx.out.flush().map_err(S3FindError::command_execution)?;
@@ -237,6 +234,26 @@ pub fn option_warnings(opts: &FindOpt) -> Vec<&'static str> {
         warnings.push(
             "Note: Tag filtering requires an API call per object. \
             Consider using --limit to restrict the number of objects processed.",
+        );
+    }
+
+    if let Some(
+        Cmd::Copy(S3Copy {
+            destination,
+            flat: false,
+            ..
+        })
+        | Cmd::Move(S3Move {
+            destination,
+            flat: false,
+            ..
+        }),
+    ) = &opts.cmd
+        && copies_are_listed(&opts.path, destination)
+    {
+        warnings.push(
+            "Note: the destination is inside the searched path; \
+            objects already under it are skipped",
         );
     }
 
