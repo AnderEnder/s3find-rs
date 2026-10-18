@@ -31,16 +31,15 @@ impl RunCommand for SetPublic {
             .region()
             .unwrap_or_else(|| "us-east-1".to_string());
 
-        for object in live_objects(objects) {
+        let (client, bucket, region) = (ctx.client, &ctx.path.bucket, &region);
+        ctx.for_each_object(live_objects(objects), |object| async move {
             let key = object.require_key()?;
-
-            ctx.client
-                .put_object_acl_public_read(&ctx.path.bucket, key, object.version_id.as_deref())
+            client
+                .put_object_acl_public_read(bucket, key, object.version_id.as_deref())
                 .await?;
-
-            let url = generate_s3_url(&region, &ctx.path.bucket, key);
-            writeln!(ctx.out, "{} {}", object.display_key(), url)?;
-        }
-        Ok(())
+            let url = generate_s3_url(region, bucket, key);
+            Ok(format!("{} {url}", object.display_key()))
+        })
+        .await
     }
 }

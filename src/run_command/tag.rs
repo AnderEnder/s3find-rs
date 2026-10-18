@@ -24,24 +24,22 @@ impl RunCommand for SetTags {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        for object in live_objects(objects) {
-            ctx.client
+        let (client, bucket, tags) = (ctx.client, &ctx.path.bucket, &tags);
+        ctx.for_each_object(live_objects(objects), |object| async move {
+            client
                 .put_object_tagging(
-                    &ctx.path.bucket,
+                    bucket,
                     object.require_key()?,
                     object.version_id.as_deref(),
                     tags.clone(),
                 )
                 .await?;
-
-            writeln!(
-                ctx.out,
-                "tags are set for: s3://{}/{}",
-                ctx.path.bucket,
+            Ok(format!(
+                "tags are set for: s3://{bucket}/{}",
                 object.display_key()
-            )?;
-        }
-        Ok(())
+            ))
+        })
+        .await
     }
 }
 
@@ -58,15 +56,15 @@ impl RunCommand for ListTags {
         ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
-        for object in live_objects(objects) {
+        let (client, bucket) = (ctx.client, &ctx.path.bucket);
+        ctx.for_each_object(live_objects(objects), |object| async move {
             // Reuse tags already fetched for tag filtering.
             let tags = match &object.tags {
                 Some(cached) => format_tags(cached),
                 None => {
-                    let fetched = ctx
-                        .client
+                    let fetched = client
                         .get_object_tagging(
-                            &ctx.path.bucket,
+                            bucket,
                             object.require_key()?,
                             object.version_id.as_deref(),
                         )
@@ -74,15 +72,8 @@ impl RunCommand for ListTags {
                     format_tags(&fetched)
                 }
             };
-
-            writeln!(
-                ctx.out,
-                "s3://{}/{} {}",
-                ctx.path.bucket,
-                object.display_key(),
-                tags,
-            )?;
-        }
-        Ok(())
+            Ok(format!("s3://{bucket}/{} {tags}", object.display_key()))
+        })
+        .await
     }
 }

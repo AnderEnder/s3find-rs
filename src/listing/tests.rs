@@ -6,6 +6,7 @@ use aws_sdk_s3::primitives::SdkBody;
 use aws_sdk_s3::types::{DeleteMarkerEntry, ObjectVersion};
 use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
 use http::{HeaderValue, StatusCode};
+use std::time::Duration;
 
 fn options(prefix: Option<&str>, page_size: u16, maxdepth: Option<usize>) -> ListingOptions {
     ListingOptions {
@@ -171,6 +172,51 @@ async fn test_maxdepth_lists_each_directory_with_delimiter() {
             .iter()
             .all(|call| call.delimiter.as_deref() == Some("/"))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_maxdepth_lists_subdirectories_concurrently() {
+    let subdirectories: usize = 12;
+    let expected: Vec<String> = (0..subdirectories)
+        .map(|i| format!("dir{i:02}/file.txt"))
+        .collect();
+    let objects: Vec<_> = expected.iter().map(|key| (key.as_str(), 1)).collect();
+    let client = FakeS3Client::default()
+        .with_objects(&objects)
+        .with_list_delay(100);
+
+    let start = tokio::time::Instant::now();
+    let listed = collect(&client, &options(None, 1000, Some(1)))
+        .await
+        .unwrap();
+
+    assert_eq!(keys(&listed), expected);
+    // The root, then the subdirectories SUBDIRECTORY_PREFETCH at a time,
+    // instead of one listing after another.
+    let rounds = 1 + subdirectories.div_ceil(SUBDIRECTORY_PREFETCH) as u64;
+    assert_eq!(start.elapsed(), Duration::from_millis(100 * rounds));
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_maxdepth_prefetch_only_descends_into_the_walk_being_read() {
+    let client = FakeS3Client::default()
+        .with_objects(&[
+            ("a/1/file.txt", 1),
+            ("a/2/file.txt", 1),
+            ("b/1/file.txt", 1),
+            ("b/2/file.txt", 1),
+        ])
+        .with_list_delay(100);
+
+    let options = options(None, 1000, Some(2));
+    let mut objects = list_objects(&client, &options);
+    let first = objects.next().await.unwrap().unwrap();
+    assert_eq!(first.key(), Some("a/1/file.txt"));
+
+    // b/ had its first page fetched ahead, but isn't walked until it is read.
+    let calls = client.list_calls.lock().unwrap();
+    let prefixes: Vec<_> = calls.iter().map(|call| call.prefix.as_str()).collect();
+    assert_eq!(prefixes, ["", "a/", "b/", "a/1/", "a/2/"]);
 }
 
 #[tokio::test]
@@ -500,7 +546,10 @@ async fn test_sdk_versions_listing() {
 
     let objects = collect(&client, &versioned(Some("data/"))).await.unwrap();
 
-    let display: Vec<_> = objects.iter().map(StreamObject::display_key).collect();
+    let display: Vec<_> = objects
+        .iter()
+        .map(|object| object.display_key().to_string())
+        .collect();
     assert_eq!(
         display,
         [

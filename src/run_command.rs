@@ -5,9 +5,11 @@
 //! variant to the `for_each_command!` list below.
 
 use std::io::Write;
+use std::pin::pin;
 use std::process::ExitStatus;
 
-use anyhow::Error;
+use anyhow::{Context, Error};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt, stream};
 
 use crate::adapters::aws::S3Client;
 use crate::arg::{Cmd, DoNothing, S3Path};
@@ -32,6 +34,9 @@ pub struct ExecStatus {
     pub runcommand: String,
 }
 
+/// Default for `--concurrency`.
+pub const DEFAULT_CONCURRENCY: usize = 32;
+
 /// What a command needs to run: S3 access, the searched path and an output sink.
 pub struct CommandContext<'a, C> {
     pub client: &'a C,
@@ -39,6 +44,61 @@ pub struct CommandContext<'a, C> {
     pub path: &'a S3Path,
     /// Where results and progress go (stdout in the CLI).
     pub out: &'a mut (dyn Write + Send),
+    /// Most requests to keep in flight for commands that make one per object.
+    pub concurrency: usize,
+}
+
+impl<C: S3Client> CommandContext<'_, C> {
+    /// Runs `request` on each object with up to `concurrency` in flight and
+    /// writes the line each one returns, in input order.
+    ///
+    /// The first error stops the batch and is reported with the object it
+    /// came from; requests already in flight are dropped.
+    async fn for_each_object<'o, Fut>(
+        &mut self,
+        objects: impl Iterator<Item = &'o StreamObject> + Send + 'o,
+        request: impl FnMut(&'o StreamObject) -> Fut + Send + 'o,
+    ) -> Result<(), Error>
+    where
+        Fut: Future<Output = Result<String, Error>> + Send + 'o,
+        Self: 'o,
+    {
+        let mut lines = pin!(in_order(
+            &self.path.bucket,
+            objects,
+            self.concurrency,
+            request
+        ));
+        while let Some(line) = lines.try_next().await? {
+            writeln!(self.out, "{line}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Runs `request` on each object with up to `concurrency` in flight, yielding
+/// the results in input order. Errors name the object they came from.
+///
+/// This is a plain fn returning an opaque `Send` stream because rustc can't
+/// prove the same stream `Send` when it is built inline in an `async fn`
+/// (rust-lang/rust#110338).
+fn in_order<'o, T, Fut>(
+    bucket: &'o str,
+    objects: impl Iterator<Item = &'o StreamObject> + Send + 'o,
+    concurrency: usize,
+    mut request: impl FnMut(&'o StreamObject) -> Fut + Send + 'o,
+) -> impl Stream<Item = Result<T, Error>> + Send + 'o
+where
+    T: Send + 'o,
+    Fut: Future<Output = Result<T, Error>> + Send + 'o,
+{
+    stream::iter(objects)
+        .map(move |object| {
+            request(object).map(move |result| {
+                result.with_context(|| format!("s3://{bucket}/{}", object.display_key()))
+            })
+        })
+        .buffered(concurrency.max(1))
 }
 
 pub trait RunCommand: Send + Sync {

@@ -2,10 +2,12 @@ use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::pin::pin;
 
 use anyhow::Error;
 use aws_sdk_s3::types::{MetadataDirective, StorageClass};
-use indicatif::{ProgressBar, ProgressStyle};
+use futures::TryStreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::adapters::aws::{DeleteObjectRequest, S3Client};
 use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path, StorageClassName};
@@ -13,7 +15,7 @@ use crate::error::FunctionError;
 use crate::object::StreamObject;
 use crate::utils::combine_keys;
 
-use super::{CommandContext, RunCommand, build_copy_source, live_objects};
+use super::{CommandContext, RunCommand, build_copy_source, in_order, live_objects};
 
 impl RunCommand for Download {
     async fn execute<C: S3Client>(
@@ -21,50 +23,77 @@ impl RunCommand for Download {
         ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
-        for object in live_objects(objects) {
-            let key = object.require_key()?;
+        let (client, bucket) = (ctx.client, &ctx.path.bucket);
+        let bars = MultiProgress::new();
+        let style = ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {wide_msg}")?
+            .progress_chars("#>-");
 
-            let file_path = match &object.version_id {
-                Some(vid) => Path::new(&self.destination).join(format!("{key}.v{vid}")),
-                None => Path::new(&self.destination).join(key),
-            };
-            let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
-            let file_name = file_path
-                .to_str()
-                .ok_or(FunctionError::FileNameParseError)?;
-
-            if file_path.exists() && !self.force {
-                eprintln!("skipping existing file: {file_name}");
-                continue;
-            }
-
-            writeln!(
-                ctx.out,
-                "downloading: s3://{}/{} => {}",
-                ctx.path.bucket,
-                object.display_key(),
-                file_name
-            )?;
-
-            let mut stream = ctx
-                .client
-                .get_object(&ctx.path.bucket, key, object.version_id.as_deref())
-                .await?;
-
-            fs::create_dir_all(dir_path)?;
-            let mut output = File::create(&file_path)?;
-
-            let pb = ProgressBar::new(object.object.size.unwrap_or_default() as u64);
-            pb.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
-            .progress_chars("#>-"));
-
-            while let Some(bytes) = stream.try_next().await? {
-                output.write_all(&bytes)?;
-                pb.inc(bytes.len() as u64);
+        let mut downloads = pin!(in_order(
+            bucket,
+            live_objects(objects),
+            ctx.concurrency,
+            |object| self.download(client, bucket, object, &bars, &style),
+        ));
+        while let Some(line) = downloads.try_next().await? {
+            if let Some(line) = line {
+                bars.suspend(|| writeln!(ctx.out, "{line}"))?;
             }
         }
         Ok(())
+    }
+}
+
+impl Download {
+    /// Downloads one object, showing its progress among `bars`. Returns the
+    /// line to print, or `None` when an existing file was skipped.
+    async fn download(
+        &self,
+        client: &impl S3Client,
+        bucket: &str,
+        object: &StreamObject,
+        bars: &MultiProgress,
+        style: &ProgressStyle,
+    ) -> Result<Option<String>, Error> {
+        let key = object.require_key()?;
+
+        let file_path = match &object.version_id {
+            Some(vid) => Path::new(&self.destination).join(format!("{key}.v{vid}")),
+            None => Path::new(&self.destination).join(key),
+        };
+        let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;
+        let file_name = file_path
+            .to_str()
+            .ok_or(FunctionError::FileNameParseError)?;
+
+        if file_path.exists() && !self.force {
+            bars.suspend(|| eprintln!("skipping existing file: {file_name}"));
+            return Ok(None);
+        }
+
+        let mut stream = client
+            .get_object(bucket, key, object.version_id.as_deref())
+            .await?;
+
+        fs::create_dir_all(dir_path)?;
+        let mut output = File::create(&file_path)?;
+
+        let size = object.object.size.unwrap_or_default() as u64;
+        let bar = bars.add(
+            ProgressBar::new(size)
+                .with_style(style.clone())
+                .with_message(file_name.to_owned()),
+        );
+        while let Some(bytes) = stream.try_next().await? {
+            output.write_all(&bytes)?;
+            bar.inc(bytes.len() as u64);
+        }
+        bar.finish_and_clear();
+
+        Ok(Some(format!(
+            "downloading: s3://{bucket}/{} => {file_name}",
+            object.display_key()
+        )))
     }
 }
 
@@ -78,18 +107,14 @@ async fn copy_objects<C: S3Client>(
     metadata_directive: Option<MetadataDirective>,
     verb: &str,
 ) -> Result<(), Error> {
-    for object in live_objects(objects) {
+    let (client, source_bucket) = (ctx.client, &ctx.path.bucket);
+    let metadata_directive = &metadata_directive;
+    ctx.for_each_object(live_objects(objects), |object| async move {
         let key = object.require_key()?;
         let target = combine_keys(flat, key, destination.prefix.as_deref());
-        let source_path = build_copy_source(&ctx.path.bucket, key, object.version_id.as_deref());
+        let source_path = build_copy_source(source_bucket, key, object.version_id.as_deref());
 
-        writeln!(
-            ctx.out,
-            "{verb}: s3://{} => s3://{}/{}",
-            source_path, destination.bucket, target,
-        )?;
-
-        ctx.client
+        client
             .copy_object(
                 &destination.bucket,
                 &target,
@@ -98,8 +123,13 @@ async fn copy_objects<C: S3Client>(
                 metadata_directive.clone(),
             )
             .await?;
-    }
-    Ok(())
+
+        Ok(format!(
+            "{verb}: s3://{source_path} => s3://{}/{target}",
+            destination.bucket
+        ))
+    })
+    .await
 }
 
 impl RunCommand for S3Copy {
@@ -164,30 +194,27 @@ impl RunCommand for ChangeStorage {
         ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
-        for object in live_objects(objects) {
+        let (client, bucket) = (ctx.client, &ctx.path.bucket);
+        let storage_class = &self.storage_class;
+        ctx.for_each_object(live_objects(objects), |object| async move {
             let key = object.require_key()?;
+            let source_path = build_copy_source(bucket, key, object.version_id.as_deref());
 
-            writeln!(
-                ctx.out,
-                "Changing storage class for s3://{}/{} to {}",
-                ctx.path.bucket,
-                object.display_key(),
-                self.storage_class
-            )?;
-
-            let source_path =
-                build_copy_source(&ctx.path.bucket, key, object.version_id.as_deref());
-
-            ctx.client
+            client
                 .copy_object(
-                    &ctx.path.bucket,
+                    bucket,
                     key,
                     &source_path,
-                    Some(StorageClass::from(&self.storage_class)),
+                    Some(StorageClass::from(storage_class)),
                     Some(MetadataDirective::Copy),
                 )
                 .await?;
-        }
-        Ok(())
+
+            Ok(format!(
+                "Changing storage class for s3://{bucket}/{} to {storage_class}",
+                object.display_key()
+            ))
+        })
+        .await
     }
 }

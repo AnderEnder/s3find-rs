@@ -11,6 +11,7 @@ use aws_smithy_runtime::client::http::test_util::ReplayEvent;
 use http::{HeaderValue, StatusCode};
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::tempdir;
 
 #[test]
@@ -2407,7 +2408,7 @@ fn test_object_record_with_version_fields() {
     let record: ObjectRecord = (&stream_obj).into();
 
     assert_eq!(record.key, "versioned-file.txt");
-    assert_eq!(record.version_id, Some("ver123".to_string()));
+    assert_eq!(record.version_id.as_deref(), Some("ver123"));
     assert_eq!(record.is_latest, Some(true));
     assert_eq!(record.is_delete_marker, None);
 }
@@ -2426,7 +2427,7 @@ fn test_object_record_with_delete_marker() {
     let record: ObjectRecord = (&stream_obj).into();
 
     assert_eq!(record.key, "deleted-file.txt");
-    assert_eq!(record.version_id, Some("del456".to_string()));
+    assert_eq!(record.version_id.as_deref(), Some("del456"));
     assert_eq!(record.is_latest, Some(true));
     assert_eq!(record.is_delete_marker, Some(true));
 }
@@ -2668,4 +2669,67 @@ async fn test_download_versioned_object() -> Result<(), Error> {
 
     replay.assert_requests_match(&[]);
     Ok(())
+}
+
+/// `ls-tags` over three objects whose tag lookups take 300, 200 and 100ms, so
+/// they finish in reverse order when run concurrently. Returns the output and
+/// the (paused-clock) time it took.
+async fn list_tags_with_delays(concurrency: usize) -> (String, Duration) {
+    let keys = [("a.txt", 300), ("b.txt", 200), ("c.txt", 100)];
+    let client = keys
+        .iter()
+        .fold(FakeS3Client::default(), |client, &(key, millis)| {
+            client.with_tag_delay("test-bucket", key, millis)
+        });
+    let path = S3Path {
+        bucket: "test-bucket".to_string(),
+        prefix: None,
+    };
+    let objects: Vec<_> = keys
+        .iter()
+        .map(|(key, _)| StreamObject::from_object(Object::builder().key(*key).build()))
+        .collect();
+
+    let start = tokio::time::Instant::now();
+    let output = ListTags {}
+        .execute_with_concurrency(&client, &path, &objects, concurrency)
+        .await
+        .unwrap();
+    (output, start.elapsed())
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_per_object_requests_run_concurrently_in_input_order() {
+    let expected = "s3://test-bucket/a.txt \ns3://test-bucket/b.txt \ns3://test-bucket/c.txt \n";
+
+    let (output, elapsed) = list_tags_with_delays(3).await;
+    assert_eq!(output, expected);
+    assert_eq!(elapsed, Duration::from_millis(300));
+
+    let (output, elapsed) = list_tags_with_delays(1).await;
+    assert_eq!(output, expected);
+    assert_eq!(elapsed, Duration::from_millis(600));
+}
+
+#[tokio::test]
+async fn test_per_object_request_errors_name_the_object() {
+    let client = FakeS3Client::default().with_tag_error("test-bucket", "b.txt", 403);
+    let path = S3Path {
+        bucket: "test-bucket".to_string(),
+        prefix: None,
+    };
+    let objects: Vec<_> = ["a.txt", "b.txt", "c.txt"]
+        .into_iter()
+        .map(|key| StreamObject::from_object(Object::builder().key(key).build()))
+        .collect();
+
+    let err = ListTags {}
+        .execute_captured(&client, &path, &objects)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        format!("{err:#}"),
+        "s3://test-bucket/b.txt: Access denied for s3:GetObjectTagging on test-bucket/b.txt"
+    );
 }

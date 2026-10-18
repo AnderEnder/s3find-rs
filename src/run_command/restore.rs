@@ -20,11 +20,12 @@ impl RunCommand for Restore {
         ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
-        for object in live_objects(objects).filter(|object| is_archived(object)) {
-            let status = ctx
-                .client
+        let (client, bucket) = (ctx.client, &ctx.path.bucket);
+        let archived = live_objects(objects).filter(|object| is_archived(object));
+        ctx.for_each_object(archived, |object| async move {
+            let status = client
                 .restore_object(
-                    &ctx.path.bucket,
+                    bucket,
                     object.require_key()?,
                     object.version_id.as_deref(),
                     self.days,
@@ -39,8 +40,8 @@ impl RunCommand for Restore {
                     "Object is not in Glacier storage or already restored"
                 }
             };
-            writeln!(ctx.out, "{message}: {}", object.display_key())?;
-        }
-        Ok(())
+            Ok(format!("{message}: {}", object.display_key()))
+        })
+        .await
     }
 }

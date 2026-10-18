@@ -215,6 +215,23 @@ Valid range: 1-1000. Default: 50 (conservative, suitable for most workloads)"#
     )]
     pub tag_concurrency: u16,
 
+    /// Maximum concurrent requests a command makes (default: 32)
+    #[arg(
+        name = "concurrency",
+        long = "concurrency",
+        default_value = "32",
+        value_parser = clap::value_parser!(u16).range(1..=1000),
+        long_help = r#"Maximum number of S3 requests a command keeps in flight, for
+commands that make one request per object (copy, move, download, tags,
+lstags, public, restore, change-storage).
+
+Results are still printed in traversal order. On an error the command
+stops, but requests already in flight may have completed.
+Use 1 to process one object at a time.
+Valid range: 1-1000. Default: 32"#
+    )]
+    pub concurrency: u16,
+
     /// Modification time for match
     #[arg(
         name = "time",
@@ -1885,5 +1902,21 @@ mod tests {
     fn test_tag_concurrency_default() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket"]);
         assert_eq!(args.tag_concurrency, 50);
+    }
+
+    #[test]
+    fn test_concurrency() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket"]);
+        assert_eq!(args.concurrency, 32);
+
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--concurrency", "4", "ls"]);
+        assert_eq!(args.concurrency, 4);
+
+        for invalid in ["0", "1001"] {
+            assert!(
+                FindOpt::try_parse_from(["s3find", "s3://mybucket", "--concurrency", invalid])
+                    .is_err()
+            );
+        }
     }
 }

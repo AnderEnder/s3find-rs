@@ -40,7 +40,7 @@ pub enum S3FindError {
         #[source]
         source: AnyhowError,
     },
-    #[error("failed to execute command: {source}")]
+    #[error("failed to execute command: {source:#}")]
     CommandExecution {
         #[source]
         source: AnyhowError,
@@ -95,6 +95,15 @@ mod tests {
         assert_eq!(
             S3FindError::command_execution(anyhow!("command failed")).to_string(),
             "failed to execute command: command failed"
+        );
+    }
+
+    #[test]
+    fn test_command_error_display_includes_context_chain() {
+        assert_eq!(
+            S3FindError::command_execution(anyhow!("AccessDenied").context("s3://bucket/key"))
+                .to_string(),
+            "failed to execute command: s3://bucket/key: AccessDenied"
         );
     }
 
