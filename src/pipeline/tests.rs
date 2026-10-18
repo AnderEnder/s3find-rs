@@ -612,6 +612,42 @@ async fn test_maxdepth_help_examples() {
     );
 }
 
+#[tokio::test]
+async fn test_trailing_slash_limits_the_path_to_its_directory() {
+    let bucket = || {
+        FakeS3Client::default().with_objects(&[
+            ("logs.txt", 1),
+            ("logs/file.txt", 1),
+            ("logs/2024/file.txt", 1),
+            ("logs-old/file.txt", 1),
+        ])
+    };
+    let listed = async |args: &[&str]| run_cli(bucket(), args).await.0;
+
+    assert_eq!(
+        listed(&["s3://test-bucket/logs/"]).await,
+        "s3://test-bucket/logs/2024/file.txt\ns3://test-bucket/logs/file.txt\n"
+    );
+    // Without the slash, the path is a plain S3 prefix.
+    assert_eq!(
+        listed(&["s3://test-bucket/logs"]).await,
+        "s3://test-bucket/logs-old/file.txt\n\
+         s3://test-bucket/logs.txt\n\
+         s3://test-bucket/logs/2024/file.txt\n\
+         s3://test-bucket/logs/file.txt\n"
+    );
+
+    // Objects directly inside logs/ are at depth 1.
+    assert_eq!(
+        listed(&["s3://test-bucket/logs/", "--maxdepth", "1"]).await,
+        "s3://test-bucket/logs/file.txt\n"
+    );
+    assert_eq!(
+        listed(&["s3://test-bucket/logs/", "--maxdepth", "0"]).await,
+        ""
+    );
+}
+
 #[test]
 fn test_run_future_is_send() {
     fn assert_send(_: impl Send) {}

@@ -105,6 +105,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 ### Behavior Notes
 
 - Listing failures and subcommand failures return a non-zero exit code instead of succeeding with partial output.
+- A path ending in `/` means that directory: `s3://bucket/logs/` matches only keys under `logs/`. Without the slash, the path is a plain S3 prefix, so `s3://bucket/logs` also matches `logs-old/` and `logs.txt`.
 - `download` skips existing destination files and continues with the remaining objects unless `--force` is set.
 - With tag filters enabled, result order stays aligned with S3 traversal order, and `--limit` applies to that ordered match set.
 - `--summarize` prints normal summary statistics and, when tag filters are used, tag fetch statistics including `excluded` objects.
@@ -448,7 +449,7 @@ s3find 's3://example-bucket/' --maxdepth 1 ls
 s3find 's3://example-bucket/data/' --maxdepth 2 ls
 ```
 
-An object's depth is the number of `/` in its key after the prefix. Trailing slashes in the path are ignored, so for `s3://example-bucket/data/` the objects directly inside `data/` are at depth 1 and `data/2024/report.csv` is at depth 2.
+An object's depth is the number of `/` in its key after the path, not counting a trailing slash, so for `s3://example-bucket/data/` the objects directly inside `data/` are at depth 1 and `data/2024/report.csv` is at depth 2.
 
 The `--maxdepth` option uses S3's delimiter-based traversal for efficient server-side filtering, avoiding the need to fetch objects beyond the specified depth.
 

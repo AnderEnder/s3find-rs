@@ -59,10 +59,16 @@ pub fn list_objects<'a, C: S3Client>(
     match (options.all_versions, options.maxdepth) {
         (true, _) => list_versions(client, options),
         (false, Some(maxdepth)) => {
+            // Depth counts from the prefix without a trailing '/', so the
+            // objects directly inside `logs/` are at depth 1.
+            let depth = usize::from(options.prefix().ends_with(S3_PATH_DELIMITER));
+            if depth > maxdepth {
+                return stream::empty().boxed();
+            }
             let bucket = &options.path.bucket;
             let max_keys = options.max_keys();
             let pages = directory_pages(client, bucket, options.prefix().to_owned(), max_keys);
-            list_to_depth(client, bucket, pages, 0, maxdepth, max_keys)
+            list_to_depth(client, bucket, pages, depth, maxdepth, max_keys)
         }
         (false, None) => list_flat(client, options),
     }
