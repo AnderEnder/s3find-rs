@@ -44,7 +44,7 @@ Binaries for both architectures allow you to run s3find natively on Intel-based 
 
 ### Build from Source
 
-Requirements: Rust and Cargo
+Requirements: Rust 1.99 or newer (`rustup update stable`)
 
 ```sh
 # Build

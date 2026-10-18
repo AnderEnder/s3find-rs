@@ -43,7 +43,7 @@ jobs:
       - name: cache
         uses: Swatinem/rust-cache@v2
       - name: integration tests
-        run: cargo test --test localstack_integration --no-fail-fast --verbose -- --nocapture
+        run: cargo test --features localstack-tests --test localstack_integration --no-fail-fast --verbose -- --nocapture
         env:
           RUST_BACKTRACE: 1
           RUST_LOG: trace
