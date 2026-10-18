@@ -1,17 +1,12 @@
-use std::future::ready;
+use std::io::{self, BufWriter, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use clap::Parser;
 use s3find::adapters::aws;
-use s3find::arg::*;
-use s3find::command::*;
+use s3find::arg::FindOpt;
 use s3find::error::S3FindResult;
-use s3find::filter::TagFilterList;
-use s3find::filter_list::FilterList;
-use s3find::run::*;
-use s3find::tag_fetcher::{TagFetchConfig, TagFetchStats};
+use s3find::pipeline::{Pipeline, option_warnings};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -27,75 +22,27 @@ async fn main() -> ExitCode {
 async fn run_cli() -> S3FindResult<()> {
     let args = FindOpt::parse();
 
+    for warning in option_warnings(&args) {
+        eprintln!("{warning}");
+    }
+
     let client = aws::setup_client(&args).await;
+    let pipeline = Pipeline::from_opts(&args, Arc::new(client));
 
-    let filters = FilterList::from_opts(&args);
-    let tag_filters = TagFilterList::from_opts(&args);
-    let command = FindCommand::from_opts(&args, client.clone());
-    let stream = FindStream::from_opts(&args, client.clone()).stream();
-    let stats = default_stats(args.summarize);
-
-    // Use two-phase filtering if tag filters are configured
-    let stats = (if tag_filters.has_filters() {
-        let tag_stats = Arc::new(TagFetchStats::new());
-
-        // Show warning for large operations
-        if args.limit.is_none() {
-            eprintln!(
-                "Note: Tag filtering requires an API call per object. \
-                Consider using --limit to restrict the number of objects processed."
-            );
-        }
-
-        let tag_ctx = TagFilterContext {
-            client,
-            bucket: args.path.bucket.clone(),
-            filters: tag_filters,
-            config: TagFetchConfig::default().with_concurrency(args.tag_concurrency.into()),
-            stats: Arc::clone(&tag_stats),
-        };
-
-        let result = list_filter_execute_with_tags(
-            stream,
-            args.limit,
-            stats,
-            tag_ctx,
-            |x| ready(filters.test_match(x)),
-            &mut |acc, x| command.exec(acc, x),
-        )
-        .await;
-
-        // Print tag fetch statistics if summarize is enabled
-        if args.summarize {
-            let success = tag_stats.success.load(Ordering::Relaxed);
-            let failed = tag_stats.failed.load(Ordering::Relaxed);
-            let access_denied = tag_stats.access_denied.load(Ordering::Relaxed);
-            let excluded = tag_stats.excluded.load(Ordering::Relaxed);
-
-            if success > 0 || failed > 0 || access_denied > 0 || excluded > 0 {
-                eprintln!(
-                    "Tag fetch stats: {} success, {} failed, {} access denied, {} excluded",
-                    success, failed, access_denied, excluded
-                );
-            }
-        }
-
-        result
+    let mut out: Box<dyn Write + Send> = if pipeline.buffered_output() {
+        Box::new(BufWriter::new(io::stdout()))
     } else {
-        list_filter_execute(
-            stream,
-            args.limit,
-            stats,
-            |x| ready(filters.test_match(x)),
-            &mut |acc, x| command.exec(acc, x),
-        )
-        .await
-    })?;
+        Box::new(io::stdout())
+    };
+    let stats = pipeline.run(&mut out).await?;
 
-    if args.summarize
-        && let Some(stats) = stats
-    {
-        println!("{stats}");
+    if args.summarize {
+        if let Some(tag_stats) = pipeline.tag_stats().filter(|stats| !stats.is_empty()) {
+            eprintln!("Tag fetch stats: {tag_stats}");
+        }
+        if let Some(stats) = stats {
+            println!("{stats}");
+        }
     }
 
     Ok(())

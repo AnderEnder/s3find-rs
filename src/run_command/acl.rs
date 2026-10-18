@@ -1,11 +1,10 @@
 use anyhow::Error;
 use async_trait::async_trait;
 
-use crate::adapters::aws::CommandS3Client;
-use crate::arg::{S3Path, SetPublic};
-use crate::command::StreamObject;
+use crate::arg::SetPublic;
+use crate::object::StreamObject;
 
-use super::RunCommand;
+use super::{CommandContext, RunCommand, live_objects};
 
 #[inline]
 pub(crate) fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
@@ -28,28 +27,23 @@ pub(crate) fn generate_s3_url(region: &str, bucket: &str, key: &str) -> String {
 impl RunCommand for SetPublic {
     async fn execute(
         &self,
-        client: &dyn CommandS3Client,
-        path: &S3Path,
-        list: &[StreamObject],
+        ctx: &mut CommandContext<'_>,
+        objects: &[StreamObject],
     ) -> Result<(), Error> {
-        for stream_obj in list {
-            if stream_obj.is_delete_marker {
-                continue;
-            }
+        let region = ctx
+            .client
+            .region()
+            .unwrap_or_else(|| "us-east-1".to_string());
 
-            let key = stream_obj
-                .object
-                .key
-                .as_deref()
-                .ok_or(crate::error::FunctionError::ObjectFieldError)?;
+        for object in live_objects(objects) {
+            let key = object.require_key()?;
 
-            client
-                .put_object_acl_public_read(&path.bucket, key, stream_obj.version_id.as_deref())
+            ctx.client
+                .put_object_acl_public_read(&ctx.path.bucket, key, object.version_id.as_deref())
                 .await?;
 
-            let region = client.region().unwrap_or_else(|| "us-east-1".to_string());
-            let url = generate_s3_url(&region, &path.bucket, key);
-            println!("{} {}", stream_obj.display_key(), url);
+            let url = generate_s3_url(&region, &ctx.path.bucket, key);
+            writeln!(ctx.out, "{} {}", object.display_key(), url)?;
         }
         Ok(())
     }

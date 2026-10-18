@@ -11,14 +11,21 @@ pub enum FunctionError {
     ParentPathParse,
     #[error("Cannot parse filename")]
     FileNameParseError,
-    #[error("Cannot convert path to string")]
-    PathConverError,
-    #[error("Cannot fetch body from s3 response")]
-    S3FetchBodyError,
-    #[error("File is already present")]
-    PresentFileError,
     #[error("S3 Object is not complete")]
     ObjectFieldError,
+}
+
+/// Why fetching an object's tags failed.
+#[derive(Error, Debug)]
+pub enum TagFetchError {
+    #[error("Access denied for s3:GetObjectTagging on {bucket}/{key}")]
+    AccessDenied { bucket: String, key: String },
+
+    #[error("Object not found: {bucket}/{key}")]
+    NotFound { bucket: String, key: String },
+
+    #[error("S3 API error: {0}")]
+    ApiError(String),
 }
 
 #[derive(Error, Debug)]
@@ -73,7 +80,7 @@ impl S3FindError {
 mod tests {
     use anyhow::anyhow;
 
-    use super::S3FindError;
+    use super::{S3FindError, TagFetchError};
 
     #[test]
     fn test_display_includes_source_error() {
@@ -89,5 +96,26 @@ mod tests {
             S3FindError::command_execution(anyhow!("command failed")).to_string(),
             "failed to execute command: command failed"
         );
+    }
+
+    #[test]
+    fn test_tag_fetch_error_display() {
+        let err = TagFetchError::AccessDenied {
+            bucket: "my-bucket".to_string(),
+            key: "my-key".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Access denied for s3:GetObjectTagging on my-bucket/my-key"
+        );
+
+        let err = TagFetchError::NotFound {
+            bucket: "bucket".to_string(),
+            key: "key".to_string(),
+        };
+        assert_eq!(err.to_string(), "Object not found: bucket/key");
+
+        let err = TagFetchError::ApiError("Custom error".to_string());
+        assert_eq!(err.to_string(), "S3 API error: Custom error");
     }
 }

@@ -1,262 +1,18 @@
 use super::*;
-use crate::adapters::aws::{
-    CommandS3Client, DeleteObjectRequest, DeletedObjectInfo, RestoreObjectStatus,
-};
-use anyhow::anyhow;
+use crate::adapters::aws::{DeleteObjectRequest, RestoreObjectStatus};
+use crate::testing::{ExecuteCaptured, FakeS3Client};
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::{
-    primitives::{ByteStream, DateTime},
-    types::{MetadataDirective, Object, ObjectStorageClass, StorageClass, Tag, Tier},
+    primitives::DateTime,
+    types::{Object, ObjectStorageClass, StorageClass, Tag, Tier},
 };
 use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
 use aws_smithy_types::body::SdkBody;
 use aws_smithy_types::date_time::Format;
 use http::{HeaderValue, StatusCode};
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use tempfile::tempdir;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ObjectRequestKey {
-    bucket: String,
-    key: String,
-    version_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PutTagCall {
-    object: ObjectRequestKey,
-    tags: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CopyCall {
-    bucket: String,
-    key: String,
-    copy_source: String,
-    storage_class: Option<String>,
-    metadata_directive: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RestoreCall {
-    object: ObjectRequestKey,
-    days: i32,
-    tier: String,
-}
-
-struct FakeCommandClient {
-    region: Option<String>,
-    delete_calls: Mutex<Vec<(String, Vec<DeleteObjectRequest>)>>,
-    put_tag_calls: Mutex<Vec<PutTagCall>>,
-    get_tag_calls: Mutex<Vec<ObjectRequestKey>>,
-    public_calls: Mutex<Vec<ObjectRequestKey>>,
-    get_object_calls: Mutex<Vec<ObjectRequestKey>>,
-    copy_calls: Mutex<Vec<CopyCall>>,
-    restore_calls: Mutex<Vec<RestoreCall>>,
-    object_bodies: Mutex<HashMap<ObjectRequestKey, Vec<u8>>>,
-    tag_outputs: Mutex<HashMap<ObjectRequestKey, Vec<Tag>>>,
-    restore_outputs: Mutex<HashMap<ObjectRequestKey, RestoreObjectStatus>>,
-}
-
-impl Default for FakeCommandClient {
-    fn default() -> Self {
-        Self {
-            region: Some("us-east-1".to_string()),
-            delete_calls: Mutex::new(Vec::new()),
-            put_tag_calls: Mutex::new(Vec::new()),
-            get_tag_calls: Mutex::new(Vec::new()),
-            public_calls: Mutex::new(Vec::new()),
-            get_object_calls: Mutex::new(Vec::new()),
-            copy_calls: Mutex::new(Vec::new()),
-            restore_calls: Mutex::new(Vec::new()),
-            object_bodies: Mutex::new(HashMap::new()),
-            tag_outputs: Mutex::new(HashMap::new()),
-            restore_outputs: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-impl FakeCommandClient {
-    fn object_key(bucket: &str, key: &str, version_id: Option<&str>) -> ObjectRequestKey {
-        ObjectRequestKey {
-            bucket: bucket.to_string(),
-            key: key.to_string(),
-            version_id: version_id.map(str::to_string),
-        }
-    }
-
-    fn with_object_body(
-        self,
-        bucket: &str,
-        key: &str,
-        version_id: Option<&str>,
-        body: &[u8],
-    ) -> Self {
-        self.object_bodies
-            .lock()
-            .unwrap()
-            .insert(Self::object_key(bucket, key, version_id), body.to_vec());
-        self
-    }
-
-    fn with_tags(self, bucket: &str, key: &str, version_id: Option<&str>, tags: Vec<Tag>) -> Self {
-        self.tag_outputs
-            .lock()
-            .unwrap()
-            .insert(Self::object_key(bucket, key, version_id), tags);
-        self
-    }
-
-    fn with_restore_status(
-        self,
-        bucket: &str,
-        key: &str,
-        version_id: Option<&str>,
-        status: RestoreObjectStatus,
-    ) -> Self {
-        self.restore_outputs
-            .lock()
-            .unwrap()
-            .insert(Self::object_key(bucket, key, version_id), status);
-        self
-    }
-}
-
-#[async_trait::async_trait]
-impl CommandS3Client for FakeCommandClient {
-    fn region(&self) -> Option<String> {
-        self.region.clone()
-    }
-
-    async fn delete_objects(
-        &self,
-        bucket: &str,
-        objects: Vec<DeleteObjectRequest>,
-    ) -> Result<Vec<DeletedObjectInfo>, anyhow::Error> {
-        self.delete_calls
-            .lock()
-            .unwrap()
-            .push((bucket.to_string(), objects.clone()));
-
-        Ok(objects
-            .into_iter()
-            .map(|object| DeletedObjectInfo {
-                key: Some(object.key),
-                version_id: object.version_id,
-            })
-            .collect())
-    }
-
-    async fn put_object_tagging(
-        &self,
-        bucket: &str,
-        key: &str,
-        version_id: Option<&str>,
-        tags: Vec<Tag>,
-    ) -> Result<(), anyhow::Error> {
-        self.put_tag_calls.lock().unwrap().push(PutTagCall {
-            object: FakeCommandClient::object_key(bucket, key, version_id),
-            tags: tags
-                .into_iter()
-                .map(|tag| (tag.key().to_string(), tag.value().to_string()))
-                .collect(),
-        });
-        Ok(())
-    }
-
-    async fn get_object_tagging(
-        &self,
-        bucket: &str,
-        key: &str,
-        version_id: Option<&str>,
-    ) -> Result<Vec<Tag>, anyhow::Error> {
-        let object = FakeCommandClient::object_key(bucket, key, version_id);
-        self.get_tag_calls.lock().unwrap().push(object.clone());
-        Ok(self
-            .tag_outputs
-            .lock()
-            .unwrap()
-            .get(&object)
-            .cloned()
-            .unwrap_or_default())
-    }
-
-    async fn put_object_acl_public_read(
-        &self,
-        bucket: &str,
-        key: &str,
-        version_id: Option<&str>,
-    ) -> Result<(), anyhow::Error> {
-        self.public_calls
-            .lock()
-            .unwrap()
-            .push(FakeCommandClient::object_key(bucket, key, version_id));
-        Ok(())
-    }
-
-    async fn get_object(
-        &self,
-        bucket: &str,
-        key: &str,
-        version_id: Option<&str>,
-    ) -> Result<ByteStream, anyhow::Error> {
-        let object = FakeCommandClient::object_key(bucket, key, version_id);
-        self.get_object_calls.lock().unwrap().push(object.clone());
-        let body = self
-            .object_bodies
-            .lock()
-            .unwrap()
-            .get(&object)
-            .cloned()
-            .ok_or_else(|| anyhow!("missing object body for {}", key))?;
-        Ok(ByteStream::from(body))
-    }
-
-    async fn copy_object(
-        &self,
-        bucket: &str,
-        key: &str,
-        copy_source: &str,
-        storage_class: Option<StorageClass>,
-        metadata_directive: Option<MetadataDirective>,
-    ) -> Result<(), anyhow::Error> {
-        self.copy_calls.lock().unwrap().push(CopyCall {
-            bucket: bucket.to_string(),
-            key: key.to_string(),
-            copy_source: copy_source.to_string(),
-            storage_class: storage_class.map(|value| value.as_str().to_string()),
-            metadata_directive: metadata_directive.map(|value| value.as_str().to_string()),
-        });
-        Ok(())
-    }
-
-    async fn restore_object(
-        &self,
-        bucket: &str,
-        key: &str,
-        version_id: Option<&str>,
-        days: i32,
-        tier: Tier,
-    ) -> Result<RestoreObjectStatus, anyhow::Error> {
-        let object = FakeCommandClient::object_key(bucket, key, version_id);
-        self.restore_calls.lock().unwrap().push(RestoreCall {
-            object: object.clone(),
-            days,
-            tier: tier.as_str().to_string(),
-        });
-
-        Ok(self
-            .restore_outputs
-            .lock()
-            .unwrap()
-            .get(&object)
-            .copied()
-            .unwrap_or(RestoreObjectStatus::Started))
-    }
-}
 
 #[test]
 fn test_advanced_print_object() -> Result<(), Error> {
@@ -291,7 +47,7 @@ fn test_advanced_print_object() -> Result<(), Error> {
 
 #[tokio::test]
 async fn test_multiple_delete_with_fake_client_records_version_ids() -> Result<(), Error> {
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "test-bucket".to_string(),
         prefix: None,
@@ -309,8 +65,8 @@ async fn test_multiple_delete_with_fake_client_records_version_ids() -> Result<(
     ];
 
     Cmd::Delete(MultipleDelete {})
-        .downcast()
-        .execute(&client, &path, &objects)
+        .into_command()
+        .execute_captured(&client, &path, &objects)
         .await?;
 
     let delete_calls = client.delete_calls.lock().unwrap();
@@ -335,15 +91,15 @@ async fn test_multiple_delete_with_fake_client_records_version_ids() -> Result<(
 
 #[tokio::test]
 async fn test_multiple_delete_empty_input_skips_delete_request() -> Result<(), Error> {
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "test-bucket".to_string(),
         prefix: None,
     };
 
     Cmd::Delete(MultipleDelete {})
-        .downcast()
-        .execute(&client, &path, &[])
+        .into_command()
+        .execute_captured(&client, &path, &[])
         .await?;
 
     assert!(client.delete_calls.lock().unwrap().is_empty());
@@ -353,7 +109,7 @@ async fn test_multiple_delete_empty_input_skips_delete_request() -> Result<(), E
 
 #[tokio::test]
 async fn test_multiple_delete_missing_key_returns_error() {
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "test-bucket".to_string(),
         prefix: None,
@@ -361,8 +117,8 @@ async fn test_multiple_delete_missing_key_returns_error() {
     let objects = vec![StreamObject::from_object(Object::builder().build())];
 
     let err = Cmd::Delete(MultipleDelete {})
-        .downcast()
-        .execute(&client, &path, &objects)
+        .into_command()
+        .execute_captured(&client, &path, &objects)
         .await
         .unwrap_err();
 
@@ -372,7 +128,7 @@ async fn test_multiple_delete_missing_key_returns_error() {
 
 #[tokio::test]
 async fn test_set_tags_with_fake_client_records_tags() -> Result<(), Error> {
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "test-bucket".to_string(),
         prefix: None,
@@ -393,8 +149,8 @@ async fn test_set_tags_with_fake_client_records_tags() -> Result<(), Error> {
             },
         ],
     })
-    .downcast()
-    .execute(&client, &path, &objects)
+    .into_command()
+    .execute_captured(&client, &path, &objects)
     .await?;
 
     let put_tag_calls = client.put_tag_calls.lock().unwrap();
@@ -413,7 +169,7 @@ async fn test_set_tags_with_fake_client_records_tags() -> Result<(), Error> {
 
 #[tokio::test]
 async fn test_list_tags_with_fake_client_fetches_tags() -> Result<(), Error> {
-    let client = FakeCommandClient::default().with_tags(
+    let client = FakeS3Client::default().with_tags(
         "test-bucket",
         "test/file1.txt",
         Some("v1"),
@@ -432,8 +188,8 @@ async fn test_list_tags_with_fake_client_fetches_tags() -> Result<(), Error> {
     }];
 
     Cmd::LsTags(ListTags {})
-        .downcast()
-        .execute(&client, &path, &objects)
+        .into_command()
+        .execute_captured(&client, &path, &objects)
         .await?;
 
     let get_tag_calls = client.get_tag_calls.lock().unwrap();
@@ -447,7 +203,7 @@ async fn test_list_tags_with_fake_client_fetches_tags() -> Result<(), Error> {
 #[tokio::test]
 async fn test_download_with_fake_client_writes_file() -> Result<(), Error> {
     let temp_dir = tempdir()?;
-    let client = FakeCommandClient::default().with_object_body(
+    let client = FakeS3Client::default().with_object_body(
         "test-bucket",
         "test/file.txt",
         Some("v1"),
@@ -469,8 +225,8 @@ async fn test_download_with_fake_client_writes_file() -> Result<(), Error> {
         destination: temp_dir.path().to_string_lossy().to_string(),
         force: true,
     })
-    .downcast()
-    .execute(&client, &path, &objects)
+    .into_command()
+    .execute_captured(&client, &path, &objects)
     .await?;
 
     let file_path = temp_dir.path().join("test/file.txt.vv1");
@@ -482,7 +238,7 @@ async fn test_download_with_fake_client_writes_file() -> Result<(), Error> {
 
 #[tokio::test]
 async fn test_s3_copy_with_fake_client_records_request() -> Result<(), Error> {
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "source-bucket".to_string(),
         prefix: None,
@@ -503,8 +259,8 @@ async fn test_s3_copy_with_fake_client_records_request() -> Result<(), Error> {
         flat: false,
         storage_class: Some(StorageClass::Glacier),
     })
-    .downcast()
-    .execute(&client, &path, &objects)
+    .into_command()
+    .execute_captured(&client, &path, &objects)
     .await?;
 
     let copy_calls = client.copy_calls.lock().unwrap();
@@ -523,7 +279,7 @@ async fn test_s3_copy_with_fake_client_records_request() -> Result<(), Error> {
 
 #[tokio::test]
 async fn test_s3_move_with_fake_client_records_copy_and_delete() -> Result<(), Error> {
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "source-bucket".to_string(),
         prefix: None,
@@ -540,8 +296,8 @@ async fn test_s3_move_with_fake_client_records_copy_and_delete() -> Result<(), E
         flat: false,
         storage_class: Some(StorageClass::StandardIa),
     })
-    .downcast()
-    .execute(&client, &path, &objects)
+    .into_command()
+    .execute_captured(&client, &path, &objects)
     .await?;
 
     let copy_calls = client.copy_calls.lock().unwrap();
@@ -557,7 +313,7 @@ async fn test_s3_move_with_fake_client_records_copy_and_delete() -> Result<(), E
 
 #[tokio::test]
 async fn test_s3_move_delete_markers_only_skips_delete_request() -> Result<(), Error> {
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "source-bucket".to_string(),
         prefix: None,
@@ -578,8 +334,8 @@ async fn test_s3_move_delete_markers_only_skips_delete_request() -> Result<(), E
         flat: false,
         storage_class: Some(StorageClass::StandardIa),
     })
-    .downcast()
-    .execute(&client, &path, &objects)
+    .into_command()
+    .execute_captured(&client, &path, &objects)
     .await?;
 
     assert!(client.copy_calls.lock().unwrap().is_empty());
@@ -590,7 +346,7 @@ async fn test_s3_move_delete_markers_only_skips_delete_request() -> Result<(), E
 
 #[tokio::test]
 async fn test_restore_with_fake_client_records_request() -> Result<(), Error> {
-    let client = FakeCommandClient::default().with_restore_status(
+    let client = FakeS3Client::default().with_restore_status(
         "test-bucket",
         "archive/file.txt",
         Some("v1"),
@@ -615,8 +371,8 @@ async fn test_restore_with_fake_client_records_request() -> Result<(), Error> {
         days: 7,
         tier: Tier::Bulk,
     })
-    .downcast()
-    .execute(&client, &path, &objects)
+    .into_command()
+    .execute_captured(&client, &path, &objects)
     .await?;
 
     let restore_calls = client.restore_calls.lock().unwrap();
@@ -685,15 +441,15 @@ fn test_fast_print_object() -> Result<(), Error> {
     Ok(())
 }
 
-#[test]
-fn test_exec() -> Result<(), Error> {
+#[tokio::test]
+async fn test_exec() -> Result<(), Error> {
     let mut buf = Vec::new();
     let cmd = Exec {
         utility: "echo test {}".to_owned(),
     };
 
     let path = "s3://test/somepath/otherpath";
-    cmd.exec(&mut buf, path)?;
+    cmd.exec(&mut buf, path).await?;
     let out = std::str::from_utf8(&buf)?;
 
     assert!(out.contains("test"));
@@ -702,15 +458,15 @@ fn test_exec() -> Result<(), Error> {
 }
 
 #[cfg(unix)]
-#[test]
-fn test_exec_supports_quoted_arguments() -> Result<(), Error> {
+#[tokio::test]
+async fn test_exec_supports_quoted_arguments() -> Result<(), Error> {
     let mut buf = Vec::new();
     let cmd = Exec {
         utility: "echo \"test {}\"".to_owned(),
     };
 
     let path = "s3://test/somepath/otherpath";
-    cmd.exec(&mut buf, path)?;
+    cmd.exec(&mut buf, path).await?;
     let out = std::str::from_utf8(&buf)?;
 
     assert_eq!(out.trim(), format!("test {path}"));
@@ -718,50 +474,50 @@ fn test_exec_supports_quoted_arguments() -> Result<(), Error> {
 }
 
 #[cfg(unix)]
-#[test]
-fn test_exec_propagates_non_zero_status() {
+#[tokio::test]
+async fn test_exec_propagates_non_zero_status() {
     let mut buf = Vec::new();
     let cmd = Exec {
         utility: "sh -c 'exit 7'".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7"));
 }
 
 #[cfg(unix)]
-#[test]
-fn test_exec_propagates_stderr_output() {
+#[tokio::test]
+async fn test_exec_propagates_stderr_output() {
     let mut buf = Vec::new();
     let cmd = Exec {
         utility: "sh -c 'echo boom 1>&2; exit 7'".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7: boom"));
 }
 
 #[cfg(windows)]
-#[test]
-fn test_exec_propagates_non_zero_status() {
+#[tokio::test]
+async fn test_exec_propagates_non_zero_status() {
     let mut buf = Vec::new();
     let cmd = Exec {
         utility: "cmd /C exit 7".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7"));
 }
 
 #[cfg(windows)]
-#[test]
-fn test_exec_propagates_stderr_output() {
+#[tokio::test]
+async fn test_exec_propagates_stderr_output() {
     let mut buf = Vec::new();
     let cmd = Exec {
         utility: "cmd /C \"echo boom 1>&2 && exit 7\"".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").unwrap_err();
+    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7: boom"));
 }
 
@@ -883,15 +639,15 @@ async fn test_advanced_print() -> Result<(), Error> {
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Print(AdvancedPrint::default()).downcast();
-    let client = FakeCommandClient::default();
+    let cmd = Cmd::Print(AdvancedPrint::default()).into_command();
+    let client = FakeS3Client::default();
 
     let path = S3Path {
         bucket: "test".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
     Ok(())
 }
 
@@ -918,15 +674,15 @@ async fn smoke_advanced_print_json_execute() -> Result<(), Error> {
     let cmd = Cmd::Print(AdvancedPrint {
         format: PrintFormat::Json,
     })
-    .downcast();
+    .into_command();
 
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
     Ok(())
 }
@@ -954,15 +710,15 @@ async fn smoke_advanced_print_csv_execute() -> Result<(), Error> {
     let cmd = Cmd::Print(AdvancedPrint {
         format: PrintFormat::Csv,
     })
-    .downcast();
+    .into_command();
 
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
     Ok(())
 }
@@ -981,15 +737,15 @@ async fn test_fastprint() -> Result<(), Error> {
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Ls(FastPrint {}).downcast();
-    let client = FakeCommandClient::default();
+    let cmd = Cmd::Ls(FastPrint {}).into_command();
+    let client = FakeS3Client::default();
 
     let path = S3Path {
         bucket: "test".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
     Ok(())
 }
 
@@ -1007,15 +763,17 @@ async fn smoke_donothing() -> Result<(), Error> {
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Nothing(DoNothing {}).downcast();
-    let client = FakeCommandClient::default();
+    let cmd = Cmd::Nothing(DoNothing {}).into_command();
+    let client = FakeS3Client::default();
 
     let path = S3Path {
         bucket: "test".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await
+    let out = cmd.execute_captured(&client, &path, &[stream_obj]).await?;
+    assert!(out.is_empty());
+    Ok(())
 }
 
 #[tokio::test]
@@ -1035,16 +793,18 @@ async fn smoke_exec() -> Result<(), Error> {
     let cmd = Cmd::Exec(Exec {
         utility: "echo {}".to_owned(),
     })
-    .downcast();
+    .into_command();
 
-    let client = FakeCommandClient::default();
+    let client = FakeS3Client::default();
 
     let path = S3Path {
         bucket: "test".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await
+    let out = cmd.execute_captured(&client, &path, &[stream_obj]).await?;
+    assert_eq!(out.trim(), "s3://test/somepath/otherpath");
+    Ok(())
 }
 
 #[test]
@@ -1121,14 +881,14 @@ async fn test_download_with_replay_client() -> Result<(), Error> {
         destination: temp_path.clone(),
         force: true,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     let file_path = PathBuf::from(temp_path).join(key);
     assert!(file_path.exists(), "Downloaded file should exist");
@@ -1181,14 +941,14 @@ async fn test_download_skips_existing_file_and_continues() -> Result<(), Error> 
         destination: temp_path.clone(),
         force: false,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj_existing, stream_obj_new])
+    cmd.execute_captured(&client, &path, &[stream_obj_existing, stream_obj_new])
         .await?;
 
     assert_eq!(std::fs::read_to_string(existing_path)?, "keep me");
@@ -1258,14 +1018,14 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::Public(SetPublic {}).downcast();
+    let cmd = Cmd::Public(SetPublic {}).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -1273,22 +1033,22 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
 
 #[tokio::test]
 async fn test_set_public_defaults_region_when_client_region_is_missing() -> Result<(), Error> {
-    let client = FakeCommandClient {
+    let client = FakeS3Client {
         region: None,
         ..Default::default()
     };
     let stream_obj = StreamObject::from_object(Object::builder().key("test/file.txt").build());
-    let cmd = Cmd::Public(SetPublic {}).downcast();
+    let cmd = Cmd::Public(SetPublic {}).into_command();
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     assert_eq!(
         client.public_calls.lock().unwrap().as_slice(),
-        &[FakeCommandClient::object_key(
+        &[FakeS3Client::object_key(
             "test-bucket",
             "test/file.txt",
             None
@@ -1353,7 +1113,7 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::Delete(MultipleDelete {}).downcast();
+    let cmd = Cmd::Delete(MultipleDelete {}).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1362,7 +1122,7 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -1405,8 +1165,8 @@ async fn test_multiple_delete_propagates_request_failure() {
     };
 
     let result = Cmd::Delete(MultipleDelete {})
-        .downcast()
-        .execute(&client, &path, &[StreamObject::from_object(object)])
+        .into_command()
+        .execute_captured(&client, &path, &[StreamObject::from_object(object)])
         .await;
 
     assert!(result.is_err());
@@ -1452,8 +1212,8 @@ async fn test_multiple_delete_propagates_partial_delete_failure() {
     };
 
     let result = Cmd::Delete(MultipleDelete {})
-        .downcast()
-        .execute(&client, &path, &[StreamObject::from_object(object)])
+        .into_command()
+        .execute_captured(&client, &path, &[StreamObject::from_object(object)])
         .await;
 
     assert!(result.is_err());
@@ -1526,7 +1286,7 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         },
     ];
 
-    let cmd = Cmd::Tags(SetTags { tags }).downcast();
+    let cmd = Cmd::Tags(SetTags { tags }).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1535,7 +1295,7 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -1569,8 +1329,8 @@ async fn test_set_tags_rejects_too_many_tags() {
             })
             .collect(),
     })
-    .downcast()
-    .execute(&client, &path, &objects)
+    .into_command()
+    .execute_captured(&client, &path, &objects)
     .await;
 
     assert!(result.is_err());
@@ -1659,7 +1419,7 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).downcast();
+    let cmd = Cmd::LsTags(ListTags {}).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1668,7 +1428,7 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -1723,7 +1483,7 @@ async fn test_list_tags_with_version_id() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).downcast();
+    let cmd = Cmd::LsTags(ListTags {}).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1739,7 +1499,7 @@ async fn test_list_tags_with_version_id() -> Result<(), Error> {
         tags: None, // Force API fetch
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     Ok(())
 }
@@ -1780,7 +1540,7 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).downcast();
+    let cmd = Cmd::LsTags(ListTags {}).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1804,7 +1564,7 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
     ]);
 
     // Execute - should use cached tags without making API calls
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -1835,7 +1595,7 @@ async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).downcast();
+    let cmd = Cmd::LsTags(ListTags {}).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1852,7 +1612,7 @@ async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
     };
 
     // Execute - should skip the delete marker without making API calls
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     Ok(())
 }
@@ -1939,7 +1699,7 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         flat: true,
         storage_class: None,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1948,7 +1708,7 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -2008,7 +1768,7 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
         flat: true,
         storage_class: Some(StorageClass::Glacier),
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2016,7 +1776,7 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
     };
 
     let stream_obj = StreamObject::from_object(object);
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     Ok(())
 }
@@ -2098,7 +1858,7 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
         flat: true,
         storage_class: Some(StorageClass::IntelligentTiering),
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2106,7 +1866,7 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
     };
 
     let stream_obj = StreamObject::from_object(object);
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     Ok(())
 }
@@ -2219,7 +1979,7 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         flat: true,
         storage_class: None,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2228,7 +1988,7 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -2360,14 +2120,14 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         days: 7,
         tier: aws_sdk_s3::types::Tier::Standard,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(
+    cmd.execute_captured(
         &client,
         &path,
         &[
@@ -2428,7 +2188,7 @@ async fn test_restore_with_standard_tier() -> Result<(), Error> {
     };
 
     let result = restore_cmd
-        .execute(&client, &path, &[StreamObject::from_object(glacier_object)])
+        .execute_captured(&client, &path, &[StreamObject::from_object(glacier_object)])
         .await;
     assert!(result.is_ok(), "Standard tier restore should succeed");
 
@@ -2481,7 +2241,7 @@ async fn test_restore_with_expedited_tier() -> Result<(), Error> {
     };
 
     let result = restore_cmd
-        .execute(&client, &path, &[StreamObject::from_object(glacier_object)])
+        .execute_captured(&client, &path, &[StreamObject::from_object(glacier_object)])
         .await;
     assert!(result.is_ok(), "Expedited tier restore should succeed");
 
@@ -2534,7 +2294,7 @@ async fn test_restore_with_bulk_tier() -> Result<(), Error> {
     };
 
     let result = restore_cmd
-        .execute(
+        .execute_captured(
             &client,
             &path,
             &[StreamObject::from_object(deep_archive_object)],
@@ -2580,7 +2340,7 @@ async fn test_restore_with_non_glacier_objects() -> Result<(), Error> {
     };
 
     let result = restore_cmd
-        .execute(
+        .execute_captured(
             &client,
             &path,
             &[StreamObject::from_object(standard_object)],
@@ -2640,7 +2400,7 @@ async fn test_restore_with_maximum_days() -> Result<(), Error> {
     };
 
     let result = restore_cmd
-        .execute(&client, &path, &[StreamObject::from_object(glacier_object)])
+        .execute_captured(&client, &path, &[StreamObject::from_object(glacier_object)])
         .await;
     assert!(result.is_ok(), "Restore with maximum days should succeed");
 
@@ -2725,7 +2485,7 @@ async fn test_change_storage_class() -> Result<(), Error> {
     let cmd = Cmd::ChangeStorage(ChangeStorage {
         storage_class: StorageClass::Glacier,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2734,7 +2494,7 @@ async fn test_change_storage_class() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute(&client, &path, &[stream_obj1, stream_obj2])
+    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
     Ok(())
@@ -2893,14 +2653,14 @@ async fn test_delete_versioned_object() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::Delete(MultipleDelete {}).downcast();
+    let cmd = Cmd::Delete(MultipleDelete {}).into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     Ok(())
 }
@@ -2964,14 +2724,14 @@ async fn test_copy_versioned_object() -> Result<(), Error> {
         flat: true,
         storage_class: None,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "source-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     Ok(())
 }
@@ -3024,14 +2784,14 @@ async fn test_download_versioned_object() -> Result<(), Error> {
         destination: temp_dir.to_string_lossy().to_string(),
         force: true,
     })
-    .downcast();
+    .into_command();
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
     };
 
-    cmd.execute(&client, &path, &[stream_obj]).await?;
+    cmd.execute_captured(&client, &path, &[stream_obj]).await?;
 
     // Clean up
     let _ = std::fs::remove_dir_all(&temp_dir);
