@@ -5,10 +5,13 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Error, anyhow};
+use aws_config::BehaviorVersion;
+use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     DeleteMarkerEntry, MetadataDirective, Object, ObjectVersion, StorageClass, Tag, Tier,
 };
+use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
 use clap::Parser;
 
 use crate::adapters::aws::{
@@ -24,6 +27,27 @@ use crate::run_command::{CommandContext, RunCommand};
 pub(crate) fn opts(args: &[&str]) -> FindOpt {
     FindOpt::try_parse_from(std::iter::once("s3find").chain(args.iter().copied()))
         .expect("valid test arguments")
+}
+
+/// A real SDK client for `us-east-1` whose HTTP requests are answered by
+/// `events`, in order.
+///
+/// Finish the test with `replay.assert_requests_match(&[])` to check the URI,
+/// the headers each expected request lists and the body of every request,
+/// and that every event was used.
+pub(crate) fn replay_s3_client(
+    events: Vec<ReplayEvent>,
+) -> (aws_sdk_s3::Client, StaticReplayClient) {
+    let replay = StaticReplayClient::new(events);
+    let client = aws_sdk_s3::Client::from_conf(
+        aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .credentials_provider(Credentials::new("test", "test", None, None, "test"))
+            .region(Region::new("us-east-1"))
+            .http_client(replay.clone())
+            .build(),
+    );
+    (client, replay)
 }
 
 /// Runs a command with an in-memory output sink and returns what it printed.

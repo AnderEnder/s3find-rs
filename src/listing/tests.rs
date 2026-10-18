@@ -1,6 +1,5 @@
 use super::*;
-use crate::testing::{FakeS3Client, ListCall, opts};
-use aws_config::BehaviorVersion;
+use crate::testing::{FakeS3Client, ListCall, opts, replay_s3_client};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::primitives::DateTime;
 use aws_sdk_s3::primitives::SdkBody;
@@ -312,19 +311,7 @@ fn replay(events: Vec<(&str, StatusCode, &str)>) -> (Client, StaticReplayClient)
             ReplayEvent::new(request, response)
         })
         .collect();
-    let replay_client = StaticReplayClient::new(events);
-
-    let client = Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                "test", "test", None, None, "test",
-            ))
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .http_client(replay_client.clone())
-            .build(),
-    );
-    (client, replay_client)
+    replay_s3_client(events)
 }
 
 fn list_result(body: &str) -> String {

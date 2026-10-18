@@ -152,12 +152,10 @@ impl TagFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::FakeS3Client;
-    use aws_config::BehaviorVersion;
-    use aws_sdk_s3::Client;
+    use crate::testing::{FakeS3Client, replay_s3_client};
     use aws_sdk_s3::primitives::SdkBody;
     use aws_sdk_s3::types::{Object, Tag};
-    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_runtime::client::http::test_util::ReplayEvent;
     use futures::{StreamExt, stream};
     use http::{HeaderValue, StatusCode};
 
@@ -349,19 +347,6 @@ mod tests {
     // The tests below go through the real SDK client to cover the adapter's
     // request building and error classification.
 
-    fn replay_client(events: Vec<ReplayEvent>) -> Client {
-        Client::from_conf(
-            aws_sdk_s3::Config::builder()
-                .behavior_version(BehaviorVersion::latest())
-                .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                    "test", "test", None, None, "test",
-                ))
-                .region(aws_sdk_s3::config::Region::new("us-east-1"))
-                .http_client(StaticReplayClient::new(events))
-                .build(),
-        )
-    }
-
     fn tagging_request(uri_suffix: &str) -> http::Request<SdkBody> {
         http::Request::builder()
             .method("GET")
@@ -404,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sdk_client_fetches_tags() {
-        let client = replay_client(vec![
+        let (client, replay) = replay_s3_client(vec![
             tag_response("file1.txt?tagging", &[("env", "prod"), ("team", "data")]),
             tag_response(
                 "versioned.txt?tagging&versionId=v123",
@@ -422,11 +407,12 @@ mod tests {
         assert_eq!(results[0].get_tag("team"), Some("data"));
         assert_eq!(results[1].get_tag("version"), Some("v123"));
         assert_eq!(fetcher.stats().success.load(Ordering::Relaxed), 2);
+        replay.assert_requests_match(&[]);
     }
 
     #[tokio::test]
     async fn test_sdk_client_classifies_tagging_errors() {
-        let client = replay_client(vec![
+        let (client, replay) = replay_s3_client(vec![
             error_response("forbidden.txt?tagging", 403),
             error_response("missing.txt?tagging", 404),
         ]);
@@ -444,5 +430,6 @@ mod tests {
         assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
         assert_eq!(stats.excluded.load(Ordering::Relaxed), 2);
+        replay.assert_requests_match(&[]);
     }
 }
