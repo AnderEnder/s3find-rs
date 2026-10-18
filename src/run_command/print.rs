@@ -1,11 +1,11 @@
 use std::io::Write;
 
 use anyhow::Error;
-use async_trait::async_trait;
 use aws_smithy_types::date_time::Format;
 use csv::WriterBuilder;
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::aws::S3Client;
 use crate::arg::{AdvancedPrint, FastPrint, PrintFormat};
 use crate::object::StreamObject;
 
@@ -23,11 +23,10 @@ impl FastPrint {
     }
 }
 
-#[async_trait]
 impl RunCommand for FastPrint {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in objects {
@@ -149,11 +148,10 @@ impl AdvancedPrint {
     }
 }
 
-#[async_trait]
 impl RunCommand for AdvancedPrint {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         match self.format {

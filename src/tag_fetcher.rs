@@ -1,5 +1,4 @@
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::{FutureExt, Stream, TryStreamExt};
@@ -69,16 +68,14 @@ impl fmt::Display for TagFetchStats {
 
 /// Populates `StreamObject::tags` with GetObjectTagging, with bounded concurrency.
 pub struct TagFetcher {
-    client: Arc<dyn S3Client>,
     bucket: String,
     concurrency: usize,
     stats: TagFetchStats,
 }
 
 impl TagFetcher {
-    pub fn new(client: Arc<dyn S3Client>, bucket: impl Into<String>, concurrency: usize) -> Self {
+    pub fn new(bucket: impl Into<String>, concurrency: usize) -> Self {
         Self {
-            client,
             bucket: bucket.into(),
             concurrency: concurrency.max(1),
             stats: TagFetchStats::new(),
@@ -95,15 +92,17 @@ impl TagFetcher {
 
     /// Fetches tags for each object in the stream, keeping up to `concurrency`
     /// requests in flight and the input order intact.
-    pub fn attach_tags_to_stream<'a, S>(
+    pub fn attach_tags_to_stream<'a, C, S>(
         &'a self,
+        client: &'a C,
         objects: S,
     ) -> impl Stream<Item = S3FindResult<StreamObject>> + Send + 'a
     where
+        C: S3Client,
         S: Stream<Item = S3FindResult<StreamObject>> + Send + 'a,
     {
         objects
-            .map_ok(|object| self.attach_tags(object).map(Ok))
+            .map_ok(move |object| self.attach_tags(client, object).map(Ok))
             .try_buffered(self.concurrency)
     }
 
@@ -111,26 +110,25 @@ impl TagFetcher {
     ///
     /// Objects whose tags can't be fetched get an empty tag set, so they never
     /// match a tag filter: an object is only included when its tags are verified.
-    pub async fn attach_tags(&self, mut object: StreamObject) -> StreamObject {
+    pub async fn attach_tags(
+        &self,
+        client: &impl S3Client,
+        mut object: StreamObject,
+    ) -> StreamObject {
         if object.tags.is_some() {
             return object;
         }
 
         // Delete markers and keyless objects have no tags to fetch.
-        let key = match object.key() {
-            Some(key) if !object.is_delete_marker => key,
-            _ => {
-                object.tags = Some(Vec::new());
-                return object;
-            }
+        let Some(key) = object.key().filter(|_| !object.is_delete_marker) else {
+            object.tags = Some(Vec::new());
+            return object;
         };
 
-        let result = self
-            .client
+        let tags = match client
             .get_object_tagging(&self.bucket, key, object.version_id.as_deref())
-            .await;
-
-        let tags = match result {
+            .await
+        {
             Ok(tags) => {
                 self.stats.record_success();
                 tags
@@ -171,13 +169,17 @@ mod tests {
         Tag::builder().key(key).value(value).build().unwrap()
     }
 
-    fn fetcher(client: impl S3Client + 'static, concurrency: usize) -> TagFetcher {
-        TagFetcher::new(Arc::new(client), "test-bucket", concurrency)
+    fn fetcher(concurrency: usize) -> TagFetcher {
+        TagFetcher::new("test-bucket", concurrency)
     }
 
-    async fn attach_all(fetcher: &TagFetcher, objects: Vec<StreamObject>) -> Vec<StreamObject> {
+    async fn attach_all(
+        fetcher: &TagFetcher,
+        client: &impl S3Client,
+        objects: Vec<StreamObject>,
+    ) -> Vec<StreamObject> {
         fetcher
-            .attach_tags_to_stream(stream::iter(objects.into_iter().map(Ok)))
+            .attach_tags_to_stream(client, stream::iter(objects.into_iter().map(Ok)))
             .map(Result::unwrap)
             .collect()
             .await
@@ -207,6 +209,7 @@ mod tests {
 
     #[test]
     fn test_tag_fetch_stats_concurrent_updates() {
+        use std::sync::Arc;
         use std::thread;
 
         let stats = Arc::new(TagFetchStats::new());
@@ -230,8 +233,8 @@ mod tests {
 
     #[test]
     fn test_concurrency_is_at_least_one() {
-        assert_eq!(fetcher(FakeS3Client::default(), 0).concurrency(), 1);
-        assert_eq!(fetcher(FakeS3Client::default(), 7).concurrency(), 7);
+        assert_eq!(fetcher(0).concurrency(), 1);
+        assert_eq!(fetcher(7).concurrency(), 7);
     }
 
     #[tokio::test]
@@ -242,12 +245,12 @@ mod tests {
             Some("v123"),
             vec![tag("version", "v123")],
         );
-        let fetcher = fetcher(client, 1);
+        let fetcher = fetcher(1);
 
         let mut object = keyed("versioned.txt");
         object.version_id = Some("v123".to_string());
 
-        let object = fetcher.attach_tags(object).await;
+        let object = fetcher.attach_tags(&client, object).await;
 
         assert_eq!(object.get_tag("version"), Some("v123"));
         assert_eq!(fetcher.stats().success.load(Ordering::Relaxed), 1);
@@ -255,7 +258,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_attach_tags_skips_objects_without_fetchable_tags() {
-        let fetcher = fetcher(FakeS3Client::default(), 1);
+        let client = FakeS3Client::default();
+        let fetcher = fetcher(1);
 
         let cached = {
             let mut object = keyed("cached.txt");
@@ -269,7 +273,7 @@ mod tests {
         };
         let keyless = StreamObject::from_object(Object::builder().build());
 
-        let results = attach_all(&fetcher, vec![cached, delete_marker, keyless]).await;
+        let results = attach_all(&fetcher, &client, vec![cached, delete_marker, keyless]).await;
 
         assert_eq!(results[0].get_tag("cached"), Some("true"));
         assert_eq!(results[1].tags, Some(Vec::new()));
@@ -283,10 +287,11 @@ mod tests {
             .with_tag_error("test-bucket", "forbidden.txt", 403)
             .with_tag_error("test-bucket", "missing.txt", 404)
             .with_tag_error("test-bucket", "broken.txt", 500);
-        let fetcher = fetcher(client, 2);
+        let fetcher = fetcher(2);
 
         let results = attach_all(
             &fetcher,
+            &client,
             vec![
                 keyed("forbidden.txt"),
                 keyed("missing.txt"),
@@ -309,9 +314,14 @@ mod tests {
             .with_tag_delay("test-bucket", "slow.txt", 30)
             .with_tags("test-bucket", "slow.txt", None, vec![tag("n", "1")])
             .with_tags("test-bucket", "fast.txt", None, vec![tag("n", "2")]);
-        let fetcher = fetcher(client, 2);
+        let fetcher = fetcher(2);
 
-        let results = attach_all(&fetcher, vec![keyed("slow.txt"), keyed("fast.txt")]).await;
+        let results = attach_all(
+            &fetcher,
+            &client,
+            vec![keyed("slow.txt"), keyed("fast.txt")],
+        )
+        .await;
 
         let keys: Vec<_> = results.iter().map(|object| object.key().unwrap()).collect();
         assert_eq!(keys, ["slow.txt", "fast.txt"]);
@@ -321,12 +331,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_attach_tags_to_stream_propagates_upstream_errors() {
-        let fetcher = fetcher(FakeS3Client::default(), 2);
+        let client = FakeS3Client::default();
+        let fetcher = fetcher(2);
         let upstream = stream::iter(vec![Err(crate::error::S3FindError::list_objects(
             anyhow::anyhow!("listing failed"),
         ))]);
 
-        let results: Vec<_> = fetcher.attach_tags_to_stream(upstream).collect().await;
+        let results: Vec<_> = fetcher
+            .attach_tags_to_stream(&client, upstream)
+            .collect()
+            .await;
 
         assert_eq!(results.len(), 1);
         assert!(results[0].is_err());
@@ -397,12 +411,12 @@ mod tests {
                 &[("version", "v123")],
             ),
         ]);
-        let fetcher = fetcher(client, 1);
+        let fetcher = fetcher(1);
 
         let mut versioned = keyed("versioned.txt");
         versioned.version_id = Some("v123".to_string());
 
-        let results = attach_all(&fetcher, vec![keyed("file1.txt"), versioned]).await;
+        let results = attach_all(&fetcher, &client, vec![keyed("file1.txt"), versioned]).await;
 
         assert_eq!(results[0].get_tag("env"), Some("prod"));
         assert_eq!(results[0].get_tag("team"), Some("data"));
@@ -416,10 +430,14 @@ mod tests {
             error_response("forbidden.txt?tagging", 403),
             error_response("missing.txt?tagging", 404),
         ]);
-        let fetcher = fetcher(client, 1);
+        let fetcher = fetcher(1);
 
-        let results =
-            attach_all(&fetcher, vec![keyed("forbidden.txt"), keyed("missing.txt")]).await;
+        let results = attach_all(
+            &fetcher,
+            &client,
+            vec![keyed("forbidden.txt"), keyed("missing.txt")],
+        )
+        .await;
 
         assert!(results.iter().all(|object| object.tags == Some(Vec::new())));
         let stats = fetcher.stats();

@@ -4,11 +4,10 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::Error;
-use async_trait::async_trait;
 use aws_sdk_s3::types::{MetadataDirective, StorageClass};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::adapters::aws::DeleteObjectRequest;
+use crate::adapters::aws::{DeleteObjectRequest, S3Client};
 use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path};
 use crate::error::FunctionError;
 use crate::object::StreamObject;
@@ -16,11 +15,10 @@ use crate::utils::combine_keys;
 
 use super::{CommandContext, RunCommand, build_copy_source, live_objects};
 
-#[async_trait]
 impl RunCommand for Download {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in live_objects(objects) {
@@ -71,8 +69,8 @@ impl RunCommand for Download {
 }
 
 /// Copies live objects under `destination`, printing `verb: source => target`.
-async fn copy_objects(
-    ctx: &mut CommandContext<'_>,
+async fn copy_objects<C: S3Client>(
+    ctx: &mut CommandContext<'_, C>,
     objects: &[StreamObject],
     destination: &S3Path,
     flat: bool,
@@ -104,11 +102,10 @@ async fn copy_objects(
     Ok(())
 }
 
-#[async_trait]
 impl RunCommand for S3Copy {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         copy_objects(
@@ -124,11 +121,10 @@ impl RunCommand for S3Copy {
     }
 }
 
-#[async_trait]
 impl RunCommand for S3Move {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         copy_objects(
@@ -162,11 +158,10 @@ impl RunCommand for S3Move {
     }
 }
 
-#[async_trait]
 impl RunCommand for ChangeStorage {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in live_objects(objects) {

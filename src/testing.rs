@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Error, anyhow};
-use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     DeleteMarkerEntry, MetadataDirective, Object, ObjectVersion, StorageClass, Tag, Tier,
@@ -28,21 +27,19 @@ pub(crate) fn opts(args: &[&str]) -> FindOpt {
 }
 
 /// Runs a command with an in-memory output sink and returns what it printed.
-#[async_trait]
 pub(crate) trait ExecuteCaptured {
     async fn execute_captured(
         &self,
-        client: &dyn S3Client,
+        client: &impl S3Client,
         path: &S3Path,
         objects: &[StreamObject],
     ) -> Result<String, Error>;
 }
 
-#[async_trait]
-impl<T: RunCommand + ?Sized> ExecuteCaptured for T {
+impl<T: RunCommand> ExecuteCaptured for T {
     async fn execute_captured(
         &self,
-        client: &dyn S3Client,
+        client: &impl S3Client,
         path: &S3Path,
         objects: &[StreamObject],
     ) -> Result<String, Error> {
@@ -263,7 +260,6 @@ fn common_prefix<'k>(key: &'k str, prefix: &str, delimiter: Option<&str>) -> Opt
         .map(|index| &key[..prefix.len() + index + delimiter.len()])
 }
 
-#[async_trait]
 impl S3Client for FakeS3Client {
     fn region(&self) -> Option<String> {
         self.region.clone()

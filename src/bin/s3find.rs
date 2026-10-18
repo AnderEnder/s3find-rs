@@ -1,6 +1,5 @@
 use std::io::{self, BufWriter, Write};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use clap::Parser;
 use s3find::adapters::aws;
@@ -27,7 +26,7 @@ async fn run_cli() -> S3FindResult<()> {
     }
 
     let client = aws::setup_client(&args).await;
-    let pipeline = Pipeline::from_opts(&args, Arc::new(client));
+    let pipeline = Pipeline::from_opts(&args, client);
 
     let mut out: Box<dyn Write + Send> = if pipeline.buffered_output() {
         Box::new(BufWriter::new(io::stdout()))

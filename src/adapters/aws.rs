@@ -1,5 +1,4 @@
 use anyhow::{Error, anyhow};
-use async_trait::async_trait;
 use aws_config::{BehaviorVersion, meta::credentials::CredentialsProviderChain};
 use aws_sdk_s3::{
     Client,
@@ -83,69 +82,73 @@ pub struct VersionsPage {
 ///
 /// Listing, tag fetching and commands all go through this trait, so every layer
 /// can be tested against an in-memory fake instead of a real or replayed S3.
-#[async_trait]
+/// Implementations write these as plain `async fn`s; the trait spells out the
+/// returned futures so callers can rely on them being `Send`.
 pub trait S3Client: Send + Sync {
     fn region(&self) -> Option<String>;
 
-    async fn list_objects(&self, request: ListObjectsRequest<'_>) -> Result<ObjectsPage, Error>;
+    fn list_objects(
+        &self,
+        request: ListObjectsRequest<'_>,
+    ) -> impl Future<Output = Result<ObjectsPage, Error>> + Send;
 
-    async fn list_object_versions(
+    fn list_object_versions(
         &self,
         request: ListVersionsRequest<'_>,
-    ) -> Result<VersionsPage, Error>;
+    ) -> impl Future<Output = Result<VersionsPage, Error>> + Send;
 
-    async fn delete_objects(
+    fn delete_objects(
         &self,
         bucket: &str,
         objects: Vec<DeleteObjectRequest>,
-    ) -> Result<Vec<DeletedObjectInfo>, Error>;
+    ) -> impl Future<Output = Result<Vec<DeletedObjectInfo>, Error>> + Send;
 
-    async fn put_object_tagging(
+    fn put_object_tagging(
         &self,
         bucket: &str,
         key: &str,
         version_id: Option<&str>,
         tags: Vec<Tag>,
-    ) -> Result<(), Error>;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    async fn get_object_tagging(
+    fn get_object_tagging(
         &self,
         bucket: &str,
         key: &str,
         version_id: Option<&str>,
-    ) -> Result<Vec<Tag>, TagFetchError>;
+    ) -> impl Future<Output = Result<Vec<Tag>, TagFetchError>> + Send;
 
-    async fn put_object_acl_public_read(
+    fn put_object_acl_public_read(
         &self,
         bucket: &str,
         key: &str,
         version_id: Option<&str>,
-    ) -> Result<(), Error>;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    async fn get_object(
+    fn get_object(
         &self,
         bucket: &str,
         key: &str,
         version_id: Option<&str>,
-    ) -> Result<ByteStream, Error>;
+    ) -> impl Future<Output = Result<ByteStream, Error>> + Send;
 
-    async fn copy_object(
+    fn copy_object(
         &self,
         bucket: &str,
         key: &str,
         copy_source: &str,
         storage_class: Option<StorageClass>,
         metadata_directive: Option<MetadataDirective>,
-    ) -> Result<(), Error>;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    async fn restore_object(
+    fn restore_object(
         &self,
         bucket: &str,
         key: &str,
         version_id: Option<&str>,
         days: i32,
         tier: Tier,
-    ) -> Result<RestoreObjectStatus, Error>;
+    ) -> impl Future<Output = Result<RestoreObjectStatus, Error>> + Send;
 }
 
 /// Converts an SDK error into one whose message includes its causes, such as
@@ -196,7 +199,6 @@ fn classify_tagging_error(
     }
 }
 
-#[async_trait]
 impl S3Client for Client {
     fn region(&self) -> Option<String> {
         self.config()

@@ -1,9 +1,9 @@
 use std::io::Write;
 
 use anyhow::{Error, anyhow};
-use async_trait::async_trait;
 use tokio::process::Command;
 
+use crate::adapters::aws::S3Client;
 use crate::arg::Exec;
 use crate::error::FunctionError;
 use crate::object::StreamObject;
@@ -51,11 +51,10 @@ impl Exec {
     }
 }
 
-#[async_trait]
 impl RunCommand for Exec {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in objects {

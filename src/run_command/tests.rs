@@ -1,5 +1,6 @@
 use super::*;
 use crate::adapters::aws::{DeleteObjectRequest, RestoreObjectStatus};
+use crate::arg::*;
 use crate::testing::{ExecuteCaptured, FakeS3Client};
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::{
@@ -65,7 +66,6 @@ async fn test_multiple_delete_with_fake_client_records_version_ids() -> Result<(
     ];
 
     Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &objects)
         .await?;
 
@@ -98,7 +98,6 @@ async fn test_multiple_delete_empty_input_skips_delete_request() -> Result<(), E
     };
 
     Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &[])
         .await?;
 
@@ -117,7 +116,6 @@ async fn test_multiple_delete_missing_key_returns_error() {
     let objects = vec![StreamObject::from_object(Object::builder().build())];
 
     let err = Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &objects)
         .await
         .unwrap_err();
@@ -149,7 +147,6 @@ async fn test_set_tags_with_fake_client_records_tags() -> Result<(), Error> {
             },
         ],
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -188,7 +185,6 @@ async fn test_list_tags_with_fake_client_fetches_tags() -> Result<(), Error> {
     }];
 
     Cmd::LsTags(ListTags {})
-        .into_command()
         .execute_captured(&client, &path, &objects)
         .await?;
 
@@ -225,7 +221,6 @@ async fn test_download_with_fake_client_writes_file() -> Result<(), Error> {
         destination: temp_dir.path().to_string_lossy().to_string(),
         force: true,
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -259,7 +254,6 @@ async fn test_s3_copy_with_fake_client_records_request() -> Result<(), Error> {
         flat: false,
         storage_class: Some(StorageClass::Glacier),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -296,7 +290,6 @@ async fn test_s3_move_with_fake_client_records_copy_and_delete() -> Result<(), E
         flat: false,
         storage_class: Some(StorageClass::StandardIa),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -334,7 +327,6 @@ async fn test_s3_move_delete_markers_only_skips_delete_request() -> Result<(), E
         flat: false,
         storage_class: Some(StorageClass::StandardIa),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -371,7 +363,6 @@ async fn test_restore_with_fake_client_records_request() -> Result<(), Error> {
         days: 7,
         tier: Tier::Bulk,
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await?;
 
@@ -639,7 +630,7 @@ async fn test_advanced_print() -> Result<(), Error> {
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Print(AdvancedPrint::default()).into_command();
+    let cmd = Cmd::Print(AdvancedPrint::default());
     let client = FakeS3Client::default();
 
     let path = S3Path {
@@ -673,8 +664,7 @@ async fn smoke_advanced_print_json_execute() -> Result<(), Error> {
 
     let cmd = Cmd::Print(AdvancedPrint {
         format: PrintFormat::Json,
-    })
-    .into_command();
+    });
 
     let client = FakeS3Client::default();
     let path = S3Path {
@@ -709,8 +699,7 @@ async fn smoke_advanced_print_csv_execute() -> Result<(), Error> {
 
     let cmd = Cmd::Print(AdvancedPrint {
         format: PrintFormat::Csv,
-    })
-    .into_command();
+    });
 
     let client = FakeS3Client::default();
     let path = S3Path {
@@ -737,7 +726,7 @@ async fn test_fastprint() -> Result<(), Error> {
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Ls(FastPrint {}).into_command();
+    let cmd = Cmd::Ls(FastPrint {});
     let client = FakeS3Client::default();
 
     let path = S3Path {
@@ -763,7 +752,7 @@ async fn smoke_donothing() -> Result<(), Error> {
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Nothing(DoNothing {}).into_command();
+    let cmd = Cmd::Nothing(DoNothing {});
     let client = FakeS3Client::default();
 
     let path = S3Path {
@@ -792,8 +781,7 @@ async fn smoke_exec() -> Result<(), Error> {
 
     let cmd = Cmd::Exec(Exec {
         utility: "echo {}".to_owned(),
-    })
-    .into_command();
+    });
 
     let client = FakeS3Client::default();
 
@@ -880,8 +868,7 @@ async fn test_download_with_replay_client() -> Result<(), Error> {
     let cmd = Cmd::Download(Download {
         destination: temp_path.clone(),
         force: true,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -940,8 +927,7 @@ async fn test_download_skips_existing_file_and_continues() -> Result<(), Error> 
     let cmd = Cmd::Download(Download {
         destination: temp_path.clone(),
         force: false,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1018,7 +1004,7 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::Public(SetPublic {}).into_command();
+    let cmd = Cmd::Public(SetPublic {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1038,7 +1024,7 @@ async fn test_set_public_defaults_region_when_client_region_is_missing() -> Resu
         ..Default::default()
     };
     let stream_obj = StreamObject::from_object(Object::builder().key("test/file.txt").build());
-    let cmd = Cmd::Public(SetPublic {}).into_command();
+    let cmd = Cmd::Public(SetPublic {});
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
         prefix: None,
@@ -1113,7 +1099,7 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::Delete(MultipleDelete {}).into_command();
+    let cmd = Cmd::Delete(MultipleDelete {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1165,7 +1151,6 @@ async fn test_multiple_delete_propagates_request_failure() {
     };
 
     let result = Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &[StreamObject::from_object(object)])
         .await;
 
@@ -1212,7 +1197,6 @@ async fn test_multiple_delete_propagates_partial_delete_failure() {
     };
 
     let result = Cmd::Delete(MultipleDelete {})
-        .into_command()
         .execute_captured(&client, &path, &[StreamObject::from_object(object)])
         .await;
 
@@ -1286,7 +1270,7 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         },
     ];
 
-    let cmd = Cmd::Tags(SetTags { tags }).into_command();
+    let cmd = Cmd::Tags(SetTags { tags });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1329,7 +1313,6 @@ async fn test_set_tags_rejects_too_many_tags() {
             })
             .collect(),
     })
-    .into_command()
     .execute_captured(&client, &path, &objects)
     .await;
 
@@ -1419,7 +1402,7 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1483,7 +1466,7 @@ async fn test_list_tags_with_version_id() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1540,7 +1523,7 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1595,7 +1578,7 @@ async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::LsTags(ListTags {}).into_command();
+    let cmd = Cmd::LsTags(ListTags {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1698,8 +1681,7 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: None,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1767,8 +1749,7 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: Some(StorageClass::Glacier),
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1857,8 +1838,7 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: Some(StorageClass::IntelligentTiering),
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -1978,8 +1958,7 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: None,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2119,8 +2098,7 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
     let cmd = Cmd::Restore(Restore {
         days: 7,
         tier: aws_sdk_s3::types::Tier::Standard,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2484,8 +2462,7 @@ async fn test_change_storage_class() -> Result<(), Error> {
 
     let cmd = Cmd::ChangeStorage(ChangeStorage {
         storage_class: StorageClass::Glacier,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2653,7 +2630,7 @@ async fn test_delete_versioned_object() -> Result<(), Error> {
             .build(),
     );
 
-    let cmd = Cmd::Delete(MultipleDelete {}).into_command();
+    let cmd = Cmd::Delete(MultipleDelete {});
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),
@@ -2723,8 +2700,7 @@ async fn test_copy_versioned_object() -> Result<(), Error> {
         destination,
         flat: true,
         storage_class: None,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "source-bucket".to_owned(),
@@ -2783,8 +2759,7 @@ async fn test_download_versioned_object() -> Result<(), Error> {
     let cmd = Cmd::Download(Download {
         destination: temp_dir.to_string_lossy().to_string(),
         force: true,
-    })
-    .into_command();
+    });
 
     let path = S3Path {
         bucket: "test-bucket".to_owned(),

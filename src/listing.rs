@@ -47,8 +47,8 @@ impl ListingOptions {
 }
 
 /// Lists objects in traversal order. The first error ends the stream.
-pub fn list_objects<'a>(
-    client: &'a dyn S3Client,
+pub fn list_objects<'a, C: S3Client>(
+    client: &'a C,
     options: &'a ListingOptions,
 ) -> BoxStream<'a, S3FindResult<StreamObject>> {
     match (options.all_versions, options.maxdepth) {
@@ -66,8 +66,8 @@ pub fn list_objects<'a>(
 }
 
 /// Every object under the prefix, in key order.
-fn list_flat<'a>(
-    client: &'a dyn S3Client,
+fn list_flat<'a, C: S3Client>(
+    client: &'a C,
     options: &'a ListingOptions,
 ) -> BoxStream<'a, S3FindResult<StreamObject>> {
     object_pages(
@@ -89,8 +89,8 @@ fn list_flat<'a>(
 }
 
 /// Pages of a ListObjectsV2 walk, following continuation tokens.
-fn object_pages<'a>(
-    client: &'a dyn S3Client,
+fn object_pages<'a, C: S3Client>(
+    client: &'a C,
     bucket: &'a str,
     prefix: String,
     delimiter: Option<&'a str>,
@@ -130,8 +130,8 @@ fn object_pages<'a>(
 /// Depth-first walk: each page's objects, then each of its subdirectories.
 /// Objects found at `depth` have that many '/' in their key after the
 /// starting prefix; subdirectories are only entered while `depth < maxdepth`.
-fn list_to_depth<'a>(
-    client: &'a dyn S3Client,
+fn list_to_depth<'a, C: S3Client>(
+    client: &'a C,
     bucket: &'a str,
     prefix: String,
     depth: usize,
@@ -167,8 +167,8 @@ fn list_to_depth<'a>(
     })
 }
 
-fn list_versions<'a>(
-    client: &'a dyn S3Client,
+fn list_versions<'a, C: S3Client>(
+    client: &'a C,
     options: &'a ListingOptions,
 ) -> BoxStream<'a, S3FindResult<StreamObject>> {
     Box::pin(try_stream! {

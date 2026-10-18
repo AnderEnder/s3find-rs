@@ -2945,7 +2945,6 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "async-stream",
- "async-trait",
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-runtime",

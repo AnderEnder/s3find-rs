@@ -28,7 +28,7 @@ fn versioned(prefix: Option<&str>) -> ListingOptions {
 }
 
 async fn collect(
-    client: &dyn S3Client,
+    client: &impl S3Client,
     options: &ListingOptions,
 ) -> S3FindResult<Vec<StreamObject>> {
     list_objects(client, options).try_collect().await

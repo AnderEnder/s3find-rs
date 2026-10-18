@@ -1,8 +1,7 @@
 use anyhow::Error;
-use async_trait::async_trait;
 use aws_sdk_s3::types::ObjectStorageClass;
 
-use crate::adapters::aws::RestoreObjectStatus;
+use crate::adapters::aws::{RestoreObjectStatus, S3Client};
 use crate::arg::Restore;
 use crate::object::StreamObject;
 
@@ -15,11 +14,10 @@ fn is_archived(object: &StreamObject) -> bool {
     )
 }
 
-#[async_trait]
 impl RunCommand for Restore {
-    async fn execute(
+    async fn execute<C: S3Client>(
         &self,
-        ctx: &mut CommandContext<'_>,
+        ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
         for object in live_objects(objects).filter(|object| is_archived(object)) {

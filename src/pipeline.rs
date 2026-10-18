@@ -3,12 +3,11 @@
 
 use std::future::ready;
 use std::io::Write;
-use std::sync::Arc;
 
 use futures::{Stream, StreamExt, TryStreamExt};
 
 use crate::adapters::aws::S3Client;
-use crate::arg::FindOpt;
+use crate::arg::{Cmd, FindOpt};
 use crate::error::{S3FindError, S3FindResult};
 use crate::filter::FilterList;
 use crate::listing::{ListingOptions, list_objects};
@@ -26,36 +25,23 @@ struct TagStage {
     filters: FilterList,
 }
 
-pub struct Pipeline {
-    client: Arc<dyn S3Client>,
+/// Runs a command over the objects under an S3 path.
+///
+/// Generic over the S3 client and the command, so the CLI runs
+/// `Pipeline<aws_sdk_s3::Client, Cmd>` while tests plug in fakes.
+pub struct Pipeline<C, K = Cmd> {
+    client: C,
     listing: ListingOptions,
     filters: FilterList,
     tag_stage: Option<TagStage>,
     limit: Option<usize>,
-    command: Box<dyn RunCommand>,
+    command: K,
     summarize: bool,
 }
 
-impl Pipeline {
-    /// A pipeline that runs `command` on every listed object.
-    pub fn new(
-        client: Arc<dyn S3Client>,
-        listing: ListingOptions,
-        command: Box<dyn RunCommand>,
-    ) -> Self {
-        Self {
-            client,
-            listing,
-            filters: FilterList::new(),
-            tag_stage: None,
-            limit: None,
-            command,
-            summarize: false,
-        }
-    }
-
-    pub fn from_opts(opts: &FindOpt, client: Arc<dyn S3Client>) -> Self {
-        let command = opts.cmd.clone().unwrap_or_default().into_command();
+impl<C: S3Client> Pipeline<C> {
+    pub fn from_opts(opts: &FindOpt, client: C) -> Self {
+        let command = opts.cmd.clone().unwrap_or_default();
 
         Self::new(client, ListingOptions::from_opts(opts), command)
             .with_filters(FilterList::from_opts(opts))
@@ -65,6 +51,21 @@ impl Pipeline {
             )
             .with_limit(opts.limit)
             .with_summary(opts.summarize)
+    }
+}
+
+impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
+    /// A pipeline that runs `command` on every listed object.
+    pub fn new(client: C, listing: ListingOptions, command: K) -> Self {
+        Self {
+            client,
+            listing,
+            filters: FilterList::new(),
+            tag_stage: None,
+            limit: None,
+            command,
+            summarize: false,
+        }
     }
 
     /// Filters answerable from listing metadata.
@@ -77,11 +78,7 @@ impl Pipeline {
     /// flight. Tags are only fetched for objects that pass the other filters.
     pub fn with_tag_filters(mut self, filters: FilterList, concurrency: usize) -> Self {
         self.tag_stage = (!filters.is_empty()).then(|| TagStage {
-            fetcher: TagFetcher::new(
-                Arc::clone(&self.client),
-                &self.listing.path.bucket,
-                concurrency,
-            ),
+            fetcher: TagFetcher::new(&self.listing.path.bucket, concurrency),
             filters,
         });
         self
@@ -104,6 +101,10 @@ impl Pipeline {
         self.command.buffered_output()
     }
 
+    pub fn client(&self) -> &C {
+        &self.client
+    }
+
     /// Tag fetch counters, when filtering on tags.
     pub fn tag_stats(&self) -> Option<&TagFetchStats> {
         self.tag_stage.as_ref().map(|stage| stage.fetcher.stats())
@@ -112,7 +113,7 @@ impl Pipeline {
     /// Lists objects and runs the command on every match, writing output to
     /// `out`. Returns summary statistics if enabled.
     pub async fn run(&self, out: &mut (dyn Write + Send)) -> S3FindResult<Option<FindStat>> {
-        let objects = list_objects(self.client.as_ref(), &self.listing);
+        let objects = list_objects(&self.client, &self.listing);
         self.process(objects, out).await
     }
 
@@ -155,7 +156,7 @@ impl Pipeline {
             None => candidates.left_stream(),
             Some(stage) => stage
                 .fetcher
-                .attach_tags_to_stream(candidates)
+                .attach_tags_to_stream(&self.client, candidates)
                 .try_filter(move |object| ready(stage.filters.matches(object)))
                 .right_stream(),
         };
@@ -170,7 +171,7 @@ impl Pipeline {
         out: &mut (dyn Write + Send),
     ) -> S3FindResult<()> {
         let mut ctx = CommandContext {
-            client: self.client.as_ref(),
+            client: &self.client,
             path: &self.listing.path,
             out,
         };
