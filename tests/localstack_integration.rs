@@ -617,6 +617,33 @@ async fn test_ls_with_prefix() {
 }
 
 #[tokio::test]
+async fn test_trailing_slash_excludes_sibling_prefixes() {
+    let bucket_name = unique_bucket_name("test-trailing-slash");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    fixture.put_object("logs/current.txt", b"current").await;
+    fixture
+        .put_object("logs-old/archived.txt", b"archived")
+        .await;
+
+    // With the slash, only keys under logs/ match.
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path("logs/")).arg("ls");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("logs/current.txt"))
+        .stdout(predicate::str::contains("logs-old/archived.txt").not());
+
+    // Without it, the path is a plain S3 prefix.
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path("logs")).arg("ls");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("logs/current.txt"))
+        .stdout(predicate::str::contains("logs-old/archived.txt"));
+}
+
+#[tokio::test]
 async fn test_combined_filters() {
     let bucket_name = unique_bucket_name("test-combined-filters");
     let fixture = LocalStackFixture::new(&bucket_name).await;

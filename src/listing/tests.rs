@@ -502,11 +502,12 @@ async fn test_sdk_maxdepth_uses_delimiter_per_level() {
         ),
     ]);
 
-    let objects = collect(&client, &options(Some("logs/"), 100, Some(1)))
+    // Inside logs/, root.txt is at depth 1 and 2024/jan.txt at depth 2.
+    let objects = collect(&client, &options(Some("logs/"), 100, Some(2)))
         .await
         .unwrap();
 
-    // logs/2024/01/ is two levels deep and is not listed.
+    // logs/2024/01/ is three levels deep and is not listed.
     assert_eq!(keys(&objects), ["logs/root.txt", "logs/2024/jan.txt"]);
     replay_client.assert_requests_match(&[]);
 }

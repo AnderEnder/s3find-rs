@@ -116,7 +116,8 @@ Exit status:
     )
 )]
 pub struct FindOpt {
-    /// S3 path to walk through. It should be s3://bucket/path
+    /// S3 path to walk through: s3://bucket/path/ for the keys under path/,
+    /// or s3://bucket/path for every key starting with path
     #[arg(name = "path")]
     pub path: S3Path,
 
@@ -370,9 +371,9 @@ Example:
         long,
         long_help = r#"Descend at most N levels of subdirectories.
 
-An object's depth is the number of '/' in its key after the prefix.
-Trailing slashes in the path are ignored, so for s3://bucket/logs/ the
-objects directly inside logs/ are at depth 1.
+An object's depth is the number of '/' in its key after the path,
+not counting a trailing slash, so for s3://bucket/logs/ the objects
+directly inside logs/ are at depth 1.
 
 Example: s3find s3://bucket/logs/ --maxdepth 2 ls
   logs/file.txt          → depth 1 (included)
@@ -648,10 +649,18 @@ impl FromStr for S3Path {
             return Err(invalid().into());
         }
 
-        // Strip trailing slashes for consistent behavior
-        let prefix = captures
-            .get(3)
-            .map(|prefix| prefix.as_str().trim_end_matches('/').to_owned());
+        // A trailing slash limits the path to that directory: s3://b/logs/
+        // excludes logs-old/, which s3://b/logs (a plain S3 prefix) matches.
+        // Repeated trailing slashes count as one, and s3://b// is the bucket.
+        let prefix = captures.get(3).map(|prefix| {
+            let prefix = prefix.as_str();
+            let trimmed = prefix.trim_end_matches('/');
+            if trimmed.len() < prefix.len() && !trimmed.is_empty() {
+                format!("{trimmed}/")
+            } else {
+                trimmed.to_owned()
+            }
+        });
 
         Ok(S3Path { bucket, prefix })
     }
@@ -872,40 +881,22 @@ mod tests {
 
     #[test]
     fn s3path_trailing_slash_handling() {
-        // Trailing slashes should be stripped for consistent behavior
-        assert_eq!(
-            "s3://testbucket/path/".parse().ok(),
-            Some(S3Path {
-                bucket: "testbucket".to_owned(),
-                prefix: Some("path".to_owned()),
-            })
-        );
+        let parsed = |path: &str| path.parse::<S3Path>().unwrap().prefix;
 
+        // A trailing slash is kept, so the path means that directory.
+        assert_eq!(parsed("s3://testbucket/path/"), Some("path/".to_owned()));
         assert_eq!(
-            "s3://testbucket/multi/path/".parse().ok(),
-            Some(S3Path {
-                bucket: "testbucket".to_owned(),
-                prefix: Some("multi/path".to_owned()),
-            })
+            parsed("s3://testbucket/multi/path/"),
+            Some("multi/path/".to_owned())
         );
+        assert_eq!(parsed("s3://testbucket/path"), Some("path".to_owned()));
 
-        // Multiple trailing slashes should also be stripped
-        assert_eq!(
-            "s3://testbucket/path///".parse().ok(),
-            Some(S3Path {
-                bucket: "testbucket".to_owned(),
-                prefix: Some("path".to_owned()),
-            })
-        );
+        // Repeated trailing slashes count as one.
+        assert_eq!(parsed("s3://testbucket/path///"), Some("path/".to_owned()));
 
-        // s3://bucket/ should still result in empty prefix
-        assert_eq!(
-            "s3://testbucket/".parse().ok(),
-            Some(S3Path {
-                bucket: "testbucket".to_owned(),
-                prefix: Some("".to_owned()),
-            })
-        );
+        // s3://bucket/ and s3://bucket// are the whole bucket.
+        assert_eq!(parsed("s3://testbucket/"), Some(String::new()));
+        assert_eq!(parsed("s3://testbucket//"), Some(String::new()));
     }
 
     #[test]
