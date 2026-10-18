@@ -105,12 +105,12 @@ cargo clippy --all-targets --all-features -- -D warnings
 ### Behavior Notes
 
 - Listing failures and subcommand failures return a non-zero exit code instead of succeeding with partial output.
-- A path ending in `/` means that directory: `s3://bucket/logs/` matches only keys under `logs/`. Without the slash, the path is a plain S3 prefix, so `s3://bucket/logs` also matches `logs-old/` and `logs.txt`.
 - `download` skips existing destination files and continues with the remaining objects unless `--force` is set.
 - With tag filters enabled, result order stays aligned with S3 traversal order, and `--limit` applies to that ordered match set.
 - `--summarize` prints normal summary statistics and, when tag filters are used, tag fetch statistics including `excluded` objects.
 - Commands that make one S3 request per object (`copy`, `move`, `download`, `tags`, `lstags`, `public`, `restore`, `change-storage`) keep up to `--concurrency` requests in flight (default: 32) and still print results in traversal order. On an error they stop, but requests already in flight may have completed; `--concurrency 1` processes one object at a time. `exec` always runs one command at a time.
 - Listing runs up to one batch (1000 objects) ahead of the command, and `--maxdepth` fetches the first page of up to 8 subdirectories per level at once.
+- A path ending in `/` means that directory: `s3://bucket/logs/` matches only keys under `logs/`. Without the slash, the path is a plain S3 prefix, so `s3://bucket/logs` also matches `logs-old/` and `logs.txt`.
 
 ## Usage
 
