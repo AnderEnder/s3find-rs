@@ -123,7 +123,7 @@ impl FilterList {
         let now = DateTime::from(SystemTime::now()).secs();
 
         let mut filters = Self::new();
-        filters.extend(opts.storage_class.iter().cloned());
+        filters.extend(opts.storage_class.as_ref().map(ObjectStorageClass::from));
         filters.extend(opts.size.iter().cloned());
         filters.extend(
             opts.mtime

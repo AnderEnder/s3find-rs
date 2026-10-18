@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use anyhow::Error;
-use aws_smithy_types::date_time::Format;
+use aws_sdk_s3::primitives::DateTimeFormat;
 use csv::WriterBuilder;
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +69,7 @@ impl From<&StreamObject> for ObjectRecord {
             size: object.size.unwrap_or_default(),
             last_modified: object
                 .last_modified
-                .and_then(|x| x.fmt(Format::DateTime).ok())
+                .and_then(|x| x.fmt(DateTimeFormat::DateTime).ok())
                 .unwrap_or_default(),
             key: object.key.clone().unwrap_or_default(),
             storage_class: object
@@ -109,7 +109,7 @@ impl AdvancedPrint {
             object.size.unwrap_or_default(),
             object
                 .last_modified
-                .and_then(|x| x.fmt(Format::DateTime).ok())
+                .and_then(|x| x.fmt(DateTimeFormat::DateTime).ok())
                 .unwrap_or("None".to_string()),
             bucket,
             stream_obj.display_key(),

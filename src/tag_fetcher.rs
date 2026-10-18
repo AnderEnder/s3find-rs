@@ -155,9 +155,9 @@ mod tests {
     use crate::testing::FakeS3Client;
     use aws_config::BehaviorVersion;
     use aws_sdk_s3::Client;
+    use aws_sdk_s3::primitives::SdkBody;
     use aws_sdk_s3::types::{Object, Tag};
     use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
-    use aws_smithy_types::body::SdkBody;
     use futures::{StreamExt, stream};
     use http::{HeaderValue, StatusCode};
 

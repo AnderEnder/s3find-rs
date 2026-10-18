@@ -8,7 +8,7 @@ use aws_sdk_s3::types::{MetadataDirective, StorageClass};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::adapters::aws::{DeleteObjectRequest, S3Client};
-use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path};
+use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path, StorageClassName};
 use crate::error::FunctionError;
 use crate::object::StreamObject;
 use crate::utils::combine_keys;
@@ -74,7 +74,7 @@ async fn copy_objects<C: S3Client>(
     objects: &[StreamObject],
     destination: &S3Path,
     flat: bool,
-    storage_class: Option<&StorageClass>,
+    storage_class: Option<&StorageClassName>,
     metadata_directive: Option<MetadataDirective>,
     verb: &str,
 ) -> Result<(), Error> {
@@ -94,7 +94,7 @@ async fn copy_objects<C: S3Client>(
                 &destination.bucket,
                 &target,
                 &source_path,
-                storage_class.cloned(),
+                storage_class.map(StorageClass::from),
                 metadata_directive.clone(),
             )
             .await?;
@@ -169,7 +169,7 @@ impl RunCommand for ChangeStorage {
 
             writeln!(
                 ctx.out,
-                "Changing storage class for s3://{}/{} to {:?}",
+                "Changing storage class for s3://{}/{} to {}",
                 ctx.path.bucket,
                 object.display_key(),
                 self.storage_class
@@ -183,7 +183,7 @@ impl RunCommand for ChangeStorage {
                     &ctx.path.bucket,
                     key,
                     &source_path,
-                    Some(self.storage_class.clone()),
+                    Some(StorageClass::from(&self.storage_class)),
                     Some(MetadataDirective::Copy),
                 )
                 .await?;

@@ -1,5 +1,5 @@
 use anyhow::{Error, anyhow};
-use aws_config::{BehaviorVersion, meta::credentials::CredentialsProviderChain};
+use aws_config::{BehaviorVersion, Region, meta::credentials::CredentialsProviderChain};
 use aws_sdk_s3::{
     Client,
     config::Credentials,
@@ -8,12 +8,12 @@ use aws_sdk_s3::{
     primitives::ByteStream,
     types::{
         Delete, DeleteMarkerEntry, GlacierJobParameters, MetadataDirective, Object,
-        ObjectCannedAcl, ObjectIdentifier, ObjectVersion, RestoreRequest, StorageClass, Tag,
-        Tagging, Tier,
+        ObjectCannedAcl, ObjectIdentifier, ObjectStorageClass, ObjectVersion, RestoreRequest,
+        StorageClass, Tag, Tagging, Tier,
     },
 };
 
-use crate::arg::{self, FindOpt};
+use crate::arg::{self, FindOpt, RestoreTier, StorageClassName};
 use crate::error::TagFetchError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +76,28 @@ pub struct VersionsPage {
     pub delete_markers: Vec<DeleteMarkerEntry>,
     /// Where the next page starts, `None` on the last page.
     pub next_marker: Option<VersionMarker>,
+}
+
+impl From<&StorageClassName> for StorageClass {
+    fn from(name: &StorageClassName) -> Self {
+        Self::from(name.as_str())
+    }
+}
+
+impl From<&StorageClassName> for ObjectStorageClass {
+    fn from(name: &StorageClassName) -> Self {
+        Self::from(name.as_str())
+    }
+}
+
+impl From<RestoreTier> for Tier {
+    fn from(tier: RestoreTier) -> Self {
+        match tier {
+            RestoreTier::Standard => Self::Standard,
+            RestoreTier::Bulk => Self::Bulk,
+            RestoreTier::Expedited => Self::Expedited,
+        }
+    }
 }
 
 /// The S3 operations s3find uses.
@@ -468,7 +490,9 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
     } = args;
 
     let region_provider = match aws_region {
-        Some(region) => aws_config::meta::region::RegionProviderChain::first_try(region.to_owned()),
+        Some(region) => {
+            aws_config::meta::region::RegionProviderChain::first_try(Region::new(region.clone()))
+        }
         None => aws_config::meta::region::RegionProviderChain::default_provider(),
     };
 
@@ -594,11 +618,28 @@ mod tests {
             let client = setup_client(&opts).await;
 
             assert_eq!(
-                client.config().region(),
-                opts.aws_region.as_ref(),
+                client.config().region().map(|region| region.as_ref()),
+                opts.aws_region.as_deref(),
                 "{args:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_option_types_convert_to_sdk_types() {
+        let standard_ia = StorageClassName::from("STANDARD_IA");
+        assert_eq!(StorageClass::from(&standard_ia), StorageClass::StandardIa);
+        assert_eq!(
+            ObjectStorageClass::from(&standard_ia),
+            ObjectStorageClass::StandardIa
+        );
+
+        let custom = StorageClassName::from("COLD");
+        assert_eq!(StorageClass::from(&custom).as_str(), "COLD");
+
+        assert_eq!(Tier::from(RestoreTier::Standard), Tier::Standard);
+        assert_eq!(Tier::from(RestoreTier::Bulk), Tier::Bulk);
+        assert_eq!(Tier::from(RestoreTier::Expedited), Tier::Expedited);
     }
 
     #[tokio::test]

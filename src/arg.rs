@@ -1,10 +1,13 @@
-use aws_sdk_s3::types::ObjectStorageClass;
-use aws_sdk_s3::types::StorageClass;
-use aws_sdk_s3::types::Tier;
-use aws_types::region::Region;
+// Command-line options.
+//
+// `build.rs` includes this file to generate shell completions, so it may only
+// use std and the crates listed under `[build-dependencies]`, and never the
+// AWS SDK, which would otherwise be compiled a second time for the build script.
+
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::Pattern;
 use regex::Regex;
+use std::fmt;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -56,10 +59,6 @@ fn validate_bucket_name(bucket: &str) -> bool {
     }
 
     true
-}
-
-fn region(s: &str) -> std::result::Result<Region, clap::Error> {
-    Ok(Region::new(s.to_owned()))
 }
 
 fn parse_restore_days(s: &str) -> std::result::Result<i32, clap::Error> {
@@ -118,8 +117,8 @@ pub struct FindOpt {
     pub aws_secret_key: Option<String>,
 
     // The region to use. If not specified, will use the region from AWS profile or default to us-east-1
-    #[arg(name = "aws-region", long, value_parser=region)]
-    pub aws_region: Option<Region>,
+    #[arg(name = "aws-region", long)]
+    pub aws_region: Option<String>,
 
     /// Custom S3 endpoint URL for non-AWS S3-compatible services (e.g., MinIO, Ceph)
     #[arg(name = "endpoint-url", long)]
@@ -160,7 +159,7 @@ Valid values are:
     STANDARD_IA
     Unknown values are also supported"#
     )]
-    pub storage_class: Option<ObjectStorageClass>,
+    pub storage_class: Option<StorageClassName>,
 
     /// Filter objects by tag key=value pair (requires GetObjectTagging permission)
     #[arg(
@@ -448,7 +447,7 @@ pub struct S3Copy {
 
     /// Storage class for the copied objects
     #[arg(long = "storage-class")]
-    pub storage_class: Option<StorageClass>,
+    pub storage_class: Option<StorageClassName>,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
@@ -463,7 +462,7 @@ pub struct S3Move {
 
     /// Storage class for the moved objects
     #[arg(long = "storage-class")]
-    pub storage_class: Option<StorageClass>,
+    pub storage_class: Option<StorageClassName>,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
@@ -483,23 +482,63 @@ pub struct Restore {
     pub days: i32,
 
     /// Retrieval tier for restoring objects
-    #[arg(long, default_value = "Standard")]
-    pub tier: Tier,
+    #[arg(long, default_value = "Standard", ignore_case = true)]
+    pub tier: RestoreTier,
 }
 
 #[derive(Args, Clone, PartialEq, Debug)]
 pub struct ChangeStorage {
     /// New storage class to apply to objects
     #[arg(name = "class")]
-    pub storage_class: StorageClass,
+    pub storage_class: StorageClassName,
 }
 
 impl Default for Restore {
     fn default() -> Self {
         Self {
             days: 1,
-            tier: Tier::Standard,
+            tier: RestoreTier::Standard,
         }
+    }
+}
+
+/// How fast S3 restores an archived object; faster tiers cost more.
+#[derive(ValueEnum, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum RestoreTier {
+    /// The default tier
+    #[default]
+    #[value(name = "Standard")]
+    Standard,
+    /// The slowest and cheapest tier
+    #[value(name = "Bulk")]
+    Bulk,
+    /// The fastest tier; not available for DEEP_ARCHIVE
+    #[value(name = "Expedited")]
+    Expedited,
+}
+
+/// A storage class as S3 names it, such as `STANDARD_IA`.
+///
+/// Any name is accepted, so classes added to S3 later and those of
+/// S3-compatible services work too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageClassName(String);
+
+impl StorageClassName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for StorageClassName {
+    fn from(name: &str) -> Self {
+        Self(name.to_owned())
+    }
+}
+
+impl fmt::Display for StorageClassName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -748,21 +787,6 @@ impl FromStr for TagExistsFilter {
 mod tests {
     use super::*;
     use clap::Parser;
-
-    #[test]
-    fn region_correct() {
-        let region_result = region("us-west-2");
-        assert!(region_result.is_ok());
-
-        let r = region_result.unwrap();
-        assert_eq!(r.as_ref(), "us-west-2");
-
-        let region_result = region("eu-central-1");
-        assert!(region_result.is_ok());
-
-        let r = region_result.unwrap();
-        assert_eq!(r.as_ref(), "eu-central-1");
-    }
 
     #[test]
     fn s3path_correct() {
@@ -1040,10 +1064,7 @@ mod tests {
     fn test_aws_region() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--aws-region", "eu-west-1"]);
 
-        assert_eq!(
-            args.aws_region.as_ref().map(|r| r.as_ref()),
-            Some("eu-west-1")
-        );
+        assert_eq!(args.aws_region.as_deref(), Some("eu-west-1"));
     }
 
     #[test]
@@ -1086,7 +1107,33 @@ mod tests {
     fn test_storage_class_filter() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--storage-class", "STANDARD"]);
 
-        assert_eq!(args.storage_class, Some(ObjectStorageClass::Standard));
+        assert_eq!(args.storage_class, Some(StorageClassName::from("STANDARD")));
+    }
+
+    #[test]
+    fn test_storage_class_accepts_any_name() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "--storage-class", "COLD"]);
+
+        let storage_class = args.storage_class.unwrap();
+        assert_eq!(storage_class.as_str(), "COLD");
+        assert_eq!(storage_class.to_string(), "COLD");
+    }
+
+    #[test]
+    fn test_restore_tier_is_validated_ignoring_case() {
+        let tier = |value: &str| {
+            FindOpt::try_parse_from(["s3find", "s3://mybucket", "restore", "--tier", value]).map(
+                |args| match args.cmd {
+                    Some(Cmd::Restore(restore)) => restore.tier,
+                    other => panic!("unexpected command: {other:?}"),
+                },
+            )
+        };
+
+        assert_eq!(tier("Expedited").unwrap(), RestoreTier::Expedited);
+        assert_eq!(tier("bulk").unwrap(), RestoreTier::Bulk);
+        assert_eq!(tier("STANDARD").unwrap(), RestoreTier::Standard);
+        assert!(tier("Fastest").is_err());
     }
 
     #[test]
@@ -1226,7 +1273,7 @@ mod tests {
                     prefix: Some("dest".to_string()),
                 },
                 flat: false,
-                storage_class: Some(StorageClass::Glacier),
+                storage_class: Some(StorageClassName::from("GLACIER")),
             }))
         );
     }
@@ -1277,7 +1324,7 @@ mod tests {
             args_defaults.cmd,
             Some(Cmd::Restore(Restore {
                 days: 1,
-                tier: Tier::Standard,
+                tier: RestoreTier::Standard,
             }))
         );
 
@@ -1295,7 +1342,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 7,
-                tier: Tier::Bulk,
+                tier: RestoreTier::Bulk,
             }))
         );
 
@@ -1305,7 +1352,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 365,
-                tier: Tier::Standard, // Default tier
+                tier: RestoreTier::Standard, // Default tier
             }))
         );
 
@@ -1316,7 +1363,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 1, // Default days
-                tier: Tier::Expedited,
+                tier: RestoreTier::Expedited,
             }))
         );
 
@@ -1334,13 +1381,13 @@ mod tests {
             "Standard",
         ]);
 
-        assert_eq!(args.storage_class, Some(ObjectStorageClass::Glacier));
+        assert_eq!(args.storage_class, Some(StorageClassName::from("GLACIER")));
         assert_eq!(args.name.len(), 1);
         assert_eq!(
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 30,
-                tier: Tier::Standard,
+                tier: RestoreTier::Standard,
             }))
         );
     }
@@ -1352,7 +1399,7 @@ mod tests {
         assert_eq!(restore_default.days, 1, "Default days should be 1");
         assert_eq!(
             restore_default.tier,
-            Tier::Standard,
+            RestoreTier::Standard,
             "Default tier should be Standard"
         );
 
@@ -1432,7 +1479,10 @@ mod tests {
         assert_eq!(args.path.prefix, Some("archives".to_string()));
         assert_eq!(args.name.len(), 1);
         assert_eq!(args.regex.len(), 1);
-        assert_eq!(args.storage_class, Some(ObjectStorageClass::DeepArchive));
+        assert_eq!(
+            args.storage_class,
+            Some(StorageClassName::from("DEEP_ARCHIVE"))
+        );
         assert_eq!(args.mtime.len(), 1);
         assert_eq!(args.mtime[0], FindTime::Upper(90 * 24 * 3600)); // -90d
         assert_eq!(args.size.len(), 1);
@@ -1443,7 +1493,7 @@ mod tests {
             args.cmd,
             Some(Cmd::Restore(Restore {
                 days: 14,
-                tier: Tier::Standard,
+                tier: RestoreTier::Standard,
             }))
         );
     }
@@ -1493,7 +1543,7 @@ mod tests {
                     prefix: Some("dest".to_string()),
                 },
                 flat: false,
-                storage_class: Some(StorageClass::IntelligentTiering),
+                storage_class: Some(StorageClassName::from("INTELLIGENT_TIERING")),
             }))
         );
     }
@@ -1512,7 +1562,7 @@ mod tests {
         assert_eq!(
             args.cmd,
             Some(Cmd::ChangeStorage(ChangeStorage {
-                storage_class: StorageClass::Glacier,
+                storage_class: StorageClassName::from("GLACIER"),
             }))
         );
 
@@ -1526,7 +1576,7 @@ mod tests {
         assert_eq!(
             args.cmd,
             Some(Cmd::ChangeStorage(ChangeStorage {
-                storage_class: StorageClass::DeepArchive,
+                storage_class: StorageClassName::from("DEEP_ARCHIVE"),
             }))
         );
     }

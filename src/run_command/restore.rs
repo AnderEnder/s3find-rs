@@ -28,7 +28,7 @@ impl RunCommand for Restore {
                     object.require_key()?,
                     object.version_id.as_deref(),
                     self.days,
-                    self.tier.clone(),
+                    self.tier.into(),
                 )
                 .await?;
 

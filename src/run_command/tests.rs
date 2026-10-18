@@ -3,13 +3,12 @@ use crate::adapters::aws::{DeleteObjectRequest, RestoreObjectStatus};
 use crate::arg::*;
 use crate::testing::{ExecuteCaptured, FakeS3Client};
 use aws_config::BehaviorVersion;
+use aws_sdk_s3::primitives::{DateTimeFormat, SdkBody};
 use aws_sdk_s3::{
     primitives::DateTime,
-    types::{Object, ObjectStorageClass, StorageClass, Tag, Tier},
+    types::{Object, ObjectStorageClass, Tag},
 };
 use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
-use aws_smithy_types::body::SdkBody;
-use aws_smithy_types::date_time::Format;
 use http::{HeaderValue, StatusCode};
 use std::fs;
 use std::path::PathBuf;
@@ -28,7 +27,7 @@ fn test_advanced_print_object() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -252,7 +251,7 @@ async fn test_s3_copy_with_fake_client_records_request() -> Result<(), Error> {
             prefix: Some("archive".to_string()),
         },
         flat: false,
-        storage_class: Some(StorageClass::Glacier),
+        storage_class: Some(StorageClassName::from("GLACIER")),
     })
     .execute_captured(&client, &path, &objects)
     .await?;
@@ -288,7 +287,7 @@ async fn test_s3_move_with_fake_client_records_copy_and_delete() -> Result<(), E
             prefix: Some("archive".to_string()),
         },
         flat: false,
-        storage_class: Some(StorageClass::StandardIa),
+        storage_class: Some(StorageClassName::from("STANDARD_IA")),
     })
     .execute_captured(&client, &path, &objects)
     .await?;
@@ -325,7 +324,7 @@ async fn test_s3_move_delete_markers_only_skips_delete_request() -> Result<(), E
             prefix: Some("archive".to_string()),
         },
         flat: false,
-        storage_class: Some(StorageClass::StandardIa),
+        storage_class: Some(StorageClassName::from("STANDARD_IA")),
     })
     .execute_captured(&client, &path, &objects)
     .await?;
@@ -361,7 +360,7 @@ async fn test_restore_with_fake_client_records_request() -> Result<(), Error> {
 
     Cmd::Restore(Restore {
         days: 7,
-        tier: Tier::Bulk,
+        tier: RestoreTier::Bulk,
     })
     .execute_captured(&client, &path, &objects)
     .await?;
@@ -420,7 +419,7 @@ fn test_fast_print_object() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -521,7 +520,7 @@ fn test_advanced_print_json() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -561,7 +560,7 @@ fn test_advanced_print_csv() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
@@ -573,7 +572,7 @@ fn test_advanced_print_csv() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::ReducedRedundancy)
         .last_modified(DateTime::from_str(
             "2020-01-01T12:30:45.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
@@ -625,7 +624,7 @@ async fn test_advanced_print() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -649,7 +648,9 @@ async fn smoke_advanced_print_json_execute() -> Result<(), Error> {
         .key("folder/file1.txt")
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
 
@@ -658,7 +659,9 @@ async fn smoke_advanced_print_json_execute() -> Result<(), Error> {
         .key("folder/file2.txt")
         .size(200)
         .storage_class(ObjectStorageClass::IntelligentTiering)
-        .last_modified(DateTime::from_str("2023-02-15T12:30:45.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-02-15T12:30:45.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
 
@@ -684,7 +687,9 @@ async fn smoke_advanced_print_csv_execute() -> Result<(), Error> {
         .key("data/report.csv")
         .size(5000)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
 
@@ -693,7 +698,9 @@ async fn smoke_advanced_print_csv_execute() -> Result<(), Error> {
         .key("data/archive.zip")
         .size(10000)
         .storage_class(ObjectStorageClass::DeepArchive)
-        .last_modified(DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-04-20T14:25:10.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
 
@@ -721,7 +728,7 @@ async fn test_fastprint() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -747,7 +754,7 @@ async fn smoke_donothing() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -774,7 +781,7 @@ async fn smoke_exec() -> Result<(), Error> {
         .storage_class(ObjectStorageClass::Standard)
         .last_modified(DateTime::from_str(
             "2017-07-19T19:04:17.000Z",
-            Format::DateTime,
+            DateTimeFormat::DateTime,
         )?)
         .build();
     let stream_obj = StreamObject::from_object(object);
@@ -832,7 +839,9 @@ async fn test_download_with_replay_client() -> Result<(), Error> {
         .key(key)
         .size(14) // Size of "Test content\n"
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj = StreamObject::from_object(object);
 
@@ -956,7 +965,9 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj1 = StreamObject::from_object(object1);
 
@@ -965,7 +976,9 @@ async fn test_set_public_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
     let stream_obj2 = StreamObject::from_object(object2);
 
@@ -1053,7 +1066,9 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1061,7 +1076,9 @@ async fn test_multiple_delete_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
@@ -1213,7 +1230,9 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1221,7 +1240,9 @@ async fn test_set_tags_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
@@ -1330,7 +1351,9 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1338,7 +1361,9 @@ async fn test_list_tags_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
@@ -1427,7 +1452,9 @@ async fn test_list_tags_with_version_id() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     // Request includes versionId query parameter
@@ -1500,7 +1527,9 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1508,7 +1537,9 @@ async fn test_list_tags_with_cached_tags() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     // No HTTP events needed - tags are cached
@@ -1563,7 +1594,9 @@ async fn test_list_tags_skips_delete_markers() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     // No HTTP events needed - delete marker should be skipped
@@ -1610,7 +1643,9 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1618,7 +1653,9 @@ async fn test_s3_copy_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
@@ -1705,7 +1742,9 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
         .key(key)
         .size(1000)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
@@ -1748,7 +1787,7 @@ async fn test_s3_copy_with_storage_class() -> Result<(), Error> {
     let cmd = Cmd::Copy(S3Copy {
         destination,
         flat: true,
-        storage_class: Some(StorageClass::Glacier),
+        storage_class: Some(StorageClassName::from("GLACIER")),
     });
 
     let path = S3Path {
@@ -1771,7 +1810,9 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
         .key(key)
         .size(1000)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req_copy = http::Request::builder()
@@ -1837,7 +1878,7 @@ async fn test_s3_move_with_storage_class() -> Result<(), Error> {
     let cmd = Cmd::Move(S3Move {
         destination,
         flat: true,
-        storage_class: Some(StorageClass::IntelligentTiering),
+        storage_class: Some(StorageClassName::from("INTELLIGENT_TIERING")),
     });
 
     let path = S3Path {
@@ -1861,7 +1902,9 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -1869,7 +1912,9 @@ async fn test_s3_move_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req_copy1 = http::Request::builder()
@@ -1985,7 +2030,9 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key1)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let deeparchive_object = Object::builder()
@@ -1993,7 +2040,9 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key2)
         .size(10000)
         .storage_class(ObjectStorageClass::DeepArchive)
-        .last_modified(DateTime::from_str("2023-04-20T14:25:10.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-04-20T14:25:10.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let restored_object = Object::builder()
@@ -2001,7 +2050,9 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key3)
         .size(15000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-05-15T11:30:20.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-05-15T11:30:20.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let invalid_state_object = Object::builder()
@@ -2009,7 +2060,9 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
         .key(key4)
         .size(20000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-06-25T16:45:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-06-25T16:45:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let glacier_request = http::Request::builder()
@@ -2097,7 +2150,7 @@ async fn test_restore_with_replay_client() -> Result<(), Error> {
 
     let cmd = Cmd::Restore(Restore {
         days: 7,
-        tier: aws_sdk_s3::types::Tier::Standard,
+        tier: RestoreTier::Standard,
     });
 
     let path = S3Path {
@@ -2129,7 +2182,9 @@ async fn test_restore_with_standard_tier() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let request_successful = http::Request::builder()
@@ -2157,7 +2212,7 @@ async fn test_restore_with_standard_tier() -> Result<(), Error> {
 
     let restore_cmd = Restore {
         days: 7,
-        tier: aws_sdk_s3::types::Tier::Standard,
+        tier: RestoreTier::Standard,
     };
 
     let path = S3Path {
@@ -2182,7 +2237,9 @@ async fn test_restore_with_expedited_tier() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
@@ -2210,7 +2267,7 @@ async fn test_restore_with_expedited_tier() -> Result<(), Error> {
 
     let restore_cmd = Restore {
         days: 2,
-        tier: aws_sdk_s3::types::Tier::Expedited,
+        tier: RestoreTier::Expedited,
     };
 
     let path = S3Path {
@@ -2235,7 +2292,9 @@ async fn test_restore_with_bulk_tier() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::DeepArchive)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
@@ -2263,7 +2322,7 @@ async fn test_restore_with_bulk_tier() -> Result<(), Error> {
 
     let restore_cmd = Restore {
         days: 30,
-        tier: aws_sdk_s3::types::Tier::Bulk,
+        tier: RestoreTier::Bulk,
     };
 
     let path = S3Path {
@@ -2292,7 +2351,9 @@ async fn test_restore_with_non_glacier_objects() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Standard) // Standard storage, not Glacier
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let events: Vec<ReplayEvent> = vec![];
@@ -2309,7 +2370,7 @@ async fn test_restore_with_non_glacier_objects() -> Result<(), Error> {
 
     let restore_cmd = Restore {
         days: 7,
-        tier: aws_sdk_s3::types::Tier::Standard,
+        tier: RestoreTier::Standard,
     };
 
     let path = S3Path {
@@ -2341,7 +2402,9 @@ async fn test_restore_with_maximum_days() -> Result<(), Error> {
         .key(key)
         .size(5000)
         .storage_class(ObjectStorageClass::Glacier)
-        .last_modified(DateTime::from_str("2023-03-10T09:15:30.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-03-10T09:15:30.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req = http::Request::builder()
@@ -2369,7 +2432,7 @@ async fn test_restore_with_maximum_days() -> Result<(), Error> {
 
     let restore_cmd = Restore {
         days: 365,
-        tier: aws_sdk_s3::types::Tier::Standard,
+        tier: RestoreTier::Standard,
     };
 
     let path = S3Path {
@@ -2395,7 +2458,9 @@ async fn test_change_storage_class() -> Result<(), Error> {
         .key(key1)
         .size(100)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let object2 = Object::builder()
@@ -2403,13 +2468,15 @@ async fn test_change_storage_class() -> Result<(), Error> {
         .key(key2)
         .size(200)
         .storage_class(ObjectStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-01-01T00:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-01-01T00:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let req1 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file1.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file1.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file1.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile1.txt")
         .header("x-amz-metadata-directive", "COPY")
         .header("x-amz-storage-class", "GLACIER")
         .body(SdkBody::empty())
@@ -2429,8 +2496,8 @@ async fn test_change_storage_class() -> Result<(), Error> {
 
     let req2 = http::Request::builder()
         .method("PUT")
-        .uri("https://test-bucket.s3.amazonaws.com/test/file2.txt")
-        .header("x-amz-copy-source", "test-bucket/test/file2.txt")
+        .uri("https://test-bucket.s3.us-east-1.amazonaws.com/test/file2.txt?x-id=CopyObject")
+        .header("x-amz-copy-source", "test-bucket/test%2Ffile2.txt")
         .header("x-amz-metadata-directive", "COPY")
         .header("x-amz-storage-class", "GLACIER")
         .body(SdkBody::empty())
@@ -2461,7 +2528,7 @@ async fn test_change_storage_class() -> Result<(), Error> {
     );
 
     let cmd = Cmd::ChangeStorage(ChangeStorage {
-        storage_class: StorageClass::Glacier,
+        storage_class: StorageClassName::from("GLACIER"),
     });
 
     let path = S3Path {
@@ -2471,9 +2538,16 @@ async fn test_change_storage_class() -> Result<(), Error> {
 
     let stream_obj1 = StreamObject::from_object(object1);
     let stream_obj2 = StreamObject::from_object(object2);
-    cmd.execute_captured(&client, &path, &[stream_obj1, stream_obj2])
+    let output = cmd
+        .execute_captured(&client, &path, &[stream_obj1, stream_obj2])
         .await?;
 
+    assert_eq!(
+        output,
+        "Changing storage class for s3://test-bucket/test/file1.txt to GLACIER\n\
+         Changing storage class for s3://test-bucket/test/file2.txt to GLACIER\n"
+    );
+    replay_client.assert_requests_match(&[]);
     Ok(())
 }
 
@@ -2529,7 +2603,9 @@ fn test_advanced_print_json_with_version_fields() -> Result<(), Error> {
         .is_latest(false)
         .size(1024)
         .storage_class(ObjectVersionStorageClass::Standard)
-        .last_modified(DateTime::from_str("2023-06-15T10:30:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-06-15T10:30:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let stream_obj = StreamObject::from_version(version);
@@ -2560,7 +2636,9 @@ fn test_advanced_print_json_with_delete_marker() -> Result<(), Error> {
         .key("data/deleted.txt")
         .version_id("dm789")
         .is_latest(true)
-        .last_modified(DateTime::from_str("2023-07-20T14:00:00.000Z", Format::DateTime).unwrap())
+        .last_modified(
+            DateTime::from_str("2023-07-20T14:00:00.000Z", DateTimeFormat::DateTime).unwrap(),
+        )
         .build();
 
     let stream_obj = StreamObject::from_delete_marker(marker);

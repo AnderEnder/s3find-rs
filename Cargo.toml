@@ -14,6 +14,7 @@ categories = ["command-line-utilities"]
 license = "BSD-2-Clause"
 exclude = [".gitignore", ".github", "codecov.yml"]
 edition = "2024"
+rust-version = "1.99"
 
 [features]
 localstack-tests = []
@@ -37,9 +38,7 @@ indicatif = "0.18"
 humansize = "2"
 tokio = { version = "1", features = ["full"] }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-types = "1"
 aws-sdk-s3 = "1"
-aws-smithy-types = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
@@ -51,20 +50,24 @@ urlencoding = "2"
 aws-smithy-runtime = { version = "1", features = ["test-util"] }
 tempfile = "3"
 http = "1"
-testcontainers = "0.27"
+testcontainers = "0.28"
 assert_cmd = "2"
 predicates = "3"
 
+# build.rs includes src/arg.rs, so this lists exactly what arg.rs uses.
 [build-dependencies]
-version_check = "0.9"
-thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 glob = "0.3"
 regex = "1"
-anyhow = "1"
-aws-types = "1"
-clap_complete = "4"
-aws-sdk-s3 = "1"
-clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+uninlined_format_args = "warn"
 
 [profile.dev]
 debug = false

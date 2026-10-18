@@ -3,9 +3,9 @@ use crate::testing::{FakeS3Client, ListCall, opts};
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::primitives::DateTime;
+use aws_sdk_s3::primitives::SdkBody;
 use aws_sdk_s3::types::{DeleteMarkerEntry, ObjectVersion};
 use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
-use aws_smithy_types::body::SdkBody;
 use http::{HeaderValue, StatusCode};
 
 fn options(prefix: Option<&str>, page_size: u16, maxdepth: Option<usize>) -> ListingOptions {
