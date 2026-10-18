@@ -6,15 +6,14 @@ use aws_smithy_types::date_time::Format;
 use csv::WriterBuilder;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::aws::CommandS3Client;
-use crate::arg::{AdvancedPrint, FastPrint, PrintFormat, S3Path};
-use crate::command::StreamObject;
+use crate::arg::{AdvancedPrint, FastPrint, PrintFormat};
+use crate::object::StreamObject;
 
-use super::RunCommand;
+use super::{CommandContext, RunCommand};
 
 impl FastPrint {
     #[inline]
-    pub(crate) fn print_stream_object<I: Write>(
+    pub(crate) fn print_stream_object<I: Write + ?Sized>(
         &self,
         io: &mut I,
         bucket: &str,
@@ -28,15 +27,17 @@ impl FastPrint {
 impl RunCommand for FastPrint {
     async fn execute(
         &self,
-        _c: &dyn CommandS3Client,
-        path: &S3Path,
-        list: &[StreamObject],
+        ctx: &mut CommandContext<'_>,
+        objects: &[StreamObject],
     ) -> Result<(), Error> {
-        let mut stdout = std::io::stdout();
-        for x in list {
-            self.print_stream_object(&mut stdout, &path.bucket, x)?
+        for object in objects {
+            self.print_stream_object(ctx.out, &ctx.path.bucket, object)?;
         }
         Ok(())
+    }
+
+    fn buffered_output(&self) -> bool {
+        true
     }
 }
 
@@ -90,7 +91,7 @@ impl From<&StreamObject> for ObjectRecord {
 
 impl AdvancedPrint {
     #[inline]
-    pub(crate) fn print_stream_object<I: Write>(
+    pub(crate) fn print_stream_object<I: Write + ?Sized>(
         &self,
         io: &mut I,
         bucket: &str,
@@ -122,7 +123,7 @@ impl AdvancedPrint {
     }
 
     #[inline]
-    pub(crate) fn print_json_stream_object<I: Write>(
+    pub(crate) fn print_json_stream_object<I: Write + ?Sized>(
         &self,
         io: &mut I,
         stream_obj: &StreamObject,
@@ -133,7 +134,7 @@ impl AdvancedPrint {
     }
 
     #[inline]
-    pub(crate) fn print_csv_stream_objects<I: Write>(
+    pub(crate) fn print_csv_stream_objects<I: Write + ?Sized>(
         &self,
         io: &mut I,
         stream_objects: &[StreamObject],
@@ -152,27 +153,28 @@ impl AdvancedPrint {
 impl RunCommand for AdvancedPrint {
     async fn execute(
         &self,
-        _c: &dyn CommandS3Client,
-        path: &S3Path,
-        list: &[StreamObject],
+        ctx: &mut CommandContext<'_>,
+        objects: &[StreamObject],
     ) -> Result<(), Error> {
-        let mut stdout = std::io::stdout();
-
         match self.format {
             PrintFormat::Json => {
-                for x in list {
-                    self.print_json_stream_object(&mut stdout, x)?;
+                for object in objects {
+                    self.print_json_stream_object(ctx.out, object)?;
                 }
             }
             PrintFormat::Text => {
-                for x in list {
-                    self.print_stream_object(&mut stdout, &path.bucket, x)?;
+                for object in objects {
+                    self.print_stream_object(ctx.out, &ctx.path.bucket, object)?;
                 }
             }
             PrintFormat::Csv => {
-                self.print_csv_stream_objects(&mut stdout, list)?;
+                self.print_csv_stream_objects(ctx.out, objects)?;
             }
         }
         Ok(())
+    }
+
+    fn buffered_output(&self) -> bool {
+        true
     }
 }

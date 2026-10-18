@@ -1,28 +1,31 @@
 use std::io::Write;
-use std::process::Command;
 
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
+use tokio::process::Command;
 
-use crate::adapters::aws::CommandS3Client;
-use crate::arg::{Exec, S3Path};
-use crate::command::StreamObject;
+use crate::arg::Exec;
 use crate::error::FunctionError;
+use crate::object::StreamObject;
 
-use super::{ExecStatus, RunCommand};
+use super::{CommandContext, ExecStatus, RunCommand};
 
 impl Exec {
     #[inline]
-    pub(crate) fn exec<I: Write>(&self, io: &mut I, key: &str) -> Result<ExecStatus, Error> {
+    pub(crate) async fn exec<I: Write + Send + ?Sized>(
+        &self,
+        io: &mut I,
+        key: &str,
+    ) -> Result<ExecStatus, Error> {
         let command_str = self.utility.replace("{}", key);
         let split = shlex::split(&command_str).ok_or(FunctionError::CommandlineParse)?;
         let (command_name, command_args) =
             split.split_first().ok_or(FunctionError::CommandlineParse)?;
 
-        let mut command = Command::new(command_name);
-        command.args(command_args);
-
-        let output = command.output()?;
+        let output = Command::new(command_name)
+            .args(command_args)
+            .output()
+            .await?;
         if !output.status.success() {
             let status = output
                 .status
@@ -39,7 +42,7 @@ impl Exec {
         }
 
         let output_str = String::from_utf8_lossy(&output.stdout);
-        writeln!(io, "{}", &output_str)?;
+        writeln!(io, "{}", output_str)?;
 
         Ok(ExecStatus {
             status: output.status,
@@ -52,14 +55,12 @@ impl Exec {
 impl RunCommand for Exec {
     async fn execute(
         &self,
-        _: &dyn CommandS3Client,
-        path: &S3Path,
-        list: &[StreamObject],
+        ctx: &mut CommandContext<'_>,
+        objects: &[StreamObject],
     ) -> Result<(), Error> {
-        let mut stdout = std::io::stdout();
-        for x in list {
-            let s3_path = format!("s3://{}/{}", &path.bucket, x.display_key());
-            self.exec(&mut stdout, &s3_path)?;
+        for object in objects {
+            let s3_path = format!("s3://{}/{}", ctx.path.bucket, object.display_key());
+            self.exec(ctx.out, &s3_path).await?;
         }
         Ok(())
     }

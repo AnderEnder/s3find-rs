@@ -4,15 +4,18 @@ use aws_config::{BehaviorVersion, meta::credentials::CredentialsProviderChain};
 use aws_sdk_s3::{
     Client,
     config::Credentials,
+    error::SdkError,
+    operation::get_object_tagging::GetObjectTaggingError,
     primitives::ByteStream,
     types::{
-        Delete, GlacierJobParameters, MetadataDirective, ObjectCannedAcl, ObjectIdentifier,
-        RestoreRequest, StorageClass, Tag, Tagging, Tier,
+        Delete, DeleteMarkerEntry, GlacierJobParameters, MetadataDirective, Object,
+        ObjectCannedAcl, ObjectIdentifier, ObjectVersion, RestoreRequest, StorageClass, Tag,
+        Tagging, Tier,
     },
 };
-use aws_smithy_runtime_api::client::result::SdkError;
 
 use crate::arg::{self, FindOpt};
+use crate::error::TagFetchError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeleteObjectRequest {
@@ -33,9 +36,63 @@ pub enum RestoreObjectStatus {
     InvalidObjectState,
 }
 
+/// One ListObjectsV2 call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListObjectsRequest<'a> {
+    pub bucket: &'a str,
+    pub prefix: &'a str,
+    /// Groups keys sharing a prefix up to the delimiter into `common_prefixes`.
+    pub delimiter: Option<&'a str>,
+    pub continuation_token: Option<&'a str>,
+    pub max_keys: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ObjectsPage {
+    pub objects: Vec<Object>,
+    pub common_prefixes: Vec<String>,
+    /// Token for the next page, `None` on the last page.
+    pub next_continuation_token: Option<String>,
+}
+
+/// One ListObjectVersions call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListVersionsRequest<'a> {
+    pub bucket: &'a str,
+    pub prefix: &'a str,
+    pub marker: Option<&'a VersionMarker>,
+    pub max_keys: i32,
+}
+
+/// Position to resume a version listing from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VersionMarker {
+    pub key_marker: String,
+    pub version_id_marker: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VersionsPage {
+    pub versions: Vec<ObjectVersion>,
+    pub delete_markers: Vec<DeleteMarkerEntry>,
+    /// Where the next page starts, `None` on the last page.
+    pub next_marker: Option<VersionMarker>,
+}
+
+/// The S3 operations s3find uses.
+///
+/// Listing, tag fetching and commands all go through this trait, so every layer
+/// can be tested against an in-memory fake instead of a real or replayed S3.
 #[async_trait]
-pub trait CommandS3Client: Send + Sync {
+pub trait S3Client: Send + Sync {
     fn region(&self) -> Option<String>;
+
+    async fn list_objects(&self, request: ListObjectsRequest<'_>) -> Result<ObjectsPage, Error>;
+
+    async fn list_object_versions(
+        &self,
+        request: ListVersionsRequest<'_>,
+    ) -> Result<VersionsPage, Error>;
 
     async fn delete_objects(
         &self,
@@ -56,7 +113,7 @@ pub trait CommandS3Client: Send + Sync {
         bucket: &str,
         key: &str,
         version_id: Option<&str>,
-    ) -> Result<Vec<Tag>, Error>;
+    ) -> Result<Vec<Tag>, TagFetchError>;
 
     async fn put_object_acl_public_read(
         &self,
@@ -91,12 +148,120 @@ pub trait CommandS3Client: Send + Sync {
     ) -> Result<RestoreObjectStatus, Error>;
 }
 
+/// Converts an SDK error into one whose message includes its causes, such as
+/// the S3 error code, instead of the SDK's bare "service error".
+fn sdk_error<E, R>(err: SdkError<E, R>) -> Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug + Send + Sync + 'static,
+{
+    anyhow!(error_chain(&err))
+}
+
+/// An error's message followed by those of its sources, joined by ": ".
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut message = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let cause_message = cause.to_string();
+        if !message.ends_with(&cause_message) {
+            message.push_str(": ");
+            message.push_str(&cause_message);
+        }
+        source = cause.source();
+    }
+    message
+}
+
+fn classify_tagging_error(
+    err: SdkError<GetObjectTaggingError>,
+    bucket: &str,
+    key: &str,
+) -> TagFetchError {
+    let status = match &err {
+        SdkError::ServiceError(service_err) => service_err.raw().status().as_u16(),
+        _ => return TagFetchError::ApiError(error_chain(&err)),
+    };
+
+    match status {
+        403 => TagFetchError::AccessDenied {
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+        },
+        404 => TagFetchError::NotFound {
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+        },
+        _ => TagFetchError::ApiError(format!("HTTP {status}: {}", error_chain(&err))),
+    }
+}
+
 #[async_trait]
-impl CommandS3Client for Client {
+impl S3Client for Client {
     fn region(&self) -> Option<String> {
         self.config()
             .region()
             .map(|region| region.as_ref().to_string())
+    }
+
+    async fn list_objects(&self, request: ListObjectsRequest<'_>) -> Result<ObjectsPage, Error> {
+        let output = self
+            .list_objects_v2()
+            .bucket(request.bucket)
+            .prefix(request.prefix)
+            .set_delimiter(request.delimiter.map(str::to_owned))
+            .set_continuation_token(request.continuation_token.map(str::to_owned))
+            .max_keys(request.max_keys)
+            .send()
+            .await
+            .map_err(sdk_error)?;
+
+        Ok(ObjectsPage {
+            objects: output.contents.unwrap_or_default(),
+            common_prefixes: output
+                .common_prefixes
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|common_prefix| common_prefix.prefix)
+                .collect(),
+            next_continuation_token: output.next_continuation_token,
+        })
+    }
+
+    async fn list_object_versions(
+        &self,
+        request: ListVersionsRequest<'_>,
+    ) -> Result<VersionsPage, Error> {
+        let output = self
+            .list_object_versions()
+            .bucket(request.bucket)
+            .prefix(request.prefix)
+            .max_keys(request.max_keys)
+            .set_key_marker(request.marker.map(|marker| marker.key_marker.clone()))
+            .set_version_id_marker(
+                request
+                    .marker
+                    .and_then(|marker| marker.version_id_marker.clone()),
+            )
+            .send()
+            .await
+            .map_err(sdk_error)?;
+
+        // A truncated page without a key marker cannot be resumed; treat it as
+        // the last page rather than restarting the listing forever.
+        let next_marker = match (output.is_truncated, output.next_key_marker) {
+            (Some(true), Some(key_marker)) => Some(VersionMarker {
+                key_marker,
+                version_id_marker: output.next_version_id_marker,
+            }),
+            _ => None,
+        };
+
+        Ok(VersionsPage {
+            versions: output.versions.unwrap_or_default(),
+            delete_markers: output.delete_markers.unwrap_or_default(),
+            next_marker,
+        })
     }
 
     async fn delete_objects(
@@ -125,7 +290,8 @@ impl CommandS3Client for Client {
             .bucket(bucket)
             .delete(delete)
             .send()
-            .await?;
+            .await
+            .map_err(sdk_error)?;
 
         let delete_errors = response.errors.unwrap_or_default();
         if !delete_errors.is_empty() {
@@ -166,17 +332,14 @@ impl CommandS3Client for Client {
     ) -> Result<(), Error> {
         let tagging = Tagging::builder().set_tag_set(Some(tags)).build()?;
 
-        let mut request = self
-            .put_object_tagging()
+        self.put_object_tagging()
             .bucket(bucket)
             .key(key)
-            .set_tagging(Some(tagging));
-
-        if let Some(version_id) = version_id {
-            request = request.version_id(version_id);
-        }
-
-        request.send().await?;
+            .set_version_id(version_id.map(str::to_owned))
+            .tagging(tagging)
+            .send()
+            .await
+            .map_err(sdk_error)?;
         Ok(())
     }
 
@@ -185,14 +348,17 @@ impl CommandS3Client for Client {
         bucket: &str,
         key: &str,
         version_id: Option<&str>,
-    ) -> Result<Vec<Tag>, Error> {
-        let mut request = self.get_object_tagging().bucket(bucket).key(key);
+    ) -> Result<Vec<Tag>, TagFetchError> {
+        let output = self
+            .get_object_tagging()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id.map(str::to_owned))
+            .send()
+            .await
+            .map_err(|err| classify_tagging_error(err, bucket, key))?;
 
-        if let Some(version_id) = version_id {
-            request = request.version_id(version_id);
-        }
-
-        Ok(request.send().await?.tag_set)
+        Ok(output.tag_set)
     }
 
     async fn put_object_acl_public_read(
@@ -201,17 +367,14 @@ impl CommandS3Client for Client {
         key: &str,
         version_id: Option<&str>,
     ) -> Result<(), Error> {
-        let mut request = self
-            .put_object_acl()
+        self.put_object_acl()
             .bucket(bucket)
             .key(key)
-            .acl(ObjectCannedAcl::PublicRead);
-
-        if let Some(version_id) = version_id {
-            request = request.version_id(version_id);
-        }
-
-        request.send().await?;
+            .set_version_id(version_id.map(str::to_owned))
+            .acl(ObjectCannedAcl::PublicRead)
+            .send()
+            .await
+            .map_err(sdk_error)?;
         Ok(())
     }
 
@@ -221,13 +384,16 @@ impl CommandS3Client for Client {
         key: &str,
         version_id: Option<&str>,
     ) -> Result<ByteStream, Error> {
-        let mut request = self.get_object().bucket(bucket).key(key);
+        let output = self
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id.map(str::to_owned))
+            .send()
+            .await
+            .map_err(sdk_error)?;
 
-        if let Some(version_id) = version_id {
-            request = request.version_id(version_id);
-        }
-
-        Ok(request.send().await?.body)
+        Ok(output.body)
     }
 
     async fn copy_object(
@@ -238,18 +404,15 @@ impl CommandS3Client for Client {
         storage_class: Option<StorageClass>,
         metadata_directive: Option<MetadataDirective>,
     ) -> Result<(), Error> {
-        let mut request = self
-            .copy_object()
+        self.copy_object()
             .bucket(bucket)
             .key(key)
             .copy_source(copy_source)
-            .set_storage_class(storage_class);
-
-        if let Some(metadata_directive) = metadata_directive {
-            request = request.metadata_directive(metadata_directive);
-        }
-
-        request.send().await?;
+            .set_storage_class(storage_class)
+            .set_metadata_directive(metadata_directive)
+            .send()
+            .await
+            .map_err(sdk_error)?;
         Ok(())
     }
 
@@ -263,20 +426,19 @@ impl CommandS3Client for Client {
     ) -> Result<RestoreObjectStatus, Error> {
         let restore_request = RestoreRequest::builder()
             .days(days)
-            .set_glacier_job_parameters(Some(GlacierJobParameters::builder().tier(tier).build()?))
+            .glacier_job_parameters(GlacierJobParameters::builder().tier(tier).build()?)
             .build();
 
-        let mut request = self
+        let result = self
             .restore_object()
             .bucket(bucket)
             .key(key)
-            .restore_request(restore_request);
+            .set_version_id(version_id.map(str::to_owned))
+            .restore_request(restore_request)
+            .send()
+            .await;
 
-        if let Some(version_id) = version_id {
-            request = request.version_id(version_id);
-        }
-
-        match request.send().await {
+        match result {
             Ok(_) => Ok(RestoreObjectStatus::Started),
             Err(SdkError::ServiceError(err))
                 if err.err().meta().code() == Some("RestoreAlreadyInProgress") =>
@@ -288,7 +450,7 @@ impl CommandS3Client for Client {
             {
                 Ok(RestoreObjectStatus::InvalidObjectState)
             }
-            Err(err) => Err(anyhow!(err)),
+            Err(err) => Err(sdk_error(err)),
         }
     }
 }
@@ -308,22 +470,22 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
         None => aws_config::meta::region::RegionProviderChain::default_provider(),
     };
 
+    let loader = aws_config::ConfigLoader::default()
+        .behavior_version(BehaviorVersion::latest())
+        .region(region_provider);
+
     let shared_config = match (aws_access_key, aws_secret_key) {
         (Some(aws_access_key), Some(aws_secret_key)) => {
             let credentials_provider =
                 Credentials::new(aws_access_key, aws_secret_key, None, None, "static");
-            aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::latest())
-                .region(region_provider)
+            loader
                 .credentials_provider(credentials_provider)
                 .load()
                 .await
         }
         _ => {
             let credentials_provider = CredentialsProviderChain::default_provider().await;
-            aws_config::ConfigLoader::default()
-                .behavior_version(BehaviorVersion::latest())
-                .region(region_provider)
+            loader
                 .credentials_provider(credentials_provider)
                 .load()
                 .await
@@ -349,181 +511,92 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arg::S3Path;
+    use crate::testing::opts;
 
     use aws_config::Region;
     use aws_smithy_runtime::client::http::test_util::StaticReplayClient;
 
-    use std::str::FromStr;
+    fn region_of(client: &Client) -> Option<String> {
+        S3Client::region(client)
+    }
 
     #[tokio::test]
     async fn test_get_s3_client() {
-        let args = FindOpt {
-            aws_access_key: Some("mock_access".to_string()),
-            aws_secret_key: Some("mock_secret".to_string()),
-            aws_region: Some(Region::new("mock-region")),
-            endpoint_url: None,
-            force_path_style: false,
-            path: S3Path::from_str("s3://mock-bucket/mock-prefix").unwrap(),
-            limit: Some(100),
-            summarize: false,
-            name: Vec::new(),
-            iname: Vec::new(),
-            mtime: Vec::new(),
-            regex: Vec::new(),
-            size: Default::default(),
-            page_size: 100,
-            cmd: Default::default(),
-            storage_class: None,
-            maxdepth: None,
-            all_versions: false,
-            tag: Vec::new(),
-            tag_exists: Vec::new(),
-            tag_concurrency: 50,
-        };
-        let client_with_creds = setup_client(&args).await;
+        let with_creds = setup_client(&opts(&[
+            "s3://mock-bucket/mock-prefix",
+            "--aws-access-key",
+            "mock_access",
+            "--aws-secret-key",
+            "mock_secret",
+            "--aws-region",
+            "mock-region",
+        ]))
+        .await;
+        let without_creds = setup_client(&opts(&[
+            "s3://mock-bucket/mock-prefix",
+            "--aws-region",
+            "mock-region",
+        ]))
+        .await;
 
-        let args_without_creds = FindOpt {
-            aws_access_key: None,
-            aws_secret_key: None,
-            aws_region: Some(Region::new("mock-region")),
-            ..args
-        };
-        let client_without_creds = setup_client(&args_without_creds).await;
-
-        assert!(client_with_creds.config().region().is_some());
-        assert!(client_without_creds.config().region().is_some());
+        assert_eq!(region_of(&with_creds).as_deref(), Some("mock-region"));
+        assert_eq!(region_of(&without_creds).as_deref(), Some("mock-region"));
     }
 
     #[tokio::test]
-    async fn test_client_with_custom_endpoint() {
-        let args = FindOpt {
-            aws_access_key: Some("minio_access".to_string()),
-            aws_secret_key: Some("minio_secret".to_string()),
-            aws_region: Some(Region::new("us-east-1")),
-            endpoint_url: Some("http://localhost:9000".to_string()),
-            force_path_style: false,
-            path: S3Path::from_str("s3://test-bucket/test-prefix").unwrap(),
-            limit: None,
-            summarize: false,
-            name: Vec::new(),
-            iname: Vec::new(),
-            mtime: Vec::new(),
-            regex: Vec::new(),
-            size: Default::default(),
-            page_size: 1000,
-            cmd: Default::default(),
-            storage_class: None,
-            maxdepth: None,
-            all_versions: false,
-            tag: Vec::new(),
-            tag_exists: Vec::new(),
-            tag_concurrency: 50,
-        };
+    async fn test_client_with_custom_endpoint_and_path_style() {
+        for args in [
+            &[
+                "s3://test-bucket",
+                "--aws-access-key",
+                "minio_access",
+                "--aws-secret-key",
+                "minio_secret",
+                "--aws-region",
+                "us-east-1",
+                "--endpoint-url",
+                "http://localhost:9000",
+            ][..],
+            &[
+                "s3://test-bucket",
+                "--aws-access-key",
+                "test_access",
+                "--aws-secret-key",
+                "test_secret",
+                "--aws-region",
+                "us-west-2",
+                "--force-path-style",
+            ],
+            &[
+                "s3://ceph-bucket/data",
+                "--aws-access-key",
+                "ceph_access",
+                "--aws-secret-key",
+                "ceph_secret",
+                "--aws-region",
+                "default",
+                "--endpoint-url",
+                "https://ceph.example.com",
+                "--force-path-style",
+            ],
+            &[
+                "s3://test-bucket/prefix",
+                "--aws-region",
+                "us-east-1",
+                "--endpoint-url",
+                "http://localhost:9000",
+                "--force-path-style",
+            ],
+        ] {
+            let opts = opts(args);
+            let client = setup_client(&opts).await;
 
-        let client = setup_client(&args).await;
-
-        // Verify the client was created successfully
-        assert!(client.config().region().is_some());
-        assert_eq!(client.config().region().unwrap().as_ref(), "us-east-1");
-    }
-
-    #[tokio::test]
-    async fn test_client_with_force_path_style() {
-        let args = FindOpt {
-            aws_access_key: Some("test_access".to_string()),
-            aws_secret_key: Some("test_secret".to_string()),
-            aws_region: Some(Region::new("us-west-2")),
-            endpoint_url: None,
-            force_path_style: true,
-            path: S3Path::from_str("s3://test-bucket/test-prefix").unwrap(),
-            limit: None,
-            summarize: false,
-            name: Vec::new(),
-            iname: Vec::new(),
-            mtime: Vec::new(),
-            regex: Vec::new(),
-            size: Default::default(),
-            page_size: 1000,
-            cmd: Default::default(),
-            storage_class: None,
-            maxdepth: None,
-            all_versions: false,
-            tag: Vec::new(),
-            tag_exists: Vec::new(),
-            tag_concurrency: 50,
-        };
-
-        let client = setup_client(&args).await;
-
-        // Verify the client was created successfully
-        assert!(client.config().region().is_some());
-        assert_eq!(client.config().region().unwrap().as_ref(), "us-west-2");
-    }
-
-    #[tokio::test]
-    async fn test_client_with_endpoint_and_path_style() {
-        let args = FindOpt {
-            aws_access_key: Some("ceph_access".to_string()),
-            aws_secret_key: Some("ceph_secret".to_string()),
-            aws_region: Some(Region::new("default")),
-            endpoint_url: Some("https://ceph.example.com".to_string()),
-            force_path_style: true,
-            path: S3Path::from_str("s3://ceph-bucket/data").unwrap(),
-            limit: None,
-            summarize: false,
-            name: Vec::new(),
-            iname: Vec::new(),
-            mtime: Vec::new(),
-            regex: Vec::new(),
-            size: Default::default(),
-            page_size: 1000,
-            cmd: Default::default(),
-            storage_class: None,
-            maxdepth: None,
-            all_versions: false,
-            tag: Vec::new(),
-            tag_exists: Vec::new(),
-            tag_concurrency: 50,
-        };
-
-        let client = setup_client(&args).await;
-
-        // Verify the client was created successfully with both options
-        assert!(client.config().region().is_some());
-        assert_eq!(client.config().region().unwrap().as_ref(), "default");
-    }
-
-    #[tokio::test]
-    async fn test_client_without_credentials_with_endpoint() {
-        let args = FindOpt {
-            aws_access_key: None,
-            aws_secret_key: None,
-            aws_region: Some(Region::new("us-east-1")),
-            endpoint_url: Some("http://localhost:9000".to_string()),
-            force_path_style: true,
-            path: S3Path::from_str("s3://test-bucket/prefix").unwrap(),
-            limit: None,
-            summarize: false,
-            name: Vec::new(),
-            iname: Vec::new(),
-            mtime: Vec::new(),
-            regex: Vec::new(),
-            size: Default::default(),
-            page_size: 1000,
-            cmd: Default::default(),
-            storage_class: None,
-            maxdepth: None,
-            all_versions: false,
-            tag: Vec::new(),
-            tag_exists: Vec::new(),
-            tag_concurrency: 50,
-        };
-
-        let client = setup_client(&args).await;
-
-        // Verify the client was created with default credentials provider
-        assert!(client.config().region().is_some());
+            assert_eq!(
+                client.config().region(),
+                opts.aws_region.as_ref(),
+                "{args:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -538,12 +611,44 @@ mod tests {
                 .build(),
         );
 
-        let deleted =
-            <Client as CommandS3Client>::delete_objects(&client, "test-bucket", Vec::new())
-                .await
-                .unwrap();
+        let deleted = S3Client::delete_objects(&client, "test-bucket", Vec::new())
+            .await
+            .unwrap();
 
         assert!(deleted.is_empty());
         replay_client.assert_requests_match(&[]);
+    }
+
+    #[test]
+    fn test_error_chain_joins_each_cause_once() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("inner")]
+        struct Inner;
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("outer")]
+        struct Outer(#[source] Inner);
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("outer: inner")]
+        struct AlreadyIncludesCause(#[source] Inner);
+
+        assert_eq!(error_chain(&Inner), "inner");
+        assert_eq!(error_chain(&Outer(Inner)), "outer: inner");
+        assert_eq!(error_chain(&AlreadyIncludesCause(Inner)), "outer: inner");
+    }
+
+    #[test]
+    fn test_classify_tagging_error_non_service_error() {
+        let timeout_err: SdkError<GetObjectTaggingError> = SdkError::timeout_error(Box::new(
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"),
+        ));
+
+        let result = classify_tagging_error(timeout_err, "bucket", "key");
+
+        assert!(
+            matches!(&result, TagFetchError::ApiError(message) if message.contains("timeout")),
+            "Expected ApiError, got: {result:?}"
+        );
     }
 }

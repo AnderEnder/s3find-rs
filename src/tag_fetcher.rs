@@ -1,32 +1,17 @@
-use aws_sdk_s3::Client;
-use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingError;
-use aws_sdk_s3::types::Tag;
-use futures::{StreamExt, stream};
-use std::future::Future;
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use thiserror::Error;
 
-use crate::command::StreamObject;
+use futures::{FutureExt, Stream, TryStreamExt};
 
-/// Error types for tag fetching operations
-#[derive(Error, Debug)]
-pub enum TagFetchError {
-    #[error("Access denied for s3:GetObjectTagging on {bucket}/{key}")]
-    AccessDenied { bucket: String, key: String },
+use crate::adapters::aws::S3Client;
+use crate::error::{S3FindResult, TagFetchError};
+use crate::object::StreamObject;
 
-    #[error("Object not found: {bucket}/{key}")]
-    NotFound { bucket: String, key: String },
+/// Default maximum of concurrent GetObjectTagging requests.
+pub const DEFAULT_TAG_CONCURRENCY: usize = 50;
 
-    #[error("S3 API error: {0}")]
-    ApiError(String),
-
-    #[error("Missing object key")]
-    MissingKey,
-}
-
-/// Statistics for tag fetching operations
+/// Counters for tag fetching, safe to update from concurrent requests.
 #[derive(Debug, Default)]
 pub struct TagFetchStats {
     pub success: AtomicUsize,
@@ -55,172 +40,153 @@ impl TagFetchStats {
     pub fn record_excluded(&self) {
         self.excluded.fetch_add(1, Ordering::Relaxed);
     }
-}
 
-/// Configuration for tag fetching
-#[derive(Debug, Clone)]
-pub struct TagFetchConfig {
-    /// Maximum concurrent tag fetch requests
-    pub concurrency: usize,
-}
-
-impl Default for TagFetchConfig {
-    fn default() -> Self {
-        Self { concurrency: 50 }
+    /// True when no tag fetch was attempted.
+    pub fn is_empty(&self) -> bool {
+        [
+            &self.success,
+            &self.failed,
+            &self.access_denied,
+            &self.excluded,
+        ]
+        .iter()
+        .all(|counter| counter.load(Ordering::Relaxed) == 0)
     }
 }
 
-impl TagFetchConfig {
-    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
-        self.concurrency = concurrency;
-        self
+impl fmt::Display for TagFetchStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} success, {} failed, {} access denied, {} excluded",
+            self.success.load(Ordering::Relaxed),
+            self.failed.load(Ordering::Relaxed),
+            self.access_denied.load(Ordering::Relaxed),
+            self.excluded.load(Ordering::Relaxed),
+        )
     }
 }
 
-/// Fetches tags for a single object; throttle/transient retries are handled by the SDK.
-async fn fetch_object_tags(
-    client: &Client,
-    bucket: &str,
-    key: &str,
-    version_id: Option<&str>,
-    stats: &TagFetchStats,
-) -> Result<Vec<Tag>, TagFetchError> {
-    let mut request = client.get_object_tagging().bucket(bucket).key(key);
-
-    if let Some(vid) = version_id {
-        request = request.version_id(vid);
-    }
-
-    match request.send().await {
-        Ok(output) => {
-            stats.record_success();
-            Ok(output.tag_set().to_vec())
-        }
-        Err(err) => {
-            let fetch_error = classify_error(&err, bucket, key);
-            match &fetch_error {
-                TagFetchError::AccessDenied { .. } => stats.record_access_denied(),
-                _ => stats.record_failure(),
-            }
-            Err(fetch_error)
-        }
-    }
-}
-
-/// Classifies SDK errors into TagFetchError variants
-fn classify_error(err: &SdkError<GetObjectTaggingError>, bucket: &str, key: &str) -> TagFetchError {
-    match err {
-        SdkError::ServiceError(service_err) => {
-            let raw = service_err.raw();
-            let status = raw.status().as_u16();
-
-            match status {
-                403 => TagFetchError::AccessDenied {
-                    bucket: bucket.to_string(),
-                    key: key.to_string(),
-                },
-                404 => TagFetchError::NotFound {
-                    bucket: bucket.to_string(),
-                    key: key.to_string(),
-                },
-                _ => TagFetchError::ApiError(format!("HTTP {}: {:?}", status, service_err.err())),
-            }
-        }
-        _ => TagFetchError::ApiError(err.to_string()),
-    }
-}
-
-/// Fetches tags for a collection of objects with concurrency control
-///
-/// This function takes an iterable collection of StreamObjects, fetches tags
-/// for each one concurrently (up to the configured limit), and returns a
-/// `Vec<StreamObject>` with the tags populated.
-async fn map_with_concurrency_in_order<I, F, Fut, T>(
-    items: I,
-    concurrency: usize,
-    mapper: F,
-) -> Vec<T>
-where
-    I: IntoIterator,
-    F: FnMut(I::Item) -> Fut,
-    Fut: Future<Output = T>,
-{
-    stream::iter(items.into_iter().map(mapper))
-        .buffered(concurrency)
-        .collect()
-        .await
-}
-
-pub async fn fetch_tags_for_objects<I>(
-    client: Client,
+/// Populates `StreamObject::tags` with GetObjectTagging, with bounded concurrency.
+pub struct TagFetcher {
+    client: Arc<dyn S3Client>,
     bucket: String,
-    objects: I,
-    config: TagFetchConfig,
-    stats: Arc<TagFetchStats>,
-) -> Vec<StreamObject>
-where
-    I: IntoIterator<Item = StreamObject>,
-{
-    let objects: Vec<StreamObject> = objects.into_iter().collect();
+    concurrency: usize,
+    stats: TagFetchStats,
+}
 
-    map_with_concurrency_in_order(objects, config.concurrency, |mut obj| {
-        let client = client.clone();
-        let bucket = bucket.clone();
-        let config = config.clone();
-        let stats = Arc::clone(&stats);
-
-        async move {
-            // Skip if already has tags
-            if obj.tags.is_some() {
-                return obj;
-            }
-
-            // Skip delete markers (they don't have tags)
-            if obj.is_delete_marker {
-                obj.tags = Some(Vec::new());
-                return obj;
-            }
-
-            let key = match obj.object.key() {
-                Some(k) => k.to_string(),
-                None => {
-                    // Object without key - can't fetch tags
-                    obj.tags = Some(Vec::new());
-                    return obj;
-                }
-            };
-
-            let version_id = obj.version_id.as_deref();
-
-            match fetch_object_tags(&client, &bucket, &key, version_id, &stats).await {
-                Ok(tags) => {
-                    obj.tags = Some(tags);
-                }
-                Err(e) => {
-                    // Log the error but continue processing.
-                    // Objects with failed tag fetches get empty tags to allow filtering
-                    // to continue. This means they won't match any tag filter, which is
-                    // the safest behavior (don't include objects we can't verify).
-                    stats.record_excluded();
-                    eprintln!("Warning: Failed to fetch tags for {}: {}", key, e);
-                    obj.tags = Some(Vec::new());
-                }
-            }
-
-            obj
+impl TagFetcher {
+    pub fn new(client: Arc<dyn S3Client>, bucket: impl Into<String>, concurrency: usize) -> Self {
+        Self {
+            client,
+            bucket: bucket.into(),
+            concurrency: concurrency.max(1),
+            stats: TagFetchStats::new(),
         }
-    })
-    .await
+    }
+
+    pub fn concurrency(&self) -> usize {
+        self.concurrency
+    }
+
+    pub fn stats(&self) -> &TagFetchStats {
+        &self.stats
+    }
+
+    /// Fetches tags for each object in the stream, keeping up to `concurrency`
+    /// requests in flight and the input order intact.
+    pub fn attach_tags_to_stream<'a, S>(
+        &'a self,
+        objects: S,
+    ) -> impl Stream<Item = S3FindResult<StreamObject>> + Send + 'a
+    where
+        S: Stream<Item = S3FindResult<StreamObject>> + Send + 'a,
+    {
+        objects
+            .map_ok(|object| self.attach_tags(object).map(Ok))
+            .try_buffered(self.concurrency)
+    }
+
+    /// Makes sure `object.tags` is populated.
+    ///
+    /// Objects whose tags can't be fetched get an empty tag set, so they never
+    /// match a tag filter: an object is only included when its tags are verified.
+    pub async fn attach_tags(&self, mut object: StreamObject) -> StreamObject {
+        if object.tags.is_some() {
+            return object;
+        }
+
+        // Delete markers and keyless objects have no tags to fetch.
+        let key = match object.key() {
+            Some(key) if !object.is_delete_marker => key,
+            _ => {
+                object.tags = Some(Vec::new());
+                return object;
+            }
+        };
+
+        let result = self
+            .client
+            .get_object_tagging(&self.bucket, key, object.version_id.as_deref())
+            .await;
+
+        let tags = match result {
+            Ok(tags) => {
+                self.stats.record_success();
+                tags
+            }
+            Err(err) => {
+                match err {
+                    TagFetchError::AccessDenied { .. } => self.stats.record_access_denied(),
+                    _ => self.stats.record_failure(),
+                }
+                self.stats.record_excluded();
+                eprintln!("Warning: Failed to fetch tags for {key}: {err}");
+                Vec::new()
+            }
+        };
+
+        object.tags = Some(tags);
+        object
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_sdk_s3::types::Object;
+    use crate::testing::FakeS3Client;
+    use aws_config::BehaviorVersion;
+    use aws_sdk_s3::Client;
+    use aws_sdk_s3::types::{Object, Tag};
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_types::body::SdkBody;
+    use futures::{StreamExt, stream};
+    use http::{HeaderValue, StatusCode};
+
+    fn keyed(key: &str) -> StreamObject {
+        StreamObject::from_object(Object::builder().key(key).build())
+    }
+
+    fn tag(key: &str, value: &str) -> Tag {
+        Tag::builder().key(key).value(value).build().unwrap()
+    }
+
+    fn fetcher(client: impl S3Client + 'static, concurrency: usize) -> TagFetcher {
+        TagFetcher::new(Arc::new(client), "test-bucket", concurrency)
+    }
+
+    async fn attach_all(fetcher: &TagFetcher, objects: Vec<StreamObject>) -> Vec<StreamObject> {
+        fetcher
+            .attach_tags_to_stream(stream::iter(objects.into_iter().map(Ok)))
+            .map(Result::unwrap)
+            .collect()
+            .await
+    }
 
     #[test]
     fn test_tag_fetch_stats() {
         let stats = TagFetchStats::new();
+        assert!(stats.is_empty());
 
         stats.record_success();
         stats.record_success();
@@ -228,95 +194,15 @@ mod tests {
         stats.record_access_denied();
         stats.record_excluded();
 
+        assert!(!stats.is_empty());
         assert_eq!(stats.success.load(Ordering::Relaxed), 2);
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
         assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
         assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn test_tag_fetch_config_default() {
-        let config = TagFetchConfig::default();
-        assert_eq!(config.concurrency, 50);
-    }
-
-    #[test]
-    fn test_tag_fetch_config_with_concurrency() {
-        let config = TagFetchConfig::default().with_concurrency(100);
-        assert_eq!(config.concurrency, 100);
-    }
-
-    #[test]
-    fn test_stream_object_with_tags() {
-        let object = Object::builder().key("test.txt").build();
-        let stream_obj = StreamObject {
-            object,
-            version_id: None,
-            is_latest: None,
-            is_delete_marker: false,
-            tags: Some(vec![]),
-        };
-
-        assert!(stream_obj.tags.is_some());
-    }
-
-    #[test]
-    fn test_delete_marker_has_empty_tags() {
-        let object = Object::builder().key("deleted.txt").build();
-        let mut stream_obj = StreamObject {
-            object,
-            version_id: None,
-            is_latest: None,
-            is_delete_marker: true,
-            tags: None,
-        };
-
-        if stream_obj.is_delete_marker {
-            stream_obj.tags = Some(Vec::new());
-        }
-
-        assert!(stream_obj.tags.is_some());
-        assert!(stream_obj.tags.unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_classify_error_non_service_error() {
-        use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
-        use aws_smithy_runtime_api::client::result::SdkError;
-
-        let timeout_err: SdkError<GetObjectTaggingError, HttpResponse> = SdkError::timeout_error(
-            Box::new(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")),
+        assert_eq!(
+            stats.to_string(),
+            "2 success, 1 failed, 1 access denied, 1 excluded"
         );
-
-        let result = classify_error(&timeout_err, "bucket", "key");
-        assert!(
-            matches!(result, TagFetchError::ApiError(_)),
-            "Expected ApiError, got: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_tag_fetch_error_display() {
-        let err = TagFetchError::AccessDenied {
-            bucket: "my-bucket".to_string(),
-            key: "my-key".to_string(),
-        };
-        assert!(err.to_string().contains("Access denied"));
-        assert!(err.to_string().contains("my-bucket"));
-        assert!(err.to_string().contains("my-key"));
-
-        let err = TagFetchError::NotFound {
-            bucket: "bucket".to_string(),
-            key: "key".to_string(),
-        };
-        assert!(err.to_string().contains("Object not found"));
-
-        let err = TagFetchError::ApiError("Custom error".to_string());
-        assert!(err.to_string().contains("Custom error"));
-
-        let err = TagFetchError::MissingKey;
-        assert!(err.to_string().contains("Missing object key"));
     }
 
     #[test]
@@ -324,16 +210,16 @@ mod tests {
         use std::thread;
 
         let stats = Arc::new(TagFetchStats::new());
-        let mut handles = vec![];
-
-        for _ in 0..4 {
-            let stats_clone = Arc::clone(&stats);
-            handles.push(thread::spawn(move || {
-                for _ in 0..100 {
-                    stats_clone.record_success();
-                }
-            }));
-        }
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let stats = Arc::clone(&stats);
+                thread::spawn(move || {
+                    for _ in 0..100 {
+                        stats.record_success();
+                    }
+                })
+            })
+            .collect();
 
         for handle in handles {
             handle.join().unwrap();
@@ -343,29 +229,113 @@ mod tests {
     }
 
     #[test]
-    fn test_object_without_key_handling() {
-        let object = Object::builder().build();
-        let stream_obj = StreamObject {
-            object,
-            version_id: None,
-            is_latest: None,
-            is_delete_marker: false,
-            tags: None,
-        };
-
-        assert!(stream_obj.key().is_none());
+    fn test_concurrency_is_at_least_one() {
+        assert_eq!(fetcher(FakeS3Client::default(), 0).concurrency(), 1);
+        assert_eq!(fetcher(FakeS3Client::default(), 7).concurrency(), 7);
     }
 
-    // Mock-based tests for fetch_tags_for_objects
-    use aws_config::BehaviorVersion;
-    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
-    use aws_smithy_types::body::SdkBody;
-    use http::{HeaderValue, StatusCode};
-    use std::time::Duration;
-    use tokio::time::sleep;
+    #[tokio::test]
+    async fn test_attach_tags_fetches_with_version_id() {
+        let client = FakeS3Client::default().with_tags(
+            "test-bucket",
+            "versioned.txt",
+            Some("v123"),
+            vec![tag("version", "v123")],
+        );
+        let fetcher = fetcher(client, 1);
 
-    fn make_test_client(events: Vec<ReplayEvent>) -> Client {
-        let replay_client = StaticReplayClient::new(events);
+        let mut object = keyed("versioned.txt");
+        object.version_id = Some("v123".to_string());
+
+        let object = fetcher.attach_tags(object).await;
+
+        assert_eq!(object.get_tag("version"), Some("v123"));
+        assert_eq!(fetcher.stats().success.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_attach_tags_skips_objects_without_fetchable_tags() {
+        let fetcher = fetcher(FakeS3Client::default(), 1);
+
+        let cached = {
+            let mut object = keyed("cached.txt");
+            object.tags = Some(vec![tag("cached", "true")]);
+            object
+        };
+        let delete_marker = {
+            let mut object = keyed("deleted.txt");
+            object.is_delete_marker = true;
+            object
+        };
+        let keyless = StreamObject::from_object(Object::builder().build());
+
+        let results = attach_all(&fetcher, vec![cached, delete_marker, keyless]).await;
+
+        assert_eq!(results[0].get_tag("cached"), Some("true"));
+        assert_eq!(results[1].tags, Some(Vec::new()));
+        assert_eq!(results[2].tags, Some(Vec::new()));
+        assert!(fetcher.stats().is_empty(), "no API calls expected");
+    }
+
+    #[tokio::test]
+    async fn test_attach_tags_failures_yield_empty_tags() {
+        let client = FakeS3Client::default()
+            .with_tag_error("test-bucket", "forbidden.txt", 403)
+            .with_tag_error("test-bucket", "missing.txt", 404)
+            .with_tag_error("test-bucket", "broken.txt", 500);
+        let fetcher = fetcher(client, 2);
+
+        let results = attach_all(
+            &fetcher,
+            vec![
+                keyed("forbidden.txt"),
+                keyed("missing.txt"),
+                keyed("broken.txt"),
+            ],
+        )
+        .await;
+
+        assert!(results.iter().all(|object| object.tags == Some(Vec::new())));
+        let stats = fetcher.stats();
+        assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.failed.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.excluded.load(Ordering::Relaxed), 3);
+        assert_eq!(stats.success.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_attach_tags_to_stream_preserves_order() {
+        let client = FakeS3Client::default()
+            .with_tag_delay("test-bucket", "slow.txt", 30)
+            .with_tags("test-bucket", "slow.txt", None, vec![tag("n", "1")])
+            .with_tags("test-bucket", "fast.txt", None, vec![tag("n", "2")]);
+        let fetcher = fetcher(client, 2);
+
+        let results = attach_all(&fetcher, vec![keyed("slow.txt"), keyed("fast.txt")]).await;
+
+        let keys: Vec<_> = results.iter().map(|object| object.key().unwrap()).collect();
+        assert_eq!(keys, ["slow.txt", "fast.txt"]);
+        assert_eq!(results[0].get_tag("n"), Some("1"));
+        assert_eq!(results[1].get_tag("n"), Some("2"));
+    }
+
+    #[tokio::test]
+    async fn test_attach_tags_to_stream_propagates_upstream_errors() {
+        let fetcher = fetcher(FakeS3Client::default(), 2);
+        let upstream = stream::iter(vec![Err(crate::error::S3FindError::list_objects(
+            anyhow::anyhow!("listing failed"),
+        ))]);
+
+        let results: Vec<_> = fetcher.attach_tags_to_stream(upstream).collect().await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_err());
+    }
+
+    // The tests below go through the real SDK client to cover the adapter's
+    // request building and error classification.
+
+    fn replay_client(events: Vec<ReplayEvent>) -> Client {
         Client::from_conf(
             aws_sdk_s3::Config::builder()
                 .behavior_version(BehaviorVersion::latest())
@@ -373,317 +343,88 @@ mod tests {
                     "test", "test", None, None, "test",
                 ))
                 .region(aws_sdk_s3::config::Region::new("us-east-1"))
-                .http_client(replay_client)
+                .http_client(StaticReplayClient::new(events))
                 .build(),
         )
     }
 
-    fn make_tag_response(key: &str, tags: &[(&str, &str)]) -> ReplayEvent {
-        let uri = format!(
-            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging",
-            key
-        );
-        let req = http::Request::builder()
+    fn tagging_request(uri_suffix: &str) -> http::Request<SdkBody> {
+        http::Request::builder()
             .method("GET")
-            .uri(&uri)
+            .uri(format!(
+                "https://test-bucket.s3.us-east-1.amazonaws.com/{uri_suffix}"
+            ))
             .body(SdkBody::empty())
-            .unwrap();
+            .unwrap()
+    }
 
+    fn tag_response(uri_suffix: &str, tags: &[(&str, &str)]) -> ReplayEvent {
         let tag_xml: String = tags
             .iter()
-            .map(|(k, v)| format!("<Tag><Key>{}</Key><Value>{}</Value></Tag>", k, v))
-            .collect::<Vec<_>>()
-            .join("");
-
-        let resp_body = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-            <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-                <TagSet>{}</TagSet>
-            </Tagging>"#,
-            tag_xml
-        );
+            .map(|(k, v)| format!("<Tag><Key>{k}</Key><Value>{v}</Value></Tag>"))
+            .collect();
 
         let resp = http::Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", HeaderValue::from_static("application/xml"))
-            .body(SdkBody::from(resp_body))
+            .body(SdkBody::from(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                    <TagSet>{tag_xml}</TagSet>
+                </Tagging>"#
+            )))
             .unwrap();
 
-        ReplayEvent::new(req, resp)
+        ReplayEvent::new(tagging_request(uri_suffix), resp)
     }
 
-    fn make_error_response(key: &str, status: u16) -> ReplayEvent {
-        let uri = format!(
-            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging",
-            key
-        );
-        let req = http::Request::builder()
-            .method("GET")
-            .uri(&uri)
-            .body(SdkBody::empty())
-            .unwrap();
-
+    fn error_response(uri_suffix: &str, status: u16) -> ReplayEvent {
         let resp = http::Response::builder()
             .status(StatusCode::from_u16(status).unwrap())
             .header("Content-Type", HeaderValue::from_static("application/xml"))
             .body(SdkBody::from(""))
             .unwrap();
 
-        ReplayEvent::new(req, resp)
+        ReplayEvent::new(tagging_request(uri_suffix), resp)
     }
 
     #[tokio::test]
-    async fn test_fetch_tags_for_objects_success() {
-        let events = vec![
-            make_tag_response("file1.txt", &[("env", "prod"), ("team", "data")]),
-            make_tag_response("file2.txt", &[("env", "dev")]),
-        ];
+    async fn test_sdk_client_fetches_tags() {
+        let client = replay_client(vec![
+            tag_response("file1.txt?tagging", &[("env", "prod"), ("team", "data")]),
+            tag_response(
+                "versioned.txt?tagging&versionId=v123",
+                &[("version", "v123")],
+            ),
+        ]);
+        let fetcher = fetcher(client, 1);
 
-        let client = make_test_client(events);
-        let stats = Arc::new(TagFetchStats::new());
-        let config = TagFetchConfig::default().with_concurrency(1);
+        let mut versioned = keyed("versioned.txt");
+        versioned.version_id = Some("v123".to_string());
 
-        let objects = vec![
-            StreamObject::from_object(Object::builder().key("file1.txt").build()),
-            StreamObject::from_object(Object::builder().key("file2.txt").build()),
-        ];
+        let results = attach_all(&fetcher, vec![keyed("file1.txt"), versioned]).await;
 
-        let results = fetch_tags_for_objects(
-            client,
-            "test-bucket".to_string(),
-            objects,
-            config,
-            Arc::clone(&stats),
-        )
-        .await;
-
-        assert_eq!(results.len(), 2);
-        assert!(results[0].tags.is_some());
-        assert!(results[1].tags.is_some());
-        assert_eq!(stats.success.load(Ordering::Relaxed), 2);
+        assert_eq!(results[0].get_tag("env"), Some("prod"));
+        assert_eq!(results[0].get_tag("team"), Some("data"));
+        assert_eq!(results[1].get_tag("version"), Some("v123"));
+        assert_eq!(fetcher.stats().success.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]
-    async fn test_map_with_concurrency_in_order_preserves_input_order() {
-        let results = map_with_concurrency_in_order(vec![1_usize, 2, 3], 3, |value| async move {
-            let delay_ms = [30_u64, 5, 10][value - 1];
-            sleep(Duration::from_millis(delay_ms)).await;
-            value
-        })
-        .await;
+    async fn test_sdk_client_classifies_tagging_errors() {
+        let client = replay_client(vec![
+            error_response("forbidden.txt?tagging", 403),
+            error_response("missing.txt?tagging", 404),
+        ]);
+        let fetcher = fetcher(client, 1);
 
-        assert_eq!(results, vec![1, 2, 3]);
-    }
+        let results =
+            attach_all(&fetcher, vec![keyed("forbidden.txt"), keyed("missing.txt")]).await;
 
-    #[tokio::test]
-    async fn test_fetch_tags_for_objects_with_delete_marker() {
-        let client = make_test_client(vec![]);
-        let stats = Arc::new(TagFetchStats::new());
-        let config = TagFetchConfig::default();
-
-        let object = Object::builder().key("deleted.txt").build();
-        let objects = vec![StreamObject {
-            object,
-            version_id: Some("v1".to_string()),
-            is_latest: Some(true),
-            is_delete_marker: true,
-            tags: None,
-        }];
-
-        let results = fetch_tags_for_objects(
-            client,
-            "test-bucket".to_string(),
-            objects,
-            config,
-            Arc::clone(&stats),
-        )
-        .await;
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].tags.is_some());
-        assert!(results[0].tags.as_ref().unwrap().is_empty());
-        assert_eq!(stats.success.load(Ordering::Relaxed), 0);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_tags_for_objects_already_has_tags() {
-        let client = make_test_client(vec![]);
-        let stats = Arc::new(TagFetchStats::new());
-        let config = TagFetchConfig::default();
-
-        let object = Object::builder().key("cached.txt").build();
-        let existing_tags = vec![Tag::builder().key("cached").value("true").build().unwrap()];
-        let objects = vec![StreamObject {
-            object,
-            version_id: None,
-            is_latest: None,
-            is_delete_marker: false,
-            tags: Some(existing_tags),
-        }];
-
-        let results = fetch_tags_for_objects(
-            client,
-            "test-bucket".to_string(),
-            objects,
-            config,
-            Arc::clone(&stats),
-        )
-        .await;
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].tags.as_ref().unwrap().len(), 1);
-        assert_eq!(stats.success.load(Ordering::Relaxed), 0);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_tags_for_objects_access_denied() {
-        let events = vec![make_error_response("forbidden.txt", 403)];
-
-        let client = make_test_client(events);
-        let stats = Arc::new(TagFetchStats::new());
-        let config = TagFetchConfig::default().with_concurrency(1);
-
-        let objects = vec![StreamObject::from_object(
-            Object::builder().key("forbidden.txt").build(),
-        )];
-
-        let results = fetch_tags_for_objects(
-            client,
-            "test-bucket".to_string(),
-            objects,
-            config,
-            Arc::clone(&stats),
-        )
-        .await;
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].tags.as_ref().unwrap().is_empty());
+        assert!(results.iter().all(|object| object.tags == Some(Vec::new())));
+        let stats = fetcher.stats();
         assert_eq!(stats.access_denied.load(Ordering::Relaxed), 1);
-        assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_tags_for_objects_not_found() {
-        let events = vec![make_error_response("missing.txt", 404)];
-
-        let client = make_test_client(events);
-        let stats = Arc::new(TagFetchStats::new());
-        let config = TagFetchConfig::default().with_concurrency(1);
-
-        let objects = vec![StreamObject::from_object(
-            Object::builder().key("missing.txt").build(),
-        )];
-
-        let results = fetch_tags_for_objects(
-            client,
-            "test-bucket".to_string(),
-            objects,
-            config,
-            Arc::clone(&stats),
-        )
-        .await;
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].tags.as_ref().unwrap().is_empty());
         assert_eq!(stats.failed.load(Ordering::Relaxed), 1);
-        assert_eq!(stats.excluded.load(Ordering::Relaxed), 1);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_tags_for_objects_without_key() {
-        let client = make_test_client(vec![]);
-        let stats = Arc::new(TagFetchStats::new());
-        let config = TagFetchConfig::default();
-
-        let objects = vec![StreamObject::from_object(Object::builder().build())];
-
-        let results = fetch_tags_for_objects(
-            client,
-            "test-bucket".to_string(),
-            objects,
-            config,
-            Arc::clone(&stats),
-        )
-        .await;
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].tags.as_ref().unwrap().is_empty());
-        assert_eq!(stats.success.load(Ordering::Relaxed), 0);
-    }
-
-    fn make_versioned_tag_response(
-        key: &str,
-        version_id: &str,
-        tags: &[(&str, &str)],
-    ) -> ReplayEvent {
-        let uri = format!(
-            "https://test-bucket.s3.us-east-1.amazonaws.com/{}?tagging&versionId={}",
-            key, version_id
-        );
-        let req = http::Request::builder()
-            .method("GET")
-            .uri(&uri)
-            .body(SdkBody::empty())
-            .unwrap();
-
-        let tag_xml: String = tags
-            .iter()
-            .map(|(k, v)| format!("<Tag><Key>{}</Key><Value>{}</Value></Tag>", k, v))
-            .collect::<Vec<_>>()
-            .join("");
-
-        let resp_body = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-            <Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-                <TagSet>{}</TagSet>
-            </Tagging>"#,
-            tag_xml
-        );
-
-        let resp = http::Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", HeaderValue::from_static("application/xml"))
-            .body(SdkBody::from(resp_body))
-            .unwrap();
-
-        ReplayEvent::new(req, resp)
-    }
-
-    #[tokio::test]
-    async fn test_fetch_tags_for_objects_with_version_id() {
-        let events = vec![make_versioned_tag_response(
-            "versioned.txt",
-            "v123",
-            &[("version", "v123")],
-        )];
-
-        let client = make_test_client(events);
-        let stats = Arc::new(TagFetchStats::new());
-        let config = TagFetchConfig::default().with_concurrency(1);
-
-        let object = Object::builder().key("versioned.txt").build();
-        let objects = vec![StreamObject {
-            object,
-            version_id: Some("v123".to_string()),
-            is_latest: Some(true),
-            is_delete_marker: false,
-            tags: None,
-        }];
-
-        let results = fetch_tags_for_objects(
-            client,
-            "test-bucket".to_string(),
-            objects,
-            config,
-            Arc::clone(&stats),
-        )
-        .await;
-
-        assert_eq!(results.len(), 1);
-        let tags = results[0].tags.as_ref().unwrap();
-        assert_eq!(tags.len(), 1);
-        assert_eq!(tags[0].key(), "version");
-        assert_eq!(tags[0].value(), "v123");
-        assert_eq!(stats.success.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.excluded.load(Ordering::Relaxed), 2);
     }
 }

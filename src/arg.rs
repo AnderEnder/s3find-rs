@@ -4,9 +4,9 @@ use aws_sdk_s3::types::Tier;
 use aws_types::region::Region;
 use clap::{Args, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use glob::Pattern;
-use lazy_static::lazy_static;
 use regex::Regex;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use thiserror::Error;
 
 const MIN_BUCKET_LENGTH: usize = 3;
@@ -15,10 +15,8 @@ const MAX_BUCKET_LENGTH: usize = 63;
 const INVALID_PREFIXES: &[&str] = &["sthree-.", "amzn-s3-demo-", "xn--"];
 const INVALID_SUFFIXES: &[&str] = &["-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"];
 
-lazy_static! {
-    static ref S3_PATH_REGEX: Regex =
-        Regex::new(r#"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/(.*))?$"#,).unwrap();
-}
+static S3_PATH_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^s3://([a-z0-9][a-z0-9.-]+[a-z0-9])(/(.*))?$"#).unwrap());
 
 /// Validates an S3 bucket name according to AWS rules:
 /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
