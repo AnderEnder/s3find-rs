@@ -258,6 +258,69 @@ async fn test_command_errors_propagate() {
     assert!(matches!(result, Err(S3FindError::CommandExecution { .. })));
 }
 
+/// Notes how many objects had been listed whenever a batch finishes, after
+/// letting the rest of the pipeline run.
+#[derive(Clone, Default)]
+struct ListedDuringExecution {
+    listed: Arc<AtomicUsize>,
+    observed: Arc<Mutex<Vec<usize>>>,
+}
+
+impl RunCommand for ListedDuringExecution {
+    async fn execute<C: S3Client>(
+        &self,
+        _: &mut CommandContext<'_, C>,
+        _: &[StreamObject],
+    ) -> Result<(), anyhow::Error> {
+        tokio::task::yield_now().await;
+        self.observed
+            .lock()
+            .unwrap()
+            .push(self.listed.load(Ordering::Relaxed));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn test_listing_runs_ahead_while_a_batch_executes() {
+    let command = ListedDuringExecution::default();
+    let pipeline = Pipeline::new(FakeS3Client::default(), listing(), command.clone());
+    let listed = Arc::clone(&command.listed);
+    let items = stream::iter((0..3 * BATCH_SIZE).map(move |i| {
+        listed.fetch_add(1, Ordering::Relaxed);
+        Ok(keyed(&format!("object{i}")))
+    }));
+
+    pipeline.process(items, &mut Vec::new()).await.unwrap();
+
+    let observed = command.observed.lock().unwrap();
+    assert_eq!(observed.len(), 3);
+    assert!(observed[0] > BATCH_SIZE, "listed {observed:?}");
+}
+
+#[tokio::test]
+async fn test_command_errors_stop_listing() {
+    let pipeline = pipeline(FakeS3Client::default(), &Recorder::failing());
+    let endless = stream::iter((0..).map(|i| Ok(keyed(&format!("object{i}")))));
+
+    let result = pipeline.process(endless, &mut Vec::new()).await;
+
+    assert!(matches!(result, Err(S3FindError::CommandExecution { .. })));
+}
+
+#[test]
+fn test_from_opts_sets_concurrency() {
+    let client = FakeS3Client::default;
+    assert_eq!(
+        Pipeline::from_opts(&opts(&["s3://bucket"]), client()).concurrency,
+        DEFAULT_CONCURRENCY
+    );
+    assert_eq!(
+        Pipeline::from_opts(&opts(&["s3://bucket", "--concurrency", "7"]), client()).concurrency,
+        7
+    );
+}
+
 #[tokio::test]
 async fn test_tag_filters_with_cached_tags() {
     let recorder = Recorder::default();
@@ -537,4 +600,13 @@ async fn test_maxdepth_help_examples() {
         out,
         "s3://test-bucket/root.txt\ns3://test-bucket/logs/file.txt\n"
     );
+}
+
+#[test]
+fn test_run_future_is_send() {
+    fn assert_send(_: impl Send) {}
+
+    let pipeline = Pipeline::from_opts(&opts(&["s3://bucket"]), FakeS3Client::default());
+    let mut out = Vec::new();
+    assert_send(pipeline.run(&mut out));
 }

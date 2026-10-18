@@ -1,3 +1,5 @@
+use std::fmt;
+
 use aws_sdk_s3::types::{DeleteMarkerEntry, Object, ObjectStorageClass, ObjectVersion, Tag};
 
 use crate::error::FunctionError;
@@ -105,18 +107,11 @@ impl StreamObject {
         self.key().ok_or(FunctionError::ObjectFieldError)
     }
 
-    /// Get key for display (includes version info if present).
-    pub fn display_key(&self) -> String {
-        let key = self.object.key().unwrap_or("");
-        match (&self.version_id, self.is_latest, self.is_delete_marker) {
-            (Some(vid), Some(true), true) => {
-                format!("{key}?versionId={vid} (latest) (delete marker)")
-            }
-            (Some(vid), Some(true), false) => format!("{key}?versionId={vid} (latest)"),
-            (Some(vid), _, true) => format!("{key}?versionId={vid} (delete marker)"),
-            (Some(vid), _, false) => format!("{key}?versionId={vid}"),
-            (None, _, _) => key.to_string(),
-        }
+    /// The key as shown in output, with version details when listed by
+    /// version: `key?versionId=v1 (latest) (delete marker)`.
+    #[inline]
+    pub fn display_key(&self) -> DisplayKey<'_> {
+        DisplayKey(self)
     }
 
     /// Check if tags have been fetched for this object.
@@ -141,6 +136,27 @@ impl StreamObject {
         self.tags
             .as_ref()
             .is_some_and(|tags| tags.iter().any(|t| t.key() == key))
+    }
+}
+
+/// Formats an object's key with its version details, without allocating.
+pub struct DisplayKey<'a>(&'a StreamObject);
+
+impl fmt::Display for DisplayKey<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let object = self.0;
+        f.write_str(object.key().unwrap_or_default())?;
+
+        if let Some(version_id) = &object.version_id {
+            write!(f, "?versionId={version_id}")?;
+            if object.is_latest == Some(true) {
+                f.write_str(" (latest)")?;
+            }
+            if object.is_delete_marker {
+                f.write_str(" (delete marker)")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -182,7 +198,7 @@ mod tests {
         assert!(!stream_obj.is_delete_marker);
         // display_key() shows full version info
         assert_eq!(
-            stream_obj.display_key(),
+            stream_obj.display_key().to_string(),
             "test.txt?versionId=abc123 (latest)"
         );
         assert_eq!(stream_obj.object.size(), Some(100));
@@ -205,7 +221,10 @@ mod tests {
         assert_eq!(stream_obj.version_id, Some("old123".to_string()));
         assert_eq!(stream_obj.is_latest, Some(false));
         // display_key() shows version but not (latest)
-        assert_eq!(stream_obj.display_key(), "test.txt?versionId=old123");
+        assert_eq!(
+            stream_obj.display_key().to_string(),
+            "test.txt?versionId=old123"
+        );
         assert_eq!(stream_obj.object.size(), Some(50));
     }
 
@@ -227,7 +246,7 @@ mod tests {
         assert!(stream_obj.is_delete_marker);
         // display_key() shows full info including delete marker
         assert_eq!(
-            stream_obj.display_key(),
+            stream_obj.display_key().to_string(),
             "deleted.txt?versionId=del456 (latest) (delete marker)"
         );
         assert_eq!(stream_obj.object.size(), Some(0));
@@ -246,7 +265,7 @@ mod tests {
         assert_eq!(stream_obj.is_latest, None);
         assert!(!stream_obj.is_delete_marker);
         // display_key() is same as key for non-versioned
-        assert_eq!(stream_obj.display_key(), "simple.txt");
+        assert_eq!(stream_obj.display_key().to_string(), "simple.txt");
         assert_eq!(stream_obj.object.size(), Some(200));
     }
 
@@ -330,7 +349,7 @@ mod tests {
             is_delete_marker: false,
             tags: None,
         };
-        assert_eq!(stream_obj.display_key(), "file.txt");
+        assert_eq!(stream_obj.display_key().to_string(), "file.txt");
 
         // Versioned object (not latest, not delete marker)
         let stream_obj = StreamObject {
@@ -340,7 +359,10 @@ mod tests {
             is_delete_marker: false,
             tags: None,
         };
-        assert_eq!(stream_obj.display_key(), "file.txt?versionId=v123");
+        assert_eq!(
+            stream_obj.display_key().to_string(),
+            "file.txt?versionId=v123"
+        );
 
         // Latest version (not delete marker)
         let stream_obj = StreamObject {
@@ -350,7 +372,10 @@ mod tests {
             is_delete_marker: false,
             tags: None,
         };
-        assert_eq!(stream_obj.display_key(), "file.txt?versionId=v456 (latest)");
+        assert_eq!(
+            stream_obj.display_key().to_string(),
+            "file.txt?versionId=v456 (latest)"
+        );
 
         // Delete marker (not latest)
         let stream_obj = StreamObject {
@@ -361,7 +386,7 @@ mod tests {
             tags: None,
         };
         assert_eq!(
-            stream_obj.display_key(),
+            stream_obj.display_key().to_string(),
             "file.txt?versionId=v789 (delete marker)"
         );
 
@@ -374,7 +399,7 @@ mod tests {
             tags: None,
         };
         assert_eq!(
-            stream_obj.display_key(),
+            stream_obj.display_key().to_string(),
             "file.txt?versionId=v999 (latest) (delete marker)"
         );
 
@@ -387,7 +412,7 @@ mod tests {
             tags: None,
         };
         assert_eq!(
-            stream_obj.display_key(),
+            stream_obj.display_key().to_string(),
             "file.txt?versionId=v111 (delete marker)"
         );
     }

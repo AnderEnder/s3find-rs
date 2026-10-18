@@ -21,7 +21,7 @@ use crate::adapters::aws::{
 use crate::arg::{FindOpt, S3Path};
 use crate::error::TagFetchError;
 use crate::object::StreamObject;
-use crate::run_command::{CommandContext, RunCommand};
+use crate::run_command::{CommandContext, DEFAULT_CONCURRENCY, RunCommand};
 
 /// Parses CLI arguments (without the program name) into options.
 pub(crate) fn opts(args: &[&str]) -> FindOpt {
@@ -57,21 +57,34 @@ pub(crate) trait ExecuteCaptured {
         client: &impl S3Client,
         path: &S3Path,
         objects: &[StreamObject],
-    ) -> Result<String, Error>;
-}
+    ) -> Result<String, Error> {
+        self.execute_with_concurrency(client, path, objects, DEFAULT_CONCURRENCY)
+            .await
+    }
 
-impl<T: RunCommand> ExecuteCaptured for T {
-    async fn execute_captured(
+    async fn execute_with_concurrency(
         &self,
         client: &impl S3Client,
         path: &S3Path,
         objects: &[StreamObject],
+        concurrency: usize,
+    ) -> Result<String, Error>;
+}
+
+impl<T: RunCommand> ExecuteCaptured for T {
+    async fn execute_with_concurrency(
+        &self,
+        client: &impl S3Client,
+        path: &S3Path,
+        objects: &[StreamObject],
+        concurrency: usize,
     ) -> Result<String, Error> {
         let mut out = Vec::new();
         let mut ctx = CommandContext {
             client,
             path,
             out: &mut out,
+            concurrency,
         };
         self.execute(&mut ctx, objects).await?;
         Ok(String::from_utf8(out)?)
@@ -124,6 +137,7 @@ pub(crate) struct FakeS3Client {
     pub(crate) objects: Mutex<BTreeMap<String, Object>>,
     pub(crate) version_pages: Mutex<Vec<(Vec<ObjectVersion>, Vec<DeleteMarkerEntry>)>>,
     pub(crate) list_error: Option<String>,
+    pub(crate) list_delay: Option<Duration>,
     pub(crate) list_calls: Mutex<Vec<ListCall>>,
     pub(crate) list_version_calls: Mutex<Vec<Option<VersionMarker>>>,
     pub(crate) delete_calls: Mutex<Vec<(String, Vec<DeleteObjectRequest>)>>,
@@ -147,6 +161,7 @@ impl Default for FakeS3Client {
             objects: Mutex::default(),
             version_pages: Mutex::default(),
             list_error: None,
+            list_delay: None,
             list_calls: Mutex::default(),
             list_version_calls: Mutex::default(),
             delete_calls: Mutex::default(),
@@ -211,6 +226,12 @@ impl FakeS3Client {
     /// Makes every list call fail with this message.
     pub(crate) fn with_list_error(mut self, message: &str) -> Self {
         self.list_error = Some(message.to_string());
+        self
+    }
+
+    /// Makes every ListObjectsV2 call take `millis`.
+    pub(crate) fn with_list_delay(mut self, millis: u64) -> Self {
+        self.list_delay = Some(Duration::from_millis(millis));
         self
     }
 
@@ -295,6 +316,9 @@ impl S3Client for FakeS3Client {
             delimiter: request.delimiter.map(str::to_string),
             continuation_token: request.continuation_token.map(str::to_string),
         });
+        if let Some(delay) = self.list_delay {
+            tokio::time::sleep(delay).await;
+        }
         if let Some(message) = &self.list_error {
             return Err(anyhow!(message.clone()));
         }

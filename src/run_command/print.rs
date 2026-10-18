@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 
 use anyhow::Error;
@@ -40,44 +41,46 @@ impl RunCommand for FastPrint {
     }
 }
 
+/// One object in `print --format json|csv` output. Strings borrow from the
+/// listed object; deserializing (in tests) produces owned ones.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct ObjectRecord {
-    pub(crate) e_tag: String,
-    pub(crate) owner: String,
+pub(crate) struct ObjectRecord<'a> {
+    pub(crate) e_tag: Cow<'a, str>,
+    pub(crate) owner: Cow<'a, str>,
     pub(crate) size: i64,
     pub(crate) last_modified: String,
-    pub(crate) key: String,
-    pub(crate) storage_class: String,
+    pub(crate) key: Cow<'a, str>,
+    pub(crate) storage_class: Cow<'a, str>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) version_id: Option<String>,
+    pub(crate) version_id: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) is_latest: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) is_delete_marker: Option<bool>,
 }
 
-impl From<&StreamObject> for ObjectRecord {
-    fn from(stream_obj: &StreamObject) -> Self {
+impl<'a> From<&'a StreamObject> for ObjectRecord<'a> {
+    fn from(stream_obj: &'a StreamObject) -> Self {
         let object = &stream_obj.object;
         ObjectRecord {
-            e_tag: object.e_tag.clone().unwrap_or_default(),
+            e_tag: object.e_tag().unwrap_or_default().into(),
             owner: object
-                .owner
-                .clone()
-                .and_then(|x| x.display_name.clone())
-                .unwrap_or_default(),
+                .owner()
+                .and_then(|owner| owner.display_name())
+                .unwrap_or_default()
+                .into(),
             size: object.size.unwrap_or_default(),
             last_modified: object
                 .last_modified
                 .and_then(|x| x.fmt(DateTimeFormat::DateTime).ok())
                 .unwrap_or_default(),
-            key: object.key.clone().unwrap_or_default(),
+            key: object.key().unwrap_or_default().into(),
             storage_class: object
-                .storage_class
-                .clone()
-                .map(|x| x.to_string())
-                .unwrap_or_default(),
-            version_id: stream_obj.version_id.clone(),
+                .storage_class()
+                .map(|class| class.as_str())
+                .unwrap_or_default()
+                .into(),
+            version_id: stream_obj.version_id.as_deref().map(Cow::from),
             is_latest: stream_obj.is_latest,
             is_delete_marker: stream_obj.is_delete_marker.then_some(true),
         }
@@ -123,8 +126,8 @@ impl AdvancedPrint {
         io: &mut I,
         stream_obj: &StreamObject,
     ) -> Result<(), Error> {
-        let record: ObjectRecord = stream_obj.into();
-        writeln!(io, "{}", serde_json::to_string(&record)?)?;
+        serde_json::to_writer(&mut *io, &ObjectRecord::from(stream_obj))?;
+        writeln!(io)?;
         Ok(())
     }
 
@@ -136,8 +139,7 @@ impl AdvancedPrint {
     ) -> Result<(), Error> {
         let mut wtr = WriterBuilder::new().has_headers(false).from_writer(io);
         for stream_obj in stream_objects {
-            let record: ObjectRecord = stream_obj.into();
-            wtr.serialize(record)?;
+            wtr.serialize(ObjectRecord::from(stream_obj))?;
         }
         wtr.flush()?;
         Ok(())

@@ -100,6 +100,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 - `download` skips existing destination files and continues with the remaining objects unless `--force` is set.
 - With tag filters enabled, result order stays aligned with S3 traversal order, and `--limit` applies to that ordered match set.
 - `--summarize` prints normal summary statistics and, when tag filters are used, tag fetch statistics including `excluded` objects.
+- Commands that make one S3 request per object (`copy`, `move`, `download`, `tags`, `lstags`, `public`, `restore`, `change-storage`) keep up to `--concurrency` requests in flight (default: 32) and still print results in traversal order. On an error they stop, but requests already in flight may have completed; `--concurrency 1` processes one object at a time. `exec` always runs one command at a time.
+- Listing runs up to one batch (1000 objects) ahead of the command, and `--maxdepth` fetches the first page of up to 8 subdirectories per level at once.
 
 ## Usage
 
@@ -348,6 +350,9 @@ s3find 's3://example-bucket/example-path' --name '*.dat' move 's3://example-buck
 
 # Flatten keys while copying
 s3find 's3://example-bucket/example-path' --name '*.dat' copy --flat 's3://example-bucket/example-path2'
+
+# Copy with up to 100 requests in flight (default: 32)
+s3find 's3://example-bucket/example-path' --concurrency 100 copy 's3://example-bucket/example-path2'
 ```
 
 #### Tag Management

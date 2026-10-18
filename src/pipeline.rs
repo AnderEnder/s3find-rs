@@ -4,7 +4,9 @@
 use std::future::ready;
 use std::io::Write;
 
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::channel::mpsc;
+use futures::future::try_join;
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 
 use crate::adapters::aws::S3Client;
 use crate::arg::{Cmd, FindOpt};
@@ -12,7 +14,7 @@ use crate::error::{S3FindError, S3FindResult};
 use crate::filter::FilterList;
 use crate::listing::{ListingOptions, list_objects};
 use crate::object::StreamObject;
-use crate::run_command::{CommandContext, RunCommand};
+use crate::run_command::{CommandContext, DEFAULT_CONCURRENCY, RunCommand};
 use crate::stats::FindStat;
 use crate::tag_fetcher::{TagFetchStats, TagFetcher};
 
@@ -36,6 +38,7 @@ pub struct Pipeline<C, K = Cmd> {
     tag_stage: Option<TagStage>,
     limit: Option<usize>,
     command: K,
+    concurrency: usize,
     summarize: bool,
 }
 
@@ -50,6 +53,7 @@ impl<C: S3Client> Pipeline<C> {
                 opts.tag_concurrency.into(),
             )
             .with_limit(opts.limit)
+            .with_concurrency(opts.concurrency.into())
             .with_summary(opts.summarize)
     }
 }
@@ -64,6 +68,7 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
             tag_stage: None,
             limit: None,
             command,
+            concurrency: DEFAULT_CONCURRENCY,
             summarize: false,
         }
     }
@@ -87,6 +92,12 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
     /// Stops after this many matches, in traversal order.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// Most requests a command keeps in flight when it makes one per object.
+    pub fn with_concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency;
         self
     }
 
@@ -118,14 +129,36 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
     }
 
     /// Runs the pipeline over already-listed objects.
+    ///
+    /// Matching runs ahead of the command by up to one batch, so listing and
+    /// tag fetching continue while a batch is being executed.
     pub async fn process<'a>(
         &'a self,
         objects: impl Stream<Item = S3FindResult<StreamObject>> + Send + 'a,
         out: &mut (dyn Write + Send),
     ) -> S3FindResult<Option<FindStat>> {
+        let (sender, receiver) = mpsc::channel(BATCH_SIZE);
+        // Ends early, without error, once the receiver is gone.
+        let produce = self
+            .matches(objects)
+            .map(Ok)
+            .forward(sender)
+            .map(|_| Ok(()));
+        let consume = self.consume(receiver, out);
+
+        let ((), stats) = try_join(produce, consume).await?;
+        Ok(stats)
+    }
+
+    /// Runs the command on matches in batches of up to [`BATCH_SIZE`],
+    /// stopping at the first error.
+    async fn consume(
+        &self,
+        mut matches: impl Stream<Item = S3FindResult<StreamObject>> + Unpin,
+        out: &mut (dyn Write + Send),
+    ) -> S3FindResult<Option<FindStat>> {
         let mut stats = self.summarize.then(FindStat::default);
-        let mut matches = std::pin::pin!(self.matches(objects));
-        let mut batch = Vec::new();
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
 
         while let Some(object) = matches.try_next().await? {
             batch.push(object);
@@ -174,6 +207,7 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
             client: &self.client,
             path: &self.listing.path,
             out,
+            concurrency: self.concurrency,
         };
         self.command
             .execute(&mut ctx, batch)
