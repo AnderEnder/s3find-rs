@@ -21,7 +21,7 @@ pub struct ListingOptions {
     pub path: S3Path,
     /// Keys requested per list call (1..=1000).
     pub page_size: u16,
-    /// Subdirectory levels to descend below the prefix; `None` is unlimited.
+    /// Most '/' allowed in a key after the prefix; `None` is unlimited.
     pub maxdepth: Option<usize>,
     /// List every version and delete marker. Takes precedence over `maxdepth`.
     pub all_versions: bool,
@@ -127,8 +127,9 @@ fn object_pages<'a>(
     }
 }
 
-/// Depth-first walk: each page's objects, then each of its subdirectories,
-/// down to `maxdepth` levels below the starting prefix.
+/// Depth-first walk: each page's objects, then each of its subdirectories.
+/// Objects found at `depth` have that many '/' in their key after the
+/// starting prefix; subdirectories are only entered while `depth < maxdepth`.
 fn list_to_depth<'a>(
     client: &'a dyn S3Client,
     bucket: &'a str,

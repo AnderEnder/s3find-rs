@@ -518,3 +518,28 @@ fn test_option_warnings() {
         ["Warning: --maxdepth is ignored when --all-versions is used"]
     );
 }
+
+/// Pins the examples in the `--maxdepth` help text.
+#[tokio::test]
+async fn test_maxdepth_help_examples() {
+    let bucket = || {
+        FakeS3Client::default().with_objects(&[
+            ("root.txt", 1),
+            ("logs/file.txt", 1),
+            ("logs/2024/file.txt", 1),
+            ("logs/2024/01/file.txt", 1),
+        ])
+    };
+
+    let (out, _) = run_cli(bucket(), &["s3://test-bucket/logs/", "--maxdepth", "2"]).await;
+    assert_eq!(
+        out,
+        "s3://test-bucket/logs/file.txt\ns3://test-bucket/logs/2024/file.txt\n"
+    );
+
+    let (out, _) = run_cli(bucket(), &["s3://test-bucket", "--maxdepth", "1"]).await;
+    assert_eq!(
+        out,
+        "s3://test-bucket/root.txt\ns3://test-bucket/logs/file.txt\n"
+    );
+}

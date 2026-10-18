@@ -369,9 +369,11 @@ s3find 's3://example-bucket/' --maxdepth 0 ls
 # Objects up to one subdirectory level deep
 s3find 's3://example-bucket/' --maxdepth 1 ls
 
-# Objects up to two levels deep
+# Objects directly inside data/ and one subdirectory below it
 s3find 's3://example-bucket/data/' --maxdepth 2 ls
 ```
+
+An object's depth is the number of `/` in its key after the prefix. Trailing slashes in the path are ignored, so for `s3://example-bucket/data/` the objects directly inside `data/` are at depth 1 and `data/2024/report.csv` is at depth 2.
 
 The `--maxdepth` option uses S3's delimiter-based traversal for efficient server-side filtering, avoiding the need to fetch objects beyond the specified depth.
 

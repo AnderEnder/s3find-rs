@@ -299,17 +299,21 @@ Example:
     #[arg(
         name = "maxdepth",
         long,
-        long_help = r#"Descend at most N levels of subdirectories below the starting prefix.
+        long_help = r#"Descend at most N levels of subdirectories.
 
-Depth is measured by subdirectory levels using S3's hierarchical structure:
-  - maxdepth 0: Only objects at the prefix level (no subdirectories)
-  - maxdepth 1: Prefix level + one subdirectory level
-  - maxdepth 2: Prefix level + two subdirectory levels
+An object's depth is the number of '/' in its key after the prefix.
+Trailing slashes in the path are ignored, so for s3://bucket/logs/ the
+objects directly inside logs/ are at depth 1.
 
-Example: s3find s3://bucket/logs/ --maxdepth 1 ls
-  logs/file.txt          → depth 0 (included, at prefix level)
-  logs/2024/file.txt     → depth 1 (included, one subdirectory deep)
-  logs/2024/01/file.txt  → depth 2 (excluded, two subdirectories deep)
+Example: s3find s3://bucket/logs/ --maxdepth 2 ls
+  logs/file.txt          → depth 1 (included)
+  logs/2024/file.txt     → depth 2 (included)
+  logs/2024/01/file.txt  → depth 3 (excluded)
+
+Example: s3find s3://bucket --maxdepth 1 ls
+  root.txt               → depth 0 (included)
+  logs/file.txt          → depth 1 (included)
+  logs/2024/file.txt     → depth 2 (excluded)
 
 Performance: Uses S3's Delimiter parameter for server-side filtering,
 significantly reducing data transfer for deep hierarchies compared to
