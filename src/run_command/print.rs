@@ -10,6 +10,7 @@ use crate::adapters::aws::S3Client;
 use crate::arg::{AdvancedPrint, FastPrint, PrintFormat};
 use crate::object::StreamObject;
 
+use super::report::S3Url;
 use super::{CommandContext, RunCommand};
 
 impl FastPrint {
@@ -30,8 +31,13 @@ impl RunCommand for FastPrint {
         ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
+        let bucket = &ctx.path.bucket;
         for object in objects {
-            self.print_stream_object(ctx.out, &ctx.path.bucket, object)?;
+            if ctx.options.json {
+                print_json_object(ctx.out, bucket, object)?;
+            } else {
+                self.print_stream_object(ctx.out, bucket, object)?;
+            }
         }
         Ok(())
     }
@@ -39,6 +45,35 @@ impl RunCommand for FastPrint {
     fn buffered_output(&self) -> bool {
         true
     }
+}
+
+/// One object in JSON output (`--json`, or `print --format json`): its bucket
+/// and URL, followed by the same fields as in CSV.
+#[derive(Serialize)]
+struct JsonObject<'a> {
+    bucket: &'a str,
+    url: S3Url<'a>,
+    #[serde(flatten)]
+    record: ObjectRecord<'a>,
+}
+
+/// Writes one object as a line of JSON.
+fn print_json_object<I: Write + ?Sized>(
+    io: &mut I,
+    bucket: &str,
+    stream_obj: &StreamObject,
+) -> Result<(), Error> {
+    let record = JsonObject {
+        bucket,
+        url: S3Url {
+            bucket,
+            key: stream_obj.key().unwrap_or_default(),
+        },
+        record: ObjectRecord::from(stream_obj),
+    };
+    serde_json::to_writer(&mut *io, &record)?;
+    writeln!(io)?;
+    Ok(())
 }
 
 /// One object in `print --format json|csv` output. Strings borrow from the
@@ -124,11 +159,10 @@ impl AdvancedPrint {
     pub(crate) fn print_json_stream_object<I: Write + ?Sized>(
         &self,
         io: &mut I,
+        bucket: &str,
         stream_obj: &StreamObject,
     ) -> Result<(), Error> {
-        serde_json::to_writer(&mut *io, &ObjectRecord::from(stream_obj))?;
-        writeln!(io)?;
-        Ok(())
+        print_json_object(io, bucket, stream_obj)
     }
 
     #[inline]
@@ -152,18 +186,20 @@ impl RunCommand for AdvancedPrint {
         ctx: &mut CommandContext<'_, C>,
         objects: &[StreamObject],
     ) -> Result<(), Error> {
-        match self.format {
-            PrintFormat::Json => {
+        let bucket = &ctx.path.bucket;
+        // --json overrides --format.
+        match (ctx.options.json, &self.format) {
+            (true, _) | (false, PrintFormat::Json) => {
                 for object in objects {
-                    self.print_json_stream_object(ctx.out, object)?;
+                    self.print_json_stream_object(ctx.out, bucket, object)?;
                 }
             }
-            PrintFormat::Text => {
+            (false, PrintFormat::Text) => {
                 for object in objects {
-                    self.print_stream_object(ctx.out, &ctx.path.bucket, object)?;
+                    self.print_stream_object(ctx.out, bucket, object)?;
                 }
             }
-            PrintFormat::Csv => {
+            (false, PrintFormat::Csv) => {
                 self.print_csv_stream_objects(ctx.out, objects)?;
             }
         }

@@ -1403,3 +1403,65 @@ async fn test_tag_concurrency_option() {
     assert!(stdout.contains("file2.txt"), "Expected file2.txt: {stdout}");
     assert!(stdout.contains("file3.txt"), "Expected file3.txt: {stdout}");
 }
+
+/// Parses each stdout line of a successful s3find run as JSON.
+fn json_lines(output: std::process::Output) -> Vec<serde_json::Value> {
+    assert!(
+        output.status.success(),
+        "s3find failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each line is JSON"))
+        .collect()
+}
+
+#[tokio::test]
+async fn test_ls_json_with_summary() {
+    let bucket_name = unique_bucket_name("test-ls-json");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+    fixture.put_object("a.txt", b"12345").await;
+    fixture.put_object("dir/b.txt", b"123").await;
+
+    // --json works after the command too.
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--summarize")
+        .arg("ls")
+        .arg("--json");
+    let lines = json_lines(cmd.output().unwrap());
+
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(lines[0]["key"], "a.txt");
+    assert_eq!(lines[0]["url"], fixture.s3_path("a.txt"));
+    assert_eq!(lines[0]["size"], 5);
+    assert_eq!(lines[1]["key"], "dir/b.txt");
+    assert_eq!(lines[2]["summary"]["total_files"], 2);
+    assert_eq!(lines[2]["summary"]["total_space"], 8);
+}
+
+#[tokio::test]
+async fn test_delete_dry_run_keeps_objects() {
+    let bucket_name = unique_bucket_name("test-delete-dry-run");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+    fixture.put_object("keep.txt", b"keep").await;
+    fixture.put_object("old.tmp", b"old").await;
+
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .args(["--name", "*.tmp", "delete", "--dry-run"]);
+    cmd.assert().success().stdout(format!(
+        "[dry-run] deleted: {}\n",
+        fixture.s3_path("old.tmp")
+    ));
+
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path("")).arg("--json").arg("ls");
+    let keys: Vec<_> = json_lines(cmd.output().unwrap())
+        .into_iter()
+        .map(|line| line["key"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(keys, ["keep.txt", "old.tmp"]);
+}

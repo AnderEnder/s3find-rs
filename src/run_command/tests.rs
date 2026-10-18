@@ -433,14 +433,12 @@ fn test_fast_print_object() -> Result<(), Error> {
 
 #[tokio::test]
 async fn test_exec() -> Result<(), Error> {
-    let mut buf = Vec::new();
     let cmd = Exec {
         utility: "echo test {}".to_owned(),
     };
 
     let path = "s3://test/somepath/otherpath";
-    cmd.exec(&mut buf, path).await?;
-    let out = std::str::from_utf8(&buf)?;
+    let out = exec::run(&cmd.command_line(path)).await?;
 
     assert!(out.contains("test"));
     assert!(out.contains("s3://test/somepath/otherpath"));
@@ -450,14 +448,12 @@ async fn test_exec() -> Result<(), Error> {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_exec_supports_quoted_arguments() -> Result<(), Error> {
-    let mut buf = Vec::new();
     let cmd = Exec {
         utility: "echo \"test {}\"".to_owned(),
     };
 
     let path = "s3://test/somepath/otherpath";
-    cmd.exec(&mut buf, path).await?;
-    let out = std::str::from_utf8(&buf)?;
+    let out = exec::run(&cmd.command_line(path)).await?;
 
     assert_eq!(out.trim(), format!("test {path}"));
     Ok(())
@@ -466,48 +462,44 @@ async fn test_exec_supports_quoted_arguments() -> Result<(), Error> {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_exec_propagates_non_zero_status() {
-    let mut buf = Vec::new();
     let cmd = Exec {
         utility: "sh -c 'exit 7'".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
+    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7"));
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn test_exec_propagates_stderr_output() {
-    let mut buf = Vec::new();
     let cmd = Exec {
         utility: "sh -c 'echo boom 1>&2; exit 7'".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
+    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7: boom"));
 }
 
 #[cfg(windows)]
 #[tokio::test]
 async fn test_exec_propagates_non_zero_status() {
-    let mut buf = Vec::new();
     let cmd = Exec {
         utility: "cmd /C exit 7".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
+    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7"));
 }
 
 #[cfg(windows)]
 #[tokio::test]
 async fn test_exec_propagates_stderr_output() {
-    let mut buf = Vec::new();
     let cmd = Exec {
         utility: "cmd /C \"echo boom 1>&2 && exit 7\"".to_owned(),
     };
 
-    let err = cmd.exec(&mut buf, "ignored").await.unwrap_err();
+    let err = exec::run(&cmd.command_line("ignored")).await.unwrap_err();
     assert!(err.to_string().contains("failed with status 7: boom"));
 }
 
@@ -530,7 +522,7 @@ fn test_advanced_print_json() -> Result<(), Error> {
         format: PrintFormat::Json,
     };
 
-    cmd.print_json_stream_object(&mut buf, &stream_obj)?;
+    cmd.print_json_stream_object(&mut buf, "test-bucket", &stream_obj)?;
 
     let output = String::from_utf8(buf).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&output)?;
@@ -2456,7 +2448,7 @@ fn test_advanced_print_json_with_version_fields() -> Result<(), Error> {
         format: PrintFormat::Json,
     };
 
-    cmd.print_json_stream_object(&mut buf, &stream_obj)?;
+    cmd.print_json_stream_object(&mut buf, "test-bucket", &stream_obj)?;
 
     let output = String::from_utf8(buf).unwrap();
     println!("JSON with version: {output}");
@@ -2489,7 +2481,7 @@ fn test_advanced_print_json_with_delete_marker() -> Result<(), Error> {
         format: PrintFormat::Json,
     };
 
-    cmd.print_json_stream_object(&mut buf, &stream_obj)?;
+    cmd.print_json_stream_object(&mut buf, "test-bucket", &stream_obj)?;
 
     let output = String::from_utf8(buf).unwrap();
     println!("JSON with delete marker: {output}");
@@ -2692,7 +2684,15 @@ async fn list_tags_with_delays(concurrency: usize) -> (String, Duration) {
 
     let start = tokio::time::Instant::now();
     let output = ListTags {}
-        .execute_with_concurrency(&client, &path, &objects, concurrency)
+        .execute_with(
+            &client,
+            &path,
+            &objects,
+            CommandOptions {
+                concurrency,
+                ..CommandOptions::default()
+            },
+        )
         .await
         .unwrap();
     (output, start.elapsed())
@@ -2731,5 +2731,340 @@ async fn test_per_object_request_errors_name_the_object() {
     assert_eq!(
         format!("{err:#}"),
         "s3://test-bucket/b.txt: Access denied for s3:GetObjectTagging on test-bucket/b.txt"
+    );
+}
+
+fn test_path() -> S3Path {
+    S3Path {
+        bucket: "test-bucket".to_string(),
+        prefix: None,
+    }
+}
+
+/// An object in Glacier, so every command, including restore, acts on it.
+fn archived_object() -> StreamObject {
+    StreamObject::from_object(
+        Object::builder()
+            .key("dir/file.txt")
+            .size(4)
+            .storage_class(ObjectStorageClass::Glacier)
+            .build(),
+    )
+}
+
+/// Every command that changes objects, with its `--dry-run` text output for
+/// `archived_object()`.
+fn changing_commands(download_dir: &std::path::Path) -> Vec<(Cmd, String)> {
+    let download_path = download_dir.join("dir/file.txt");
+    let destination = S3Path {
+        bucket: "dest-bucket".to_string(),
+        prefix: Some("backup".to_string()),
+    };
+    vec![
+        (
+            Cmd::Delete(MultipleDelete {}),
+            "deleted: s3://test-bucket/dir/file.txt".to_string(),
+        ),
+        (
+            Cmd::Copy(S3Copy {
+                destination: destination.clone(),
+                flat: false,
+                storage_class: None,
+            }),
+            "copying: s3://test-bucket/dir%2Ffile.txt => s3://dest-bucket/backup/dir/file.txt"
+                .to_string(),
+        ),
+        (
+            Cmd::Move(S3Move {
+                destination,
+                flat: true,
+                storage_class: None,
+            }),
+            "moving: s3://test-bucket/dir%2Ffile.txt => s3://dest-bucket/backup/file.txt"
+                .to_string(),
+        ),
+        (
+            Cmd::Tags(SetTags {
+                tags: vec![FindTag {
+                    key: "env".to_string(),
+                    value: "prod".to_string(),
+                }],
+            }),
+            "tags are set for: s3://test-bucket/dir/file.txt".to_string(),
+        ),
+        (
+            Cmd::Public(SetPublic {}),
+            "dir/file.txt https://test-bucket.s3.amazonaws.com/dir/file.txt".to_string(),
+        ),
+        (
+            Cmd::Restore(Restore::default()),
+            "Restore initiated for: dir/file.txt".to_string(),
+        ),
+        (
+            Cmd::ChangeStorage(ChangeStorage {
+                storage_class: StorageClassName::from("DEEP_ARCHIVE"),
+            }),
+            "Changing storage class for s3://test-bucket/dir/file.txt to DEEP_ARCHIVE".to_string(),
+        ),
+        (
+            Cmd::Download(Download {
+                destination: download_dir.to_string_lossy().to_string(),
+                force: false,
+            }),
+            format!(
+                "downloading: s3://test-bucket/dir/file.txt => {}",
+                download_path.display()
+            ),
+        ),
+        (
+            // Fails if it is run.
+            Cmd::Exec(Exec {
+                utility: "false {}".to_string(),
+            }),
+            "false s3://test-bucket/dir/file.txt".to_string(),
+        ),
+    ]
+}
+
+fn dry_run(json: bool) -> CommandOptions {
+    CommandOptions {
+        json,
+        dry_run: true,
+        ..CommandOptions::default()
+    }
+}
+
+/// Whether `client` recorded any call that changes or reads object data.
+fn made_changes(client: &FakeS3Client) -> bool {
+    !(client.delete_calls.lock().unwrap().is_empty()
+        && client.put_tag_calls.lock().unwrap().is_empty()
+        && client.public_calls.lock().unwrap().is_empty()
+        && client.copy_calls.lock().unwrap().is_empty()
+        && client.restore_calls.lock().unwrap().is_empty()
+        && client.get_object_calls.lock().unwrap().is_empty())
+}
+
+#[tokio::test]
+async fn test_dry_run_changes_nothing_and_marks_output() {
+    let download_dir = tempdir().unwrap();
+
+    for (cmd, line) in changing_commands(download_dir.path()) {
+        let client = FakeS3Client::default();
+        let output = cmd
+            .execute_with(&client, &test_path(), &[archived_object()], dry_run(false))
+            .await
+            .unwrap();
+
+        assert_eq!(output, format!("[dry-run] {line}\n"), "{cmd:?}");
+        assert!(!made_changes(&client), "{cmd:?} made changes");
+    }
+    assert_eq!(fs::read_dir(download_dir.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn test_dry_run_json_marks_each_record() {
+    let download_dir = tempdir().unwrap();
+
+    for (cmd, _) in changing_commands(download_dir.path()) {
+        let client = FakeS3Client::default();
+        let output = cmd
+            .execute_with(&client, &test_path(), &[archived_object()], dry_run(true))
+            .await
+            .unwrap();
+
+        let record: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(record["dry_run"], true, "{cmd:?}: {output}");
+        assert_eq!(record["key"], "dir/file.txt", "{cmd:?}: {output}");
+        assert_eq!(record["url"], "s3://test-bucket/dir/file.txt", "{cmd:?}");
+        assert!(record["action"].is_string(), "{cmd:?}: {output}");
+        assert!(!made_changes(&client), "{cmd:?} made changes");
+    }
+}
+
+#[tokio::test]
+async fn test_dry_run_leaves_read_only_commands_unmarked() {
+    let client = FakeS3Client::default();
+    let commands = [
+        Cmd::Ls(FastPrint {}),
+        Cmd::Print(AdvancedPrint::default()),
+        Cmd::LsTags(ListTags {}),
+    ];
+
+    for cmd in commands {
+        let output = cmd
+            .execute_with(&client, &test_path(), &[archived_object()], dry_run(false))
+            .await
+            .unwrap();
+        assert!(output.contains("dir/file.txt"), "{cmd:?}: {output}");
+        assert!(!output.contains("dry-run"), "{cmd:?}: {output}");
+    }
+}
+
+/// Runs `cmd` on `objects` with `--json` and parses each output line.
+async fn json_lines(
+    cmd: &Cmd,
+    client: &FakeS3Client,
+    objects: &[StreamObject],
+) -> Vec<serde_json::Value> {
+    let options = CommandOptions {
+        json: true,
+        ..CommandOptions::default()
+    };
+    cmd.execute_with(client, &test_path(), objects, options)
+        .await
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn test_json_output_of_commands_that_change_objects() {
+    let client = FakeS3Client::default().with_restore_status(
+        "test-bucket",
+        "dir/file.txt",
+        None,
+        RestoreObjectStatus::AlreadyInProgress,
+    );
+    let mut versioned = archived_object();
+    versioned.version_id = Some("v1".to_string());
+
+    let delete = json_lines(&Cmd::Delete(MultipleDelete {}), &client, &[versioned]).await;
+    assert_eq!(
+        delete,
+        [serde_json::json!({
+            "action": "delete",
+            "bucket": "test-bucket",
+            "key": "dir/file.txt",
+            "version_id": "v1",
+            "url": "s3://test-bucket/dir/file.txt",
+        })]
+    );
+
+    let copy = Cmd::Copy(S3Copy {
+        destination: S3Path {
+            bucket: "dest-bucket".to_string(),
+            prefix: None,
+        },
+        flat: true,
+        storage_class: None,
+    });
+    assert_eq!(
+        json_lines(&copy, &client, &[archived_object()]).await,
+        [serde_json::json!({
+            "action": "copy",
+            "bucket": "test-bucket",
+            "key": "dir/file.txt",
+            "url": "s3://test-bucket/dir/file.txt",
+            "destination": "s3://dest-bucket/file.txt",
+        })]
+    );
+
+    let tags = Cmd::Tags(SetTags {
+        tags: vec![FindTag {
+            key: "env".to_string(),
+            value: "prod".to_string(),
+        }],
+    });
+    assert_eq!(
+        json_lines(&tags, &client, &[archived_object()]).await[0]["tags"],
+        serde_json::json!({"env": "prod"})
+    );
+
+    let restore = json_lines(
+        &Cmd::Restore(Restore::default()),
+        &client,
+        &[archived_object()],
+    )
+    .await;
+    assert_eq!(restore[0]["action"], "restore");
+    assert_eq!(restore[0]["status"], "already_in_progress");
+
+    let public = json_lines(&Cmd::Public(SetPublic {}), &client, &[archived_object()]).await;
+    assert_eq!(
+        public[0]["public_url"],
+        "https://test-bucket.s3.amazonaws.com/dir/file.txt"
+    );
+}
+
+#[tokio::test]
+async fn test_json_output_of_read_only_commands() {
+    let mut tagged = archived_object();
+    tagged.tags = Some(vec![
+        Tag::builder().key("env").value("prod").build().unwrap(),
+    ]);
+    let client = FakeS3Client::default();
+
+    for cmd in [
+        Cmd::Ls(FastPrint {}),
+        Cmd::Print(AdvancedPrint {
+            format: PrintFormat::Csv,
+        }),
+    ] {
+        let records = json_lines(&cmd, &client, std::slice::from_ref(&tagged)).await;
+        assert_eq!(records.len(), 1, "{cmd:?}");
+        assert_eq!(records[0]["bucket"], "test-bucket");
+        assert_eq!(records[0]["key"], "dir/file.txt");
+        assert_eq!(records[0]["url"], "s3://test-bucket/dir/file.txt");
+        assert_eq!(records[0]["size"], 4);
+        assert_eq!(records[0]["storage_class"], "GLACIER");
+    }
+
+    assert_eq!(
+        json_lines(&Cmd::LsTags(ListTags {}), &client, &[tagged]).await,
+        [serde_json::json!({
+            "bucket": "test-bucket",
+            "key": "dir/file.txt",
+            "url": "s3://test-bucket/dir/file.txt",
+            "tags": {"env": "prod"},
+        })]
+    );
+}
+
+#[tokio::test]
+async fn test_download_reports_skipped_files() -> Result<(), Error> {
+    let download_dir = tempdir()?;
+    let existing = download_dir.path().join("dir/file.txt");
+    fs::create_dir_all(existing.parent().unwrap())?;
+    fs::write(&existing, "old")?;
+    let cmd = Cmd::Download(Download {
+        destination: download_dir.path().to_string_lossy().to_string(),
+        force: false,
+    });
+    let client = FakeS3Client::default();
+
+    // Text goes to stderr, so stdout stays empty; JSON reports the skip.
+    assert_eq!(
+        cmd.execute_captured(&client, &test_path(), &[archived_object()])
+            .await?,
+        ""
+    );
+    let records = json_lines(&cmd, &client, &[archived_object()]).await;
+    assert_eq!(records[0]["action"], "download");
+    assert_eq!(records[0]["skipped"], true);
+    assert_eq!(records[0]["path"], existing.to_string_lossy().as_ref());
+    assert!(client.get_object_calls.lock().unwrap().is_empty());
+    assert_eq!(fs::read_to_string(existing)?, "old");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_exec_json_includes_command_and_stdout() {
+    let cmd = Cmd::Exec(Exec {
+        utility: "echo found {}".to_string(),
+    });
+    let records = json_lines(&cmd, &FakeS3Client::default(), &[archived_object()]).await;
+
+    assert_eq!(
+        records,
+        [serde_json::json!({
+            "action": "exec",
+            "bucket": "test-bucket",
+            "key": "dir/file.txt",
+            "url": "s3://test-bucket/dir/file.txt",
+            "command": "echo found s3://test-bucket/dir/file.txt",
+            "stdout": "found s3://test-bucket/dir/file.txt\n",
+        })]
     );
 }

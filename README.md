@@ -17,6 +17,7 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
   - [Basic Syntax](#basic-syntax)
   - [Authentication Methods](#authentication-methods)
   - [Using with Non-AWS S3-Compatible Services](#using-with-non-aws-s3-compatible-services)
+  - [Scripting and AI Agents](#scripting-and-ai-agents)
 - [Examples](#examples)
   - [Finding Files](#finding-files-by-glob-pattern)
   - [Filter by Size](#find-path-by-size)
@@ -173,6 +174,52 @@ s3find --help
 s3find s3://example-bucket/path print --help
 s3find s3://example-bucket/path copy --help
 ```
+
+### Scripting and AI Agents
+
+s3find is built to be driven by scripts and AI agents as well as by people:
+
+- **Results on stdout, everything else on stderr.** Each result is one line; warnings, progress bars and errors go to stderr. Progress bars are hidden when stderr isn't a terminal.
+- **`--json`** writes [JSON Lines](https://jsonlines.org/): one JSON object per result.
+- **`--dry-run`** shows what a command would change without changing anything.
+- **Exit status:** `0` on success (including when nothing matched), `1` when listing or a command failed, `2` for invalid arguments.
+- `--json` and `--dry-run` may be given before or after the command, and `--limit` caps how many objects are processed.
+
+```sh
+# Preview a cleanup, then run it
+s3find 's3://example-bucket/tmp' --name '*.tmp' --mtime +7d delete --dry-run
+s3find 's3://example-bucket/tmp' --name '*.tmp' --mtime +7d delete
+
+# Machine-readable listing
+s3find 's3://example-bucket/logs' --limit 100 --json ls | jq -r .url
+```
+
+With `--json`, `ls` and `print` write one object per line:
+
+```json
+{"bucket":"example-bucket","url":"s3://example-bucket/logs/app.log","e_tag":"\"9d48114aa7c18f9d68aa20086dbb7756\"","owner":"","size":4997288,"last_modified":"2024-07-19T19:04:17Z","key":"logs/app.log","storage_class":"STANDARD"}
+```
+
+Versioned listings (`--all-versions`) add `version_id`, `is_latest` and, for delete markers, `is_delete_marker`. `lstags` writes `bucket`, `key`, `url` and `tags` (an object such as `{"env":"prod"}`).
+
+Commands that change objects write one line per object with an `action` field, the object's `bucket`, `key`, `url` (and `version_id` when listing versions), plus:
+
+| `action` | Extra fields |
+| --- | --- |
+| `delete` | |
+| `copy`, `move` | `destination` |
+| `download` | `path`, `skipped` (the file existed and `--force` wasn't given) |
+| `tags` | `tags` |
+| `public` | `public_url` |
+| `restore` | `status`: `started`, `already_in_progress` or `invalid_object_state` |
+| `change-storage` | `storage_class` |
+| `exec` | `command`, `stdout` |
+
+```json
+{"action":"copy","bucket":"example-bucket","key":"data/a.csv","url":"s3://example-bucket/data/a.csv","destination":"s3://backup-bucket/data/a.csv"}
+```
+
+Under `--dry-run`, these lines have `"dry_run": true` (text lines start with `[dry-run] `), and `restore` has no `status` and `exec` no `stdout`. With `--summarize`, the last line is `{"summary": {"total_files": ..., "total_space": ..., "max_size": ..., "max_key": ..., "min_size": ..., "min_key": ..., "average_size": ...}}`, plus `tag_fetch` counters when filtering on tags. Errors are written to stderr as `{"error": "..."}`.
 
 ## Examples
 

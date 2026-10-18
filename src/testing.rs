@@ -21,7 +21,7 @@ use crate::adapters::aws::{
 use crate::arg::{FindOpt, S3Path};
 use crate::error::TagFetchError;
 use crate::object::StreamObject;
-use crate::run_command::{CommandContext, DEFAULT_CONCURRENCY, RunCommand};
+use crate::run_command::{CommandContext, CommandOptions, RunCommand};
 
 /// Parses CLI arguments (without the program name) into options.
 pub(crate) fn opts(args: &[&str]) -> FindOpt {
@@ -58,33 +58,33 @@ pub(crate) trait ExecuteCaptured {
         path: &S3Path,
         objects: &[StreamObject],
     ) -> Result<String, Error> {
-        self.execute_with_concurrency(client, path, objects, DEFAULT_CONCURRENCY)
+        self.execute_with(client, path, objects, CommandOptions::default())
             .await
     }
 
-    async fn execute_with_concurrency(
+    async fn execute_with(
         &self,
         client: &impl S3Client,
         path: &S3Path,
         objects: &[StreamObject],
-        concurrency: usize,
+        options: CommandOptions,
     ) -> Result<String, Error>;
 }
 
 impl<T: RunCommand> ExecuteCaptured for T {
-    async fn execute_with_concurrency(
+    async fn execute_with(
         &self,
         client: &impl S3Client,
         path: &S3Path,
         objects: &[StreamObject],
-        concurrency: usize,
+        options: CommandOptions,
     ) -> Result<String, Error> {
         let mut out = Vec::new();
         let mut ctx = CommandContext {
             client,
             path,
             out: &mut out,
-            concurrency,
+            options,
         };
         self.execute(&mut ctx, objects).await?;
         Ok(String::from_utf8(out)?)
