@@ -28,30 +28,30 @@ fn main() {
         Shell::Bash,
         &mut cmd,
         &name,
-        &mut fs::File::create(outdir.join(format!("{}.bash", name))).unwrap(),
+        &mut fs::File::create(outdir.join(format!("{name}.bash"))).unwrap(),
     );
     generate(
         Shell::Elvish,
         &mut cmd,
         &name,
-        &mut fs::File::create(outdir.join(format!("{}.elvish", name))).unwrap(),
+        &mut fs::File::create(outdir.join(format!("{name}.elvish"))).unwrap(),
     );
     generate(
         Shell::Fish,
         &mut cmd,
         &name,
-        &mut fs::File::create(outdir.join(format!("{}.fish", name))).unwrap(),
+        &mut fs::File::create(outdir.join(format!("{name}.fish"))).unwrap(),
     );
     generate(
         Shell::Zsh,
         &mut cmd,
         &name,
-        &mut fs::File::create(outdir.join(format!("{}.zsh", name))).unwrap(),
+        &mut fs::File::create(outdir.join(format!("{name}.zsh"))).unwrap(),
     );
     generate(
         Shell::PowerShell,
         &mut cmd,
         &name,
-        &mut fs::File::create(outdir.join(format!("{}.ps1", name))).unwrap(),
+        &mut fs::File::create(outdir.join(format!("{name}.ps1"))).unwrap(),
     );
 }

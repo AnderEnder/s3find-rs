@@ -867,8 +867,7 @@ mod tests {
         for case in invalid_cases {
             assert!(
                 case.parse::<S3Path>().is_err(),
-                "Should reject invalid bucket name: {}",
-                case
+                "Should reject invalid bucket name: {case}"
             );
         }
 
@@ -1562,34 +1561,30 @@ mod tests {
     #[test]
     fn test_bucket_name_prefix_suffix_validation() {
         for &prefix in INVALID_PREFIXES {
-            let test_bucket = format!("{}bucket", prefix);
+            let test_bucket = format!("{prefix}bucket");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid prefix: {}",
-                prefix
+                "Should reject bucket name with invalid prefix: {prefix}"
             );
 
-            let test_bucket = format!("{}valid-bucket-name", prefix);
+            let test_bucket = format!("{prefix}valid-bucket-name");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid prefix even with valid suffix: {}",
-                prefix
+                "Should reject bucket name with invalid prefix even with valid suffix: {prefix}"
             );
         }
 
         for &suffix in INVALID_SUFFIXES {
-            let test_bucket = format!("bucket{}", suffix);
+            let test_bucket = format!("bucket{suffix}");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid suffix: {}",
-                suffix
+                "Should reject bucket name with invalid suffix: {suffix}"
             );
 
-            let test_bucket = format!("valid-bucket-name{}", suffix);
+            let test_bucket = format!("valid-bucket-name{suffix}");
             assert!(
                 !validate_bucket_name(&test_bucket),
-                "Should reject bucket name with invalid suffix even with valid prefix: {}",
-                suffix
+                "Should reject bucket name with invalid suffix even with valid prefix: {suffix}"
             );
         }
 
@@ -1607,8 +1602,7 @@ mod tests {
         for case in valid_cases {
             assert!(
                 validate_bucket_name(case),
-                "Should accept bucket name that is similar but valid: {}",
-                case
+                "Should accept bucket name that is similar but valid: {case}"
             );
         }
     }

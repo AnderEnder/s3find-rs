@@ -107,9 +107,9 @@ fn build_copy_source(bucket: &str, key: &str, version_id: Option<&str>) -> Strin
     match version_id {
         Some(vid) => {
             let encoded_vid = urlencoding::encode(vid);
-            format!("{}/{}?versionId={}", bucket, encoded_key, encoded_vid)
+            format!("{bucket}/{encoded_key}?versionId={encoded_vid}")
         }
-        None => format!("{}/{}", bucket, encoded_key),
+        None => format!("{bucket}/{encoded_key}"),
     }
 }
 

@@ -36,7 +36,7 @@ fn test_advanced_print_object() -> Result<(), Error> {
     cmd.print_stream_object(&mut buf, bucket, &stream_obj)?;
     let out = std::str::from_utf8(&buf)?;
 
-    println!("{}", out);
+    println!("{out}");
     assert!(out.contains("9d48114aa7c18f9d68aa20086dbb7756"));
     assert!(out.contains("None"));
     assert!(out.contains("4997288"));
@@ -397,7 +397,7 @@ fn test_advanced_print_object_with_owner_no_date_no_storage() -> Result<(), Erro
     cmd.print_stream_object(&mut buf, bucket, &stream_obj)?;
     let out = std::str::from_utf8(&buf)?;
 
-    println!("Output with owner, no date, no storage: {}", out);
+    println!("Output with owner, no date, no storage: {out}");
     assert!(out.contains("abc123456789"));
     assert!(out.contains("test-owner"));
     assert!(out.contains("1234567"));
@@ -586,7 +586,7 @@ fn test_advanced_print_csv() -> Result<(), Error> {
     cmd.print_csv_stream_objects(&mut buf, &[stream_obj1.clone(), stream_obj2.clone()])?;
 
     let output = String::from_utf8(buf.clone()).unwrap();
-    println!("CSV Output:\n{}", output);
+    println!("CSV Output:\n{output}");
 
     let record1: ObjectRecord = (&stream_obj1).into();
     let record2: ObjectRecord = (&stream_obj2).into();
@@ -2542,7 +2542,7 @@ fn test_advanced_print_json_with_version_fields() -> Result<(), Error> {
     cmd.print_json_stream_object(&mut buf, &stream_obj)?;
 
     let output = String::from_utf8(buf).unwrap();
-    println!("JSON with version: {}", output);
+    println!("JSON with version: {output}");
 
     // Verify version fields are present in JSON output
     assert!(output.contains("\"version_id\":\"v1234\""));
@@ -2573,7 +2573,7 @@ fn test_advanced_print_json_with_delete_marker() -> Result<(), Error> {
     cmd.print_json_stream_object(&mut buf, &stream_obj)?;
 
     let output = String::from_utf8(buf).unwrap();
-    println!("JSON with delete marker: {}", output);
+    println!("JSON with delete marker: {output}");
 
     // Verify version and delete marker fields are present
     assert!(output.contains("\"version_id\":\"dm789\""));

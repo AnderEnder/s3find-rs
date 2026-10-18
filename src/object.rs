@@ -93,11 +93,11 @@ impl StreamObject {
         let key = self.object.key().unwrap_or("");
         match (&self.version_id, self.is_latest, self.is_delete_marker) {
             (Some(vid), Some(true), true) => {
-                format!("{}?versionId={} (latest) (delete marker)", key, vid)
+                format!("{key}?versionId={vid} (latest) (delete marker)")
             }
-            (Some(vid), Some(true), false) => format!("{}?versionId={} (latest)", key, vid),
-            (Some(vid), _, true) => format!("{}?versionId={} (delete marker)", key, vid),
-            (Some(vid), _, false) => format!("{}?versionId={}", key, vid),
+            (Some(vid), Some(true), false) => format!("{key}?versionId={vid} (latest)"),
+            (Some(vid), _, true) => format!("{key}?versionId={vid} (delete marker)"),
+            (Some(vid), _, false) => format!("{key}?versionId={vid}"),
             (None, _, _) => key.to_string(),
         }
     }

@@ -25,7 +25,7 @@ impl RunCommand for Download {
             let key = object.require_key()?;
 
             let file_path = match &object.version_id {
-                Some(vid) => Path::new(&self.destination).join(format!("{}.v{}", key, vid)),
+                Some(vid) => Path::new(&self.destination).join(format!("{key}.v{vid}")),
                 None => Path::new(&self.destination).join(key),
             };
             let dir_path = file_path.parent().ok_or(FunctionError::ParentPathParse)?;

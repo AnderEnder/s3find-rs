@@ -35,7 +35,7 @@ impl RunCommand for MultipleDelete {
             let version_info = deleted
                 .version_id
                 .as_ref()
-                .map(|v| format!(" (version: {})", v))
+                .map(|v| format!(" (version: {v})"))
                 .unwrap_or_default();
             writeln!(
                 ctx.out,

@@ -122,12 +122,12 @@ const LOCALSTACK_PORT: u16 = 4566;
 /// Note: This only detects manually-started LocalStack containers.
 /// Containers started by testcontainers use random ports and won't be detected here.
 async fn is_localstack_running() -> Option<String> {
-    let endpoint = format!("http://localhost:{}", LOCALSTACK_PORT);
+    let endpoint = format!("http://localhost:{LOCALSTACK_PORT}");
 
     // Try to connect to LocalStack on port 4566
     match tokio::time::timeout(
         Duration::from_secs(1),
-        tokio::net::TcpStream::connect(format!("localhost:{}", LOCALSTACK_PORT)),
+        tokio::net::TcpStream::connect(format!("localhost:{LOCALSTACK_PORT}")),
     )
     .await
     {
@@ -172,8 +172,7 @@ async fn wait_for_localstack_ready(endpoint: &str, max_wait: Duration) -> Result
     }
 
     Err(format!(
-        "LocalStack did not become ready within {:?}",
-        max_wait
+        "LocalStack did not become ready within {max_wait:?}"
     ))
 }
 
@@ -183,7 +182,7 @@ async fn get_localstack() -> &'static SharedLocalStack {
         .get_or_init(|| async {
             // First, check if LocalStack is already running
             if let Some(endpoint) = is_localstack_running().await {
-                eprintln!("Reusing existing LocalStack at {}", endpoint);
+                eprintln!("Reusing existing LocalStack at {endpoint}");
                 return SharedLocalStack {
                     _container: None,
                     endpoint,
@@ -206,7 +205,7 @@ async fn get_localstack() -> &'static SharedLocalStack {
                 .await
                 .expect("Failed to get container port");
 
-            let endpoint = format!("http://localhost:{}", host_port);
+            let endpoint = format!("http://localhost:{host_port}");
 
             // Wait for LocalStack to be fully ready with health check
             // Longer timeout for CI environments where image pull may be slow
@@ -214,7 +213,7 @@ async fn get_localstack() -> &'static SharedLocalStack {
                 .await
                 .expect("LocalStack failed to become ready");
 
-            eprintln!("LocalStack ready at {}", endpoint);
+            eprintln!("LocalStack ready at {endpoint}");
 
             SharedLocalStack {
                 _container: Some(container),
@@ -237,7 +236,7 @@ fn unique_bucket_name(base_name: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    format!("{}-{}", base_name, timestamp)
+    format!("{base_name}-{timestamp}")
 }
 
 impl LocalStackFixture {
@@ -271,7 +270,7 @@ impl LocalStackFixture {
         loop {
             match client.create_bucket().bucket(bucket_name).send().await {
                 Ok(_) => {
-                    eprintln!("Created bucket: {}", bucket_name);
+                    eprintln!("Created bucket: {bucket_name}");
                     break;
                 }
                 Err(e) => {
@@ -280,19 +279,18 @@ impl LocalStackFixture {
                     if error_str.contains("BucketAlreadyOwnedByYou")
                         || error_str.contains("BucketAlreadyExists")
                     {
-                        eprintln!("Bucket already exists, reusing: {}", bucket_name);
+                        eprintln!("Bucket already exists, reusing: {bucket_name}");
                         break;
                     }
                     // Other errors - retry
                     if retries > 0 {
                         eprintln!(
-                            "Bucket creation failed, retrying... ({} attempts left): {}",
-                            retries, e
+                            "Bucket creation failed, retrying... ({retries} attempts left): {e}"
                         );
                         retries -= 1;
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     } else {
-                        panic!("Failed to create bucket after retries: {}", e);
+                        panic!("Failed to create bucket after retries: {e}");
                     }
                 }
             }
@@ -528,7 +526,7 @@ async fn test_print_command() {
     cmd.arg(fixture.s3_path("test.txt")).arg("print");
 
     // Check for the file path (with timestamp-based bucket name) and storage class
-    let expected_path = format!("s3://{}/test.txt", bucket_name);
+    let expected_path = format!("s3://{bucket_name}/test.txt");
     cmd.assert()
         .success()
         .stdout(predicate::str::contains(&expected_path))
@@ -886,8 +884,7 @@ async fn test_all_versions_basic() {
     let count = stdout.matches("file.txt").count();
     assert_eq!(
         3, count,
-        "Expected exactly 3 versions, found {} occurrences of file.txt in output:\n{}",
-        count, stdout
+        "Expected exactly 3 versions, found {count} occurrences of file.txt in output:\n{stdout}"
     );
 
     // Verify that version IDs are present and distinct
@@ -920,8 +917,7 @@ async fn test_all_versions_basic() {
     assert_eq!(
         version_ids.len(),
         unique_ids.len(),
-        "Version IDs should be distinct, found duplicates: {:?}",
-        version_ids
+        "Version IDs should be distinct, found duplicates: {version_ids:?}"
     );
 }
 
@@ -992,21 +988,18 @@ async fn test_all_versions_with_name_filter() {
     // Should see doc.txt versions but not image.png
     assert!(
         stdout.contains("doc.txt"),
-        "Expected doc.txt in output:\n{}",
-        stdout
+        "Expected doc.txt in output:\n{stdout}"
     );
     assert!(
         !stdout.contains("image.png"),
-        "Expected no image.png in output:\n{}",
-        stdout
+        "Expected no image.png in output:\n{stdout}"
     );
 
     // Count doc.txt occurrences (should be at least 2)
     let count = stdout.matches("doc.txt").count();
     assert!(
         count >= 2,
-        "Expected at least 2 versions of doc.txt, found {}",
-        count
+        "Expected at least 2 versions of doc.txt, found {count}"
     );
 }
 
@@ -1040,20 +1033,17 @@ async fn test_all_versions_with_maxdepth_warning() {
     // Should see all versions at all depths (maxdepth ignored)
     assert!(
         stdout.contains("root.txt"),
-        "Expected root.txt in output:\n{}",
-        stdout
+        "Expected root.txt in output:\n{stdout}"
     );
     assert!(
         stdout.contains("dir/nested.txt"),
-        "Expected dir/nested.txt in output (maxdepth should be ignored):\n{}",
-        stdout
+        "Expected dir/nested.txt in output (maxdepth should be ignored):\n{stdout}"
     );
 
     // Should see warning in stderr
     assert!(
         stderr.contains("--maxdepth is ignored when --all-versions is used"),
-        "Expected warning about maxdepth being ignored in stderr:\n{}",
-        stderr
+        "Expected warning about maxdepth being ignored in stderr:\n{stderr}"
     );
 
     // Count versions - should have at least 4 entries (2 versions each of 2 files)
@@ -1061,9 +1051,7 @@ async fn test_all_versions_with_maxdepth_warning() {
     let nested_count = stdout.matches("dir/nested.txt").count();
     assert!(
         root_count >= 2 && nested_count >= 2,
-        "Expected at least 2 versions of each file, found root.txt={}, nested.txt={}",
-        root_count,
-        nested_count
+        "Expected at least 2 versions of each file, found root.txt={root_count}, nested.txt={nested_count}"
     );
 }
 
@@ -1233,7 +1221,7 @@ async fn test_tag_filter_with_limit() {
     // Create several objects with same tag
     for i in 1..=5 {
         fixture
-            .put_object_with_tags(&format!("file{}.txt", i), b"content", &[("batch", "test")])
+            .put_object_with_tags(&format!("file{i}.txt"), b"content", &[("batch", "test")])
             .await;
     }
 
@@ -1256,8 +1244,7 @@ async fn test_tag_filter_with_limit() {
         .count();
     assert_eq!(
         count, 2,
-        "Expected exactly 2 results with --limit 2, got {}: {}",
-        count, stdout
+        "Expected exactly 2 results with --limit 2, got {count}: {stdout}"
     );
 }
 
@@ -1289,30 +1276,25 @@ async fn test_lstags_command() {
     // All files should be listed
     assert!(
         stdout.contains("multi-tag.txt"),
-        "Expected multi-tag.txt in output: {}",
-        stdout
+        "Expected multi-tag.txt in output: {stdout}"
     );
     assert!(
         stdout.contains("single-tag.txt"),
-        "Expected single-tag.txt in output: {}",
-        stdout
+        "Expected single-tag.txt in output: {stdout}"
     );
     assert!(
         stdout.contains("no-tags.txt"),
-        "Expected no-tags.txt in output: {}",
-        stdout
+        "Expected no-tags.txt in output: {stdout}"
     );
 
     // Check for tag values in output (format: key=value)
     assert!(
         stdout.contains("env=production") || stdout.contains("env:production"),
-        "Expected env=production tag in output: {}",
-        stdout
+        "Expected env=production tag in output: {stdout}"
     );
     assert!(
         stdout.contains("owner=team-a") || stdout.contains("owner:team-a"),
-        "Expected owner=team-a tag in output: {}",
-        stdout
+        "Expected owner=team-a tag in output: {stdout}"
     );
 }
 
@@ -1347,20 +1329,17 @@ async fn test_tag_filter_with_summarize() {
     // Check that matching files are found
     assert!(
         stdout.contains("file1.txt"),
-        "Expected file1.txt in output: {}",
-        stdout
+        "Expected file1.txt in output: {stdout}"
     );
     assert!(
         stdout.contains("file2.txt"),
-        "Expected file2.txt in output: {}",
-        stdout
+        "Expected file2.txt in output: {stdout}"
     );
 
     // Check for tag fetch statistics in stderr
     assert!(
         stderr.contains("Tag fetch stats") || stderr.contains("success"),
-        "Expected tag fetch stats in stderr: {}",
-        stderr
+        "Expected tag fetch stats in stderr: {stderr}"
     );
 }
 
@@ -1400,7 +1379,7 @@ async fn test_tag_concurrency_option() {
     for i in 1..=3 {
         fixture
             .put_object_with_tags(
-                &format!("file{}.txt", i),
+                &format!("file{i}.txt"),
                 b"content",
                 &[("batch", "concurrent")],
             )
@@ -1420,19 +1399,7 @@ async fn test_tag_concurrency_option() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Should find all 3 files
-    assert!(
-        stdout.contains("file1.txt"),
-        "Expected file1.txt: {}",
-        stdout
-    );
-    assert!(
-        stdout.contains("file2.txt"),
-        "Expected file2.txt: {}",
-        stdout
-    );
-    assert!(
-        stdout.contains("file3.txt"),
-        "Expected file3.txt: {}",
-        stdout
-    );
+    assert!(stdout.contains("file1.txt"), "Expected file1.txt: {stdout}");
+    assert!(stdout.contains("file2.txt"), "Expected file2.txt: {stdout}");
+    assert!(stdout.contains("file3.txt"), "Expected file3.txt: {stdout}");
 }

@@ -443,7 +443,7 @@ impl S3Client for FakeS3Client {
             .unwrap()
             .get(&object)
             .cloned()
-            .ok_or_else(|| anyhow!("missing object body for {}", key))?;
+            .ok_or_else(|| anyhow!("missing object body for {key}"))?;
         Ok(ByteStream::from(body))
     }
 

@@ -42,7 +42,7 @@ impl Exec {
         }
 
         let output_str = String::from_utf8_lossy(&output.stdout);
-        writeln!(io, "{}", output_str)?;
+        writeln!(io, "{output_str}")?;
 
         Ok(ExecStatus {
             status: output.status,
