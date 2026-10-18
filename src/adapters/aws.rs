@@ -130,6 +130,8 @@ pub struct ListObjectsRequest<'a> {
     /// Groups keys sharing a prefix up to the delimiter into `common_prefixes`.
     pub delimiter: Option<&'a str>,
     pub continuation_token: Option<&'a str>,
+    /// Only keys after this one; S3 ignores it once a continuation token is sent.
+    pub start_after: Option<&'a str>,
     pub max_keys: i32,
 }
 
@@ -359,6 +361,7 @@ impl S3Client for Client {
             .prefix(request.prefix)
             .set_delimiter(request.delimiter.map(str::to_owned))
             .set_continuation_token(request.continuation_token.map(str::to_owned))
+            .set_start_after(request.start_after.map(str::to_owned))
             .max_keys(request.max_keys)
             .send()
             .await

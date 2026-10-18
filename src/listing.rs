@@ -3,10 +3,14 @@
 //! a ListObjectVersions walk that includes every version and delete marker.
 
 use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::iter;
 use std::pin::pin;
 
-use async_stream::try_stream;
-use futures::stream::{self, BoxStream, Stream, StreamExt, TryStreamExt};
+use async_stream::{stream, try_stream};
+use futures::FutureExt;
+use futures::channel::mpsc;
+use futures::stream::{self, BoxStream, FuturesUnordered, Stream, StreamExt, TryStreamExt};
 
 use crate::adapters::aws::{ListObjectsRequest, ListVersionsRequest, ObjectsPage, S3Client};
 use crate::arg::{FindOpt, S3Path};
@@ -19,6 +23,27 @@ const S3_PATH_DELIMITER: &str = "/";
 /// Subdirectory walks started ahead of the one being read in a `--maxdepth`
 /// listing, so wide trees aren't listed one request at a time.
 const SUBDIRECTORY_PREFETCH: usize = 8;
+
+/// Pages of a flat listing read one after another before the rest is split
+/// into ranges, so small listings and `--limit` runs that stop early make no
+/// extra requests.
+const SEQUENTIAL_PAGES: usize = 2;
+
+/// Most ranges the rest of a big flat listing is split into.
+const MAX_RANGES: usize = 32;
+
+/// Ranges of a flat listing walked at once.
+const RANGE_CONCURRENCY: usize = 8;
+
+/// Pages each range walk may read ahead of the one being read.
+const RANGE_READ_AHEAD: usize = 2;
+
+/// Directory levels searched for points to split a flat listing at.
+const MAX_SPLIT_DEPTH: usize = 3;
+
+/// Directories requested per level when looking for split points: one call
+/// that finds as many as S3 returns, whatever the page size.
+const SPLIT_MAX_KEYS: i32 = 1000;
 
 /// What to list and how.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,34 +100,73 @@ pub fn list_objects<'a, C: S3Client>(
 }
 
 /// Every object under the prefix, in key order.
+///
+/// A listing longer than [`SEQUENTIAL_PAGES`] pages is split at the
+/// directories after the last key read, and up to [`RANGE_CONCURRENCY`] of
+/// those ranges are listed at once; their objects are still yielded in key
+/// order.
 fn list_flat<'a, C: S3Client>(
     client: &'a C,
     options: &'a ListingOptions,
 ) -> BoxStream<'a, S3FindResult<StreamObject>> {
-    object_pages(
-        client,
-        &options.path.bucket,
-        options.prefix().to_owned(),
-        None,
-        options.max_keys(),
-    )
-    .map_ok(|page| {
-        stream::iter(
-            page.objects
-                .into_iter()
-                .map(|object| Ok(StreamObject::from_object(object))),
-        )
-    })
-    .try_flatten()
-    .boxed()
+    let bucket = &options.path.bucket;
+    let prefix = options.prefix();
+    let max_keys = options.max_keys();
+
+    let pages = try_stream! {
+        let mut pages = pin!(object_pages(client, bucket, prefix.to_owned(), None, None, max_keys));
+        let mut split_after = None;
+        let mut read = 0;
+        while let Some(page) = pages.next().await {
+            let page = page?;
+            read += 1;
+            let last_key = page.objects.last().and_then(|object| object.key.clone());
+            let more = page.next_continuation_token.is_some();
+            yield page;
+            if more && read >= SEQUENTIAL_PAGES && last_key.is_some() {
+                split_after = last_key;
+                break;
+            }
+        }
+
+        if let Some(after) = split_after {
+            let boundaries = split_points(client, bucket, prefix, &after).await?;
+            if boundaries.is_empty() {
+                while let Some(page) = pages.next().await {
+                    yield page?;
+                }
+            } else {
+                let walks = ranges(after, boundaries).map(|(after, until)| {
+                    range_pages(client, bucket, prefix, after, until, max_keys).boxed()
+                });
+                let mut ranged = pin!(concat_concurrently(walks, RANGE_CONCURRENCY, RANGE_READ_AHEAD));
+                while let Some(page) = ranged.next().await {
+                    yield page?;
+                }
+            }
+        }
+    };
+
+    pages
+        .map_ok(|page: ObjectsPage| {
+            stream::iter(
+                page.objects
+                    .into_iter()
+                    .map(|object| Ok(StreamObject::from_object(object))),
+            )
+        })
+        .try_flatten()
+        .boxed()
 }
 
-/// Pages of a ListObjectsV2 walk, following continuation tokens.
+/// Pages of a ListObjectsV2 walk, following continuation tokens; only the
+/// last page has no `next_continuation_token`.
 fn object_pages<'a, C: S3Client>(
     client: &'a C,
     bucket: &'a str,
     prefix: String,
     delimiter: Option<&'a str>,
+    start_after: Option<String>,
     max_keys: i32,
 ) -> impl Stream<Item = S3FindResult<ObjectsPage>> + Send + 'a {
     try_stream! {
@@ -113,6 +177,7 @@ fn object_pages<'a, C: S3Client>(
                 prefix: &prefix,
                 delimiter,
                 continuation_token: token.as_deref(),
+                start_after: start_after.as_deref(),
                 max_keys,
             };
             let mut page = client
@@ -121,16 +186,162 @@ fn object_pages<'a, C: S3Client>(
                 .map_err(S3FindError::list_objects)?;
 
             // Like the SDK paginator, stop on a missing, empty or repeated token.
-            let next = page
+            page.next_continuation_token = page
                 .next_continuation_token
                 .take()
                 .filter(|next| !next.is_empty() && Some(next) != token.as_ref());
+            let next = page.next_continuation_token.clone();
 
             yield page;
 
             match next {
                 Some(next) => token = Some(next),
                 None => break,
+            }
+        }
+    }
+}
+
+/// Keys to split the rest of a listing after `after` at: the directories
+/// after it, from a delimiter listing of the prefix. While a level has fewer
+/// than two, the directory holding `after` is searched too. Spread to at most
+/// `MAX_RANGES - 1` keys, in order.
+async fn split_points<C: S3Client>(
+    client: &C,
+    bucket: &str,
+    prefix: &str,
+    after: &str,
+) -> S3FindResult<Vec<String>> {
+    // Directories found at each level; deeper ones sort before shallower ones.
+    let mut levels = Vec::new();
+    let mut level = prefix.to_owned();
+    for _ in 0..MAX_SPLIT_DEPTH {
+        let request = ListObjectsRequest {
+            bucket,
+            prefix: &level,
+            delimiter: Some(S3_PATH_DELIMITER),
+            continuation_token: None,
+            start_after: Some(after),
+            max_keys: SPLIT_MAX_KEYS,
+        };
+        let page = client
+            .list_objects(request)
+            .await
+            .map_err(S3FindError::list_objects)?;
+
+        let (holding, later): (Vec<_>, Vec<_>) = page
+            .common_prefixes
+            .into_iter()
+            .partition(|dir| after.starts_with(dir.as_str()));
+        let enough = later.len() >= 2;
+        levels.push(later);
+        match holding.into_iter().next() {
+            Some(dir) if !enough => level = dir,
+            _ => break,
+        }
+    }
+
+    let boundaries: Vec<_> = levels.into_iter().rev().flatten().collect();
+    Ok(spread(boundaries, MAX_RANGES - 1))
+}
+
+/// At most `count` of `items`, evenly spaced and in order.
+fn spread<T: Clone>(items: Vec<T>, count: usize) -> Vec<T> {
+    if items.len() <= count {
+        return items;
+    }
+    (1..=count)
+        .map(|i| items[i * items.len() / (count + 1)].clone())
+        .collect()
+}
+
+/// Ranges `(after, until]` covering every key after `after`, split at
+/// `boundaries`; the last range has no end.
+fn ranges(
+    after: String,
+    boundaries: Vec<String>,
+) -> impl Iterator<Item = (String, Option<String>)> + Send {
+    let starts: Vec<_> = iter::once(after)
+        .chain(boundaries.iter().cloned())
+        .collect();
+    let ends = boundaries.into_iter().map(Some).chain(iter::once(None));
+    starts.into_iter().zip(ends)
+}
+
+/// Pages of the keys in `(after, until]`, or of every key after `after`
+/// without `until`.
+fn range_pages<'a, C: S3Client>(
+    client: &'a C,
+    bucket: &'a str,
+    prefix: &'a str,
+    after: String,
+    until: Option<String>,
+    max_keys: i32,
+) -> impl Stream<Item = S3FindResult<ObjectsPage>> + Send + 'a {
+    let pages = object_pages(
+        client,
+        bucket,
+        prefix.to_owned(),
+        None,
+        Some(after),
+        max_keys,
+    );
+    try_stream! {
+        let mut pages = pin!(pages);
+        while let Some(page) = pages.next().await {
+            let mut page = page?;
+            let past_end = until.as_deref().and_then(|until| {
+                page.objects
+                    .iter()
+                    .position(|object| object.key().is_some_and(|key| key > until))
+            });
+            if let Some(end) = past_end {
+                page.objects.truncate(end);
+                yield page;
+                break;
+            }
+            yield page;
+        }
+    }
+}
+
+/// The items of `walks`, one walk after another, with up to `concurrency`
+/// walks running at once, each a few items ahead of the one being read.
+/// Unlike `buffered`, every running walk keeps going while an earlier one is
+/// read.
+fn concat_concurrently<'a, T: Send + 'a>(
+    walks: impl Iterator<Item = BoxStream<'a, T>> + Send + 'a,
+    concurrency: usize,
+    read_ahead: usize,
+) -> impl Stream<Item = T> + Send + 'a {
+    stream! {
+        let mut walks = walks;
+        let mut running = FuturesUnordered::new();
+        let mut readers = VecDeque::new();
+        loop {
+            while readers.len() < concurrency
+                && let Some(walk) = walks.next()
+            {
+                let (sender, receiver) = mpsc::channel(read_ahead);
+                running.push(walk.map(Ok).forward(sender).map(drop));
+                readers.push_back(receiver);
+            }
+            let Some(reader) = readers.front_mut() else {
+                break;
+            };
+
+            // Wait for the walk being read while driving every running walk.
+            let item = loop {
+                tokio::select! {
+                    item = reader.next() => break item,
+                    Some(()) = running.next() => {}
+                }
+            };
+            match item {
+                Some(item) => yield item,
+                None => {
+                    readers.pop_front();
+                }
             }
         }
     }
@@ -205,7 +416,15 @@ fn directory_pages<'a, C: S3Client>(
     prefix: String,
     max_keys: i32,
 ) -> BoxStream<'a, S3FindResult<ObjectsPage>> {
-    object_pages(client, bucket, prefix, Some(S3_PATH_DELIMITER), max_keys).boxed()
+    object_pages(
+        client,
+        bucket,
+        prefix,
+        Some(S3_PATH_DELIMITER),
+        None,
+        max_keys,
+    )
+    .boxed()
 }
 
 fn list_versions<'a, C: S3Client>(

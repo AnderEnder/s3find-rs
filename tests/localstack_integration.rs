@@ -440,6 +440,38 @@ async fn test_ls_basic() {
 }
 
 #[tokio::test]
+async fn test_ls_split_listing_keeps_key_order() {
+    let bucket_name = unique_bucket_name("test-ls-split");
+    let fixture = LocalStackFixture::new(&bucket_name).await;
+
+    // `a.txt` and `a0` sort on either side of `a/`, which is also a folder marker.
+    let mut keys = vec!["a.txt".to_owned(), "a/".to_owned(), "a0".to_owned()];
+    for dir in ["a", "b", "c", "d"] {
+        keys.extend((0..3).map(|i| format!("{dir}/{i}.txt")));
+    }
+    for key in &keys {
+        fixture.put_object(key, b"x").await;
+    }
+
+    // With two keys per page, the listing is split after its second page.
+    let mut cmd = fixture.s3find_command();
+    cmd.arg(fixture.s3_path(""))
+        .arg("--page-size")
+        .arg("2")
+        .arg("ls");
+    let output = cmd.assert().success().get_output().stdout.clone();
+
+    keys.sort();
+    let expected: Vec<_> = keys.iter().map(|key| fixture.s3_path(key)).collect();
+    let listed: Vec<_> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(listed, expected);
+}
+
+#[tokio::test]
 async fn test_ls_with_name_filter() {
     let bucket_name = unique_bucket_name("test-ls-name-filter");
     let fixture = LocalStackFixture::new(&bucket_name).await;
