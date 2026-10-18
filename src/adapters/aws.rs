@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::ops::RangeInclusive;
 
 use anyhow::{Error, anyhow};
 use aws_config::{BehaviorVersion, Region, meta::credentials::CredentialsProviderChain};
@@ -7,11 +9,11 @@ use aws_sdk_s3::{
     config::Credentials,
     error::SdkError,
     operation::get_object_tagging::GetObjectTaggingError,
-    primitives::ByteStream,
+    primitives::{ByteStream, DateTime, DateTimeFormat},
     types::{
-        Delete, DeleteMarkerEntry, GlacierJobParameters, MetadataDirective, Object,
-        ObjectCannedAcl, ObjectIdentifier, ObjectStorageClass, ObjectVersion, RestoreRequest,
-        StorageClass, Tag, Tagging, Tier,
+        CompletedMultipartUpload, CompletedPart, Delete, DeleteMarkerEntry, GlacierJobParameters,
+        MetadataDirective, Object, ObjectCannedAcl, ObjectIdentifier, ObjectStorageClass,
+        ObjectVersion, RestoreRequest, StorageClass, Tag, Tagging, Tier,
     },
 };
 
@@ -82,6 +84,42 @@ pub enum RestoreObjectStatus {
     Started,
     AlreadyInProgress,
     InvalidObjectState,
+}
+
+/// What a multipart copy carries over from its source. CopyObject copies
+/// these itself; a multipart upload has to be given them.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ObjectHead {
+    pub size: i64,
+    /// Every part is copied only if the source still has this ETag, so a
+    /// source that changes midway fails the copy instead of mixing versions.
+    pub e_tag: Option<String>,
+    pub cache_control: Option<String>,
+    pub content_disposition: Option<String>,
+    pub content_encoding: Option<String>,
+    pub content_language: Option<String>,
+    pub content_type: Option<String>,
+    pub expires: Option<DateTime>,
+    pub website_redirect_location: Option<String>,
+    pub metadata: HashMap<String, String>,
+}
+
+/// A multipart upload in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultipartUpload<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub upload_id: &'a str,
+}
+
+/// One UploadPartCopy call: bytes `range` of `copy_source` as part
+/// `part_number`, if the source still has `source_e_tag`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartCopy<'a> {
+    pub part_number: i32,
+    pub copy_source: &'a str,
+    pub range: RangeInclusive<i64>,
+    pub source_e_tag: Option<&'a str>,
 }
 
 /// One ListObjectsV2 call.
@@ -222,6 +260,41 @@ pub trait S3Client: Send + Sync {
         days: i32,
         tier: Tier,
     ) -> impl Future<Output = Result<RestoreObjectStatus, Error>> + Send;
+
+    fn head_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> impl Future<Output = Result<ObjectHead, Error>> + Send;
+
+    /// Starts a multipart upload with `source`'s metadata and `tags`, and
+    /// returns its upload id.
+    fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        source: &ObjectHead,
+        storage_class: Option<StorageClass>,
+        tags: &[Tag],
+    ) -> impl Future<Output = Result<String, Error>> + Send;
+
+    fn upload_part_copy(
+        &self,
+        upload: MultipartUpload<'_>,
+        part: PartCopy<'_>,
+    ) -> impl Future<Output = Result<CompletedPart, Error>> + Send;
+
+    fn complete_multipart_upload(
+        &self,
+        upload: MultipartUpload<'_>,
+        parts: Vec<CompletedPart>,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
+
+    fn abort_multipart_upload(
+        &self,
+        upload: MultipartUpload<'_>,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
 /// Converts an SDK error into one whose message includes its causes, such as
@@ -523,6 +596,138 @@ impl S3Client for Client {
             Err(err) => Err(sdk_error(err)),
         }
     }
+
+    async fn head_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<ObjectHead, Error> {
+        let output = self
+            .head_object()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id.map(str::to_owned))
+            .send()
+            .await
+            .map_err(sdk_error)?;
+
+        let expires = output
+            .expires_string
+            .as_deref()
+            .and_then(|value| DateTime::from_str(value, DateTimeFormat::HttpDate).ok());
+        Ok(ObjectHead {
+            size: output.content_length.unwrap_or_default(),
+            e_tag: output.e_tag,
+            cache_control: output.cache_control,
+            content_disposition: output.content_disposition,
+            content_encoding: output.content_encoding,
+            content_language: output.content_language,
+            content_type: output.content_type,
+            expires,
+            website_redirect_location: output.website_redirect_location,
+            metadata: output.metadata.unwrap_or_default(),
+        })
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        source: &ObjectHead,
+        storage_class: Option<StorageClass>,
+        tags: &[Tag],
+    ) -> Result<String, Error> {
+        let tagging = tags
+            .iter()
+            .map(|tag| {
+                format!(
+                    "{}={}",
+                    urlencoding::encode(tag.key()),
+                    urlencoding::encode(tag.value())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+
+        let output = self
+            .create_multipart_upload()
+            .bucket(bucket)
+            .key(key)
+            .set_storage_class(storage_class)
+            .set_cache_control(source.cache_control.clone())
+            .set_content_disposition(source.content_disposition.clone())
+            .set_content_encoding(source.content_encoding.clone())
+            .set_content_language(source.content_language.clone())
+            .set_content_type(source.content_type.clone())
+            .set_expires(source.expires)
+            .set_website_redirect_location(source.website_redirect_location.clone())
+            .set_metadata((!source.metadata.is_empty()).then(|| source.metadata.clone()))
+            .set_tagging((!tagging.is_empty()).then_some(tagging))
+            .send()
+            .await
+            .map_err(sdk_error)?;
+
+        output
+            .upload_id
+            .ok_or_else(|| anyhow!("CreateMultipartUpload returned no upload id"))
+    }
+
+    async fn upload_part_copy(
+        &self,
+        upload: MultipartUpload<'_>,
+        part: PartCopy<'_>,
+    ) -> Result<CompletedPart, Error> {
+        let output = self
+            .upload_part_copy()
+            .bucket(upload.bucket)
+            .key(upload.key)
+            .upload_id(upload.upload_id)
+            .part_number(part.part_number)
+            .copy_source(part.copy_source)
+            .copy_source_range(format!("bytes={}-{}", part.range.start(), part.range.end()))
+            .set_copy_source_if_match(part.source_e_tag.map(str::to_owned))
+            .send()
+            .await
+            .map_err(sdk_error)?;
+
+        let e_tag = output.copy_part_result.and_then(|result| result.e_tag);
+        Ok(CompletedPart::builder()
+            .part_number(part.part_number)
+            .set_e_tag(e_tag)
+            .build())
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        upload: MultipartUpload<'_>,
+        parts: Vec<CompletedPart>,
+    ) -> Result<(), Error> {
+        self.complete_multipart_upload()
+            .bucket(upload.bucket)
+            .key(upload.key)
+            .upload_id(upload.upload_id)
+            .multipart_upload(
+                CompletedMultipartUpload::builder()
+                    .set_parts(Some(parts))
+                    .build(),
+            )
+            .send()
+            .await
+            .map_err(sdk_error)?;
+        Ok(())
+    }
+
+    async fn abort_multipart_upload(&self, upload: MultipartUpload<'_>) -> Result<(), Error> {
+        self.abort_multipart_upload()
+            .bucket(upload.bucket)
+            .key(upload.key)
+            .upload_id(upload.upload_id)
+            .send()
+            .await
+            .map_err(sdk_error)?;
+        Ok(())
+    }
 }
 
 pub async fn setup_client(args: &arg::FindOpt) -> Client {
@@ -583,7 +788,10 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::opts;
+    use crate::testing::{opts, replay_s3_client};
+
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_runtime::client::http::test_util::ReplayEvent;
 
     use aws_config::Region;
     use aws_smithy_runtime::client::http::test_util::StaticReplayClient;
@@ -706,6 +914,152 @@ mod tests {
 
         assert_eq!(outcome, DeleteOutcome::default());
         replay_client.assert_requests_match(&[]);
+    }
+
+    fn event(
+        method: &str,
+        uri: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+        response: http::Response<SdkBody>,
+    ) -> ReplayEvent {
+        let mut request = http::Request::builder().method(method).uri(uri);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        ReplayEvent::new(request.body(SdkBody::from(body)).unwrap(), response)
+    }
+
+    fn response(headers: &[(&str, &str)], body: &str) -> http::Response<SdkBody> {
+        let mut response = http::Response::builder().status(200);
+        for (name, value) in headers {
+            response = response.header(*name, *value);
+        }
+        response.body(SdkBody::from(body)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_multipart_copy_requests() {
+        let base = "https://test-bucket.s3.us-east-1.amazonaws.com";
+        let (client, replay) = replay_s3_client(vec![
+            event(
+                "HEAD",
+                &format!("{base}/big.bin?versionId=v1"),
+                &[],
+                "",
+                response(
+                    &[
+                        ("content-length", "6442450944"),
+                        ("etag", "\"abc\""),
+                        ("content-type", "video/mp4"),
+                        ("cache-control", "max-age=60"),
+                        ("expires", "Wed, 21 Oct 2026 07:28:00 GMT"),
+                        ("x-amz-meta-owner", "data-team"),
+                        ("x-amz-website-redirect-location", "/other"),
+                    ],
+                    "",
+                ),
+            ),
+            event(
+                "POST",
+                &format!("{base}/copy.bin?uploads"),
+                &[
+                    ("x-amz-storage-class", "GLACIER"),
+                    ("content-type", "video/mp4"),
+                    ("cache-control", "max-age=60"),
+                    ("expires", "Wed, 21 Oct 2026 07:28:00 GMT"),
+                    ("x-amz-meta-owner", "data-team"),
+                    ("x-amz-website-redirect-location", "/other"),
+                    ("x-amz-tagging", "env=prod&team=data%20eng"),
+                ],
+                "",
+                response(
+                    &[],
+                    "<InitiateMultipartUploadResult><Bucket>test-bucket</Bucket>\
+                     <Key>copy.bin</Key><UploadId>up-1</UploadId></InitiateMultipartUploadResult>",
+                ),
+            ),
+            event(
+                "PUT",
+                &format!("{base}/copy.bin?x-id=UploadPartCopy&partNumber=1&uploadId=up-1"),
+                &[
+                    ("x-amz-copy-source", "test-bucket/big.bin?versionId=v1"),
+                    ("x-amz-copy-source-range", "bytes=0-99"),
+                    ("x-amz-copy-source-if-match", "\"abc\""),
+                ],
+                "",
+                response(&[], "<CopyPartResult><ETag>\"p1\"</ETag></CopyPartResult>"),
+            ),
+            event(
+                "POST",
+                &format!("{base}/copy.bin?uploadId=up-1"),
+                &[],
+                r#"<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Part><ETag>&quot;p1&quot;</ETag><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"#,
+                response(
+                    &[],
+                    "<CompleteMultipartUploadResult></CompleteMultipartUploadResult>",
+                ),
+            ),
+            event(
+                "DELETE",
+                &format!("{base}/copy.bin?x-id=AbortMultipartUpload&uploadId=up-1"),
+                &[],
+                "",
+                response(&[], ""),
+            ),
+        ]);
+
+        let head = S3Client::head_object(&client, "test-bucket", "big.bin", Some("v1"))
+            .await
+            .unwrap();
+        assert_eq!(head.size, 6 * 1024 * 1024 * 1024);
+        assert_eq!(head.e_tag.as_deref(), Some("\"abc\""));
+        assert_eq!(head.metadata["owner"], "data-team");
+        assert!(head.expires.is_some());
+
+        let tags = [
+            Tag::builder().key("env").value("prod").build().unwrap(),
+            Tag::builder()
+                .key("team")
+                .value("data eng")
+                .build()
+                .unwrap(),
+        ];
+        let upload_id = S3Client::create_multipart_upload(
+            &client,
+            "test-bucket",
+            "copy.bin",
+            &head,
+            Some(StorageClass::Glacier),
+            &tags,
+        )
+        .await
+        .unwrap();
+        assert_eq!(upload_id, "up-1");
+
+        let upload = MultipartUpload {
+            bucket: "test-bucket",
+            key: "copy.bin",
+            upload_id: &upload_id,
+        };
+        let part = PartCopy {
+            part_number: 1,
+            copy_source: "test-bucket/big.bin?versionId=v1",
+            range: 0..=99,
+            source_e_tag: head.e_tag.as_deref(),
+        };
+        let part = S3Client::upload_part_copy(&client, upload, part)
+            .await
+            .unwrap();
+        assert_eq!(part.e_tag(), Some("\"p1\""));
+
+        S3Client::complete_multipart_upload(&client, upload, vec![part])
+            .await
+            .unwrap();
+        S3Client::abort_multipart_upload(&client, upload)
+            .await
+            .unwrap();
+        replay.assert_requests_match(&[]);
     }
 
     #[test]

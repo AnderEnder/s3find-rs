@@ -19,6 +19,7 @@ use crate::error::FunctionError;
 use crate::object::StreamObject;
 use crate::utils::{combine_keys, copies_are_listed};
 
+use super::object_copy::ObjectCopy;
 use super::report::ObjectRef;
 use super::{CommandContext, RunCommand, build_copy_source, in_order, live_objects};
 
@@ -220,15 +221,16 @@ async fn copy_objects<'o, C: S3Client>(
         let source = build_copy_source(source_bucket, key, object.version_id.as_deref());
 
         if !dry_run {
-            client
-                .copy_object(
-                    &destination.bucket,
-                    &target,
-                    &source,
-                    options.storage_class.map(StorageClass::from),
-                    options.metadata_directive.clone(),
-                )
-                .await?;
+            let copy = ObjectCopy {
+                source_bucket,
+                object,
+                copy_source: &source,
+                bucket: &destination.bucket,
+                key: &target,
+                storage_class: options.storage_class.map(StorageClass::from),
+                metadata_directive: options.metadata_directive.clone(),
+            };
+            copy.run(client).await?;
         }
 
         Ok(Copied {
@@ -382,15 +384,16 @@ impl RunCommand for ChangeStorage {
             if !dry_run {
                 let key = object.require_key()?;
                 let source = build_copy_source(bucket, key, object.version_id.as_deref());
-                client
-                    .copy_object(
-                        bucket,
-                        key,
-                        &source,
-                        Some(StorageClass::from(storage_class)),
-                        Some(MetadataDirective::Copy),
-                    )
-                    .await?;
+                let copy = ObjectCopy {
+                    source_bucket: bucket,
+                    object,
+                    copy_source: &source,
+                    bucket,
+                    key,
+                    storage_class: Some(StorageClass::from(storage_class)),
+                    metadata_directive: Some(MetadataDirective::Copy),
+                };
+                copy.run(client).await?;
             }
 
             Ok(StorageChanged {

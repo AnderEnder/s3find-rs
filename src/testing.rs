@@ -1,6 +1,7 @@
 //! Test support: an in-memory S3 fake and helpers shared by unit tests.
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::RangeInclusive;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -9,14 +10,16 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
-    DeleteMarkerEntry, MetadataDirective, Object, ObjectVersion, StorageClass, Tag, Tier,
+    CompletedPart, DeleteMarkerEntry, MetadataDirective, Object, ObjectVersion, StorageClass, Tag,
+    Tier,
 };
 use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
 use clap::Parser;
 
 use crate::adapters::aws::{
     DeleteObjectRequest, DeleteOutcome, DeletedObjectInfo, ListObjectsRequest, ListVersionsRequest,
-    ObjectsPage, RestoreObjectStatus, S3Client, VersionMarker, VersionsPage,
+    MultipartUpload, ObjectHead, ObjectsPage, PartCopy, RestoreObjectStatus, S3Client,
+    VersionMarker, VersionsPage,
 };
 use crate::arg::{FindOpt, S3Path};
 use crate::error::TagFetchError;
@@ -108,6 +111,32 @@ pub(crate) struct CopyCall {
     pub(crate) metadata_directive: Option<String>,
 }
 
+/// A multipart upload call, in the order made.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum MultipartCall {
+    Create {
+        bucket: String,
+        key: String,
+        source: Box<ObjectHead>,
+        storage_class: Option<String>,
+        tags: Vec<(String, String)>,
+    },
+    Part {
+        upload_id: String,
+        part_number: i32,
+        copy_source: String,
+        range: RangeInclusive<i64>,
+        source_e_tag: Option<String>,
+    },
+    Complete {
+        upload_id: String,
+        parts: Vec<(i32, String)>,
+    },
+    Abort {
+        upload_id: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestoreCall {
     pub(crate) object: ObjectRequestKey,
@@ -147,6 +176,9 @@ pub(crate) struct FakeS3Client {
     pub(crate) tag_errors: Mutex<HashMap<ObjectRequestKey, u16>>,
     pub(crate) tag_delays: Mutex<HashMap<ObjectRequestKey, Duration>>,
     pub(crate) restore_outputs: Mutex<HashMap<ObjectRequestKey, RestoreObjectStatus>>,
+    pub(crate) object_heads: Mutex<HashMap<ObjectRequestKey, ObjectHead>>,
+    pub(crate) multipart_calls: Mutex<Vec<MultipartCall>>,
+    pub(crate) failing_part: Option<i32>,
 }
 
 impl Default for FakeS3Client {
@@ -171,6 +203,9 @@ impl Default for FakeS3Client {
             tag_errors: Mutex::default(),
             tag_delays: Mutex::default(),
             restore_outputs: Mutex::default(),
+            object_heads: Mutex::default(),
+            multipart_calls: Mutex::default(),
+            failing_part: None,
         }
     }
 }
@@ -215,6 +250,27 @@ impl FakeS3Client {
         pages: Vec<(Vec<ObjectVersion>, Vec<DeleteMarkerEntry>)>,
     ) -> Self {
         *self.version_pages.lock().unwrap() = pages;
+        self
+    }
+
+    /// Serves `head` from HeadObject for this object.
+    pub(crate) fn with_object_head(
+        self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        head: ObjectHead,
+    ) -> Self {
+        self.object_heads
+            .lock()
+            .unwrap()
+            .insert(Self::object_key(bucket, key, version_id), head);
+        self
+    }
+
+    /// Makes UploadPartCopy fail for this part number.
+    pub(crate) fn with_failing_part(mut self, part_number: i32) -> Self {
+        self.failing_part = Some(part_number);
         self
     }
 
@@ -534,6 +590,103 @@ impl S3Client for FakeS3Client {
             .get(&object)
             .copied()
             .unwrap_or(RestoreObjectStatus::Started))
+    }
+
+    async fn head_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+    ) -> Result<ObjectHead, Error> {
+        self.object_heads
+            .lock()
+            .unwrap()
+            .get(&Self::object_key(bucket, key, version_id))
+            .cloned()
+            .ok_or_else(|| anyhow!("missing object head for {key}"))
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        source: &ObjectHead,
+        storage_class: Option<StorageClass>,
+        tags: &[Tag],
+    ) -> Result<String, Error> {
+        let mut calls = self.multipart_calls.lock().unwrap();
+        calls.push(MultipartCall::Create {
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+            source: Box::new(source.clone()),
+            storage_class: storage_class.map(|class| class.as_str().to_string()),
+            tags: tags
+                .iter()
+                .map(|tag| (tag.key().to_string(), tag.value().to_string()))
+                .collect(),
+        });
+        let uploads = calls
+            .iter()
+            .filter(|call| matches!(call, MultipartCall::Create { .. }))
+            .count();
+        Ok(format!("upload-{uploads}"))
+    }
+
+    async fn upload_part_copy(
+        &self,
+        upload: MultipartUpload<'_>,
+        part: PartCopy<'_>,
+    ) -> Result<CompletedPart, Error> {
+        self.multipart_calls
+            .lock()
+            .unwrap()
+            .push(MultipartCall::Part {
+                upload_id: upload.upload_id.to_string(),
+                part_number: part.part_number,
+                copy_source: part.copy_source.to_string(),
+                range: part.range,
+                source_e_tag: part.source_e_tag.map(str::to_string),
+            });
+        if self.failing_part == Some(part.part_number) {
+            return Err(anyhow!("PreconditionFailed"));
+        }
+        Ok(CompletedPart::builder()
+            .part_number(part.part_number)
+            .e_tag(format!("etag-{}", part.part_number))
+            .build())
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        upload: MultipartUpload<'_>,
+        parts: Vec<CompletedPart>,
+    ) -> Result<(), Error> {
+        self.multipart_calls
+            .lock()
+            .unwrap()
+            .push(MultipartCall::Complete {
+                upload_id: upload.upload_id.to_string(),
+                parts: parts
+                    .iter()
+                    .map(|part| {
+                        (
+                            part.part_number().unwrap_or_default(),
+                            part.e_tag().unwrap_or_default().to_string(),
+                        )
+                    })
+                    .collect(),
+            });
+        Ok(())
+    }
+
+    async fn abort_multipart_upload(&self, upload: MultipartUpload<'_>) -> Result<(), Error> {
+        self.multipart_calls
+            .lock()
+            .unwrap()
+            .push(MultipartCall::Abort {
+                upload_id: upload.upload_id.to_string(),
+            });
+        Ok(())
     }
 }
 
