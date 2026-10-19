@@ -410,7 +410,7 @@ fn test_advanced_print_object_with_owner_no_date_no_storage() -> Result<(), Erro
 #[test]
 fn test_fast_print_object() -> Result<(), Error> {
     let mut buf = Vec::new();
-    let cmd = FastPrint {};
+    let cmd = FastPrint::default();
     let bucket = "test";
 
     let object = Object::builder()
@@ -734,7 +734,7 @@ async fn test_fastprint() -> Result<(), Error> {
         .build();
     let stream_obj = StreamObject::from_object(object);
 
-    let cmd = Cmd::Ls(FastPrint {});
+    let cmd = Cmd::Ls(FastPrint::default());
     let client = FakeS3Client::default();
 
     let path = S3Path {
@@ -2904,7 +2904,7 @@ async fn test_dry_run_json_marks_each_record() {
 async fn test_dry_run_leaves_read_only_commands_unmarked() {
     let client = FakeS3Client::default();
     let commands = [
-        Cmd::Ls(FastPrint {}),
+        Cmd::Ls(FastPrint::default()),
         Cmd::Print(AdvancedPrint::default()),
         Cmd::LsTags(ListTags {}),
     ];
@@ -3015,7 +3015,7 @@ async fn test_json_output_of_read_only_commands() {
     let client = FakeS3Client::default();
 
     for cmd in [
-        Cmd::Ls(FastPrint {}),
+        Cmd::Ls(FastPrint::default()),
         Cmd::Print(AdvancedPrint {
             format: PrintFormat::Csv,
         }),
@@ -3551,5 +3551,32 @@ async fn test_dry_run_of_a_big_copy_makes_no_requests() -> Result<(), Error> {
         .await?;
 
     assert!(!made_changes(&client));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_ls_print0_ends_each_url_with_a_nul_byte() -> Result<(), Error> {
+    let mut versioned = StreamObject::from_object(Object::builder().key("v.txt").build());
+    versioned.version_id = Some("v1".to_owned());
+    versioned.is_latest = Some(true);
+    let objects = [
+        StreamObject::from_object(Object::builder().key("line\nbreak.txt").build()),
+        versioned,
+    ];
+    let cmd = Cmd::Ls(FastPrint { print0: true });
+    let client = FakeS3Client::default();
+
+    let out = cmd
+        .execute_captured(&client, &test_path(), &objects)
+        .await?;
+    assert_eq!(
+        out,
+        "s3://test-bucket/line\nbreak.txt\0s3://test-bucket/v.txt?versionId=v1\0"
+    );
+
+    // --json takes precedence.
+    let records = json_lines(&cmd, &client, &objects).await;
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["key"], "line\nbreak.txt");
     Ok(())
 }

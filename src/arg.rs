@@ -453,12 +453,18 @@ pub enum Cmd {
 
 impl Default for Cmd {
     fn default() -> Self {
-        Cmd::Ls(FastPrint {})
+        Cmd::Ls(FastPrint::default())
     }
 }
 
-#[derive(Args, Clone, PartialEq, Debug)]
-pub struct FastPrint {}
+#[derive(Args, Clone, Default, PartialEq, Debug)]
+pub struct FastPrint {
+    /// End each URL with a NUL byte instead of a newline, for `xargs -0`.
+    /// Versions are printed as s3://bucket/key?versionId=..., without labels.
+    /// --json takes precedence
+    #[arg(long)]
+    pub print0: bool,
+}
 
 #[derive(ValueEnum, Clone, Default, PartialEq, Debug)]
 pub enum PrintFormat {
@@ -1217,6 +1223,12 @@ mod tests {
     }
 
     #[test]
+    fn test_ls_print0() {
+        let args = FindOpt::parse_from(["s3find", "s3://mybucket", "ls", "--print0"]);
+        assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint { print0: true })));
+    }
+
+    #[test]
     fn test_limit_and_page_size() {
         let args = FindOpt::parse_from([
             "s3find",
@@ -1264,7 +1276,7 @@ mod tests {
     #[test]
     fn test_ls_subcommand() {
         let args = FindOpt::parse_from(["s3find", "s3://mybucket", "ls"]);
-        assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint {})));
+        assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint::default())));
     }
 
     #[test]
@@ -1802,7 +1814,7 @@ mod tests {
             Some("https://ceph.example.com".to_string())
         );
         assert!(args.force_path_style);
-        assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint {})));
+        assert_eq!(args.cmd, Some(Cmd::Ls(FastPrint::default())));
     }
 
     #[test]

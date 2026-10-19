@@ -10,7 +10,7 @@ use crate::adapters::aws::S3Client;
 use crate::arg::{AdvancedPrint, FastPrint, PrintFormat};
 use crate::object::StreamObject;
 
-use super::report::S3Url;
+use super::report::{ObjectUrl, S3Url};
 use super::{CommandContext, RunCommand};
 
 impl FastPrint {
@@ -21,7 +21,15 @@ impl FastPrint {
         bucket: &str,
         stream_obj: &StreamObject,
     ) -> std::io::Result<()> {
-        writeln!(io, "s3://{}/{}", bucket, stream_obj.display_key())
+        if self.print0 {
+            let url = ObjectUrl {
+                bucket,
+                object: stream_obj,
+            };
+            write!(io, "{url}\0")
+        } else {
+            writeln!(io, "s3://{}/{}", bucket, stream_obj.display_key())
+        }
     }
 }
 
