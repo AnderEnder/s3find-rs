@@ -161,6 +161,18 @@ pub struct FindOpt {
     #[arg(name = "rpattern", long = "regex", number_of_values = 1)]
     pub regex: Vec<Regex>,
 
+    /// Exclude keys matching this glob pattern, can be multiple
+    #[arg(name = "not-pattern", long = "not-name", number_of_values = 1)]
+    pub not_name: Vec<NameGlob>,
+
+    /// Exclude keys matching this case-insensitive glob pattern, can be multiple
+    #[arg(name = "not-ipattern", long = "not-iname", number_of_values = 1)]
+    pub not_iname: Vec<InameGlob>,
+
+    /// Exclude keys matching this regex pattern, can be multiple
+    #[arg(name = "not-rpattern", long = "not-regex", number_of_values = 1)]
+    pub not_regex: Vec<Regex>,
+
     /// Object storage class for match
     #[arg(
         name = "storage-class",
