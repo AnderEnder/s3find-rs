@@ -456,7 +456,7 @@ async fn test_ls_split_listing_keeps_key_order() {
     // With two keys per page, the listing is split after its second page.
     let mut cmd = fixture.s3find_command();
     cmd.arg(fixture.s3_path(""))
-        .arg("--page-size")
+        .arg("--number")
         .arg("2")
         .arg("ls");
     let output = cmd.assert().success().get_output().stdout.clone();
