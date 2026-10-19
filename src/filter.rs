@@ -18,6 +18,15 @@ pub trait Filter: Send + Sync {
     fn filter(&self, object: &StreamObject) -> bool;
 }
 
+/// Matches the objects `F` doesn't (`--not-name`, `--not-iname`, `--not-regex`).
+pub struct Not<F>(pub F);
+
+impl<F: Filter> Filter for Not<F> {
+    fn filter(&self, object: &StreamObject) -> bool {
+        !self.0.filter(object)
+    }
+}
+
 #[inline]
 fn key(object: &StreamObject) -> &str {
     object.key().unwrap_or_default()
@@ -133,6 +142,9 @@ impl FilterList {
         filters.extend(opts.name.iter().cloned());
         filters.extend(opts.iname.iter().cloned());
         filters.extend(opts.regex.iter().cloned());
+        filters.extend(opts.not_name.iter().cloned().map(Not));
+        filters.extend(opts.not_iname.iter().cloned().map(Not));
+        filters.extend(opts.not_regex.iter().cloned().map(Not));
         filters
     }
 
@@ -216,6 +228,29 @@ mod tests {
         TagExistsFilter {
             key: key.to_string(),
         }
+    }
+
+    #[test]
+    fn test_not_filters_exclude_matching_keys() {
+        let filters = FilterList::from_opts(&opts(&[
+            "s3://bucket",
+            "--name",
+            "*.log",
+            "--not-name",
+            "debug-*",
+            "--not-iname",
+            "*-TMP.log",
+            "--not-regex",
+            "^old/",
+        ]));
+        let matching = |key: &str| filters.matches(&keyed(key));
+
+        assert!(matching("app.log"));
+        assert!(matching("logs/app.log"));
+        assert!(!matching("debug-app.log"));
+        assert!(!matching("app-tmp.log"));
+        assert!(!matching("old/app.log"));
+        assert!(!matching("app.txt"));
     }
 
     #[test]

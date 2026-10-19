@@ -275,6 +275,15 @@ Use `--regex` for regular expression pattern matching:
 s3find 's3://example-bucket/example-path' --regex '[0-9]$' print
 ```
 
+### Excluding Objects
+
+`--not-name`, `--not-iname` and `--not-regex` drop the keys a `--name`, `--iname` or `--regex` pattern would match. Each can be given several times, and an object is excluded if any of them matches:
+
+```sh
+# Every .log object except debug logs and anything under archive/
+s3find 's3://example-bucket/logs/' --name '*.log' --not-name 'debug-*' --not-regex '^logs/archive/' ls
+```
+
 ### Find Path by Size
 
 ```sh
