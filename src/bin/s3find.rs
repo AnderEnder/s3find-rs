@@ -35,7 +35,10 @@ async fn run_cli(args: &FindOpt) -> S3FindResult<()> {
         eprintln!("{warning}");
     }
 
-    let client = aws::setup_client(args).await;
+    let mut client = aws::setup_client(args).await;
+    if aws::looks_up_bucket_region(args) {
+        client = aws::in_bucket_region(client, &args.path.bucket).await;
+    }
     let pipeline = Pipeline::from_opts(args, client);
 
     let mut out: Box<dyn Write + Send> = if pipeline.buffered_output() {
