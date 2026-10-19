@@ -782,13 +782,14 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
         s3_config_builder = s3_config_builder.force_path_style(true);
     }
 
-    let client = Client::from_conf(s3_config_builder.build());
-    // The SDK doesn't follow S3's redirects to a bucket's own region, so look
-    // the region up unless it was given or the endpoint isn't AWS.
-    if aws_region.is_none() && endpoint_url.is_none() {
-        return in_bucket_region(client, &args.path.bucket).await;
-    }
-    client
+    Client::from_conf(s3_config_builder.build())
+}
+
+/// Whether to look up the searched bucket's region with [`in_bucket_region`]:
+/// the SDK doesn't follow S3's redirects to a bucket's own region, so unless a
+/// region was given, or the endpoint isn't AWS.
+pub fn looks_up_bucket_region(args: &FindOpt) -> bool {
+    args.aws_region.is_none() && args.endpoint_url.is_none()
 }
 
 /// `client`, pointed at the region `bucket` is in when that isn't its own.
@@ -1089,6 +1090,19 @@ mod tests {
             .await
             .unwrap();
         replay.assert_requests_match(&[]);
+    }
+
+    #[test]
+    fn test_looks_up_bucket_region_only_on_aws_without_a_region() {
+        let looks_up = |args: &[&str]| looks_up_bucket_region(&opts(args));
+
+        assert!(looks_up(&["s3://bucket"]));
+        assert!(!looks_up(&["s3://bucket", "--aws-region", "eu-west-1"]));
+        assert!(!looks_up(&[
+            "s3://bucket",
+            "--endpoint-url",
+            "http://localhost:9000"
+        ]));
     }
 
     #[tokio::test]
