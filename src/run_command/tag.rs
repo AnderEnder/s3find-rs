@@ -96,6 +96,7 @@ impl RunCommand for ListTags {
             bucket,
             live_objects(objects),
             ctx.options.concurrency,
+            ctx.interrupted,
             |object| async move {
                 // Reuse tags already fetched for tag filtering.
                 let tags = match &object.tags {

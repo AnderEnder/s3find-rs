@@ -110,9 +110,10 @@ Output:
   --dry-run to preview commands that change objects.
 
 Exit status:
-  0  success, including when nothing matched
-  1  listing or a command failed
-  2  invalid arguments"#
+  0    success, including when nothing matched
+  1    listing or a command failed
+  2    invalid arguments
+  130  interrupted with Ctrl-C (results are partial)"#
     )
 )]
 pub struct FindOpt {

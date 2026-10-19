@@ -45,6 +45,8 @@ pub enum S3FindError {
         #[source]
         source: AnyhowError,
     },
+    #[error("interrupted")]
+    Interrupted,
 }
 
 impl S3FindError {

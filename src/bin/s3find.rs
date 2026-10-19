@@ -1,10 +1,11 @@
 use std::io::{self, BufWriter, Write};
+use std::pin::pin;
 use std::process::ExitCode;
 
 use clap::Parser;
 use s3find::adapters::aws;
 use s3find::arg::FindOpt;
-use s3find::error::S3FindResult;
+use s3find::error::{S3FindError, S3FindResult};
 use s3find::pipeline::{Pipeline, option_warnings};
 use s3find::stats::Summary;
 use serde_json::json;
@@ -17,16 +18,18 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 async fn main() -> ExitCode {
     let args = FindOpt::parse();
 
-    match run_cli(&args).await {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(err) if args.json => {
-            eprintln!("{}", json!({ "error": err.to_string() }));
-            ExitCode::FAILURE
-        }
-        Err(err) => {
-            eprintln!("{err}");
-            ExitCode::FAILURE
-        }
+    let Err(err) = run_cli(&args).await else {
+        return ExitCode::SUCCESS;
+    };
+    if args.json {
+        eprintln!("{}", json!({ "error": err.to_string() }));
+    } else {
+        eprintln!("{err}");
+    }
+    match err {
+        // 128 + SIGINT, as shells report a command stopped by Ctrl-C.
+        S3FindError::Interrupted => ExitCode::from(130),
+        _ => ExitCode::FAILURE,
     }
 }
 
@@ -46,7 +49,23 @@ async fn run_cli(args: &FindOpt) -> S3FindResult<()> {
     } else {
         Box::new(io::stdout())
     };
-    let stats = pipeline.run(&mut out).await?;
+    // The first Ctrl-C lets requests in flight finish but starts no new ones;
+    // a second stops at once, dropping them.
+    let mut run = pin!(pipeline.run(&mut out));
+    let stats = tokio::select! {
+        result = &mut run => result?,
+        _ = tokio::signal::ctrl_c() => {
+            pipeline.interrupt();
+            eprintln!("Interrupted: finishing requests in flight, press Ctrl-C again to stop now");
+            tokio::select! {
+                result = &mut run => result?,
+                _ = tokio::signal::ctrl_c() => return Err(S3FindError::Interrupted),
+            }
+        }
+    };
+    if pipeline.interrupted() {
+        return Err(S3FindError::Interrupted);
+    }
 
     if let Some(stats) = stats {
         let tag_fetch = pipeline.tag_stats().filter(|stats| !stats.is_empty());

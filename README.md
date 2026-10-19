@@ -106,6 +106,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 ### Behavior Notes
 
 - Listing failures and subcommand failures return a non-zero exit code instead of succeeding with partial output.
+- Ctrl-C stops s3find from starting new work: no more objects are listed or handed to the command, and no new request starts, while requests already in flight finish (so a multipart copy completes or is aborted, and a download is completed or its partial file removed). A second Ctrl-C stops at once. Either way s3find exits with status 130.
 - `download` skips existing destination files and continues with the remaining objects unless `--force` is set. Each file is written under a temporary name and renamed when complete, so an interrupted download never leaves a partial file. Keys ending in `/` (folder markers) become directories, and keys that would be written outside the destination (`../`, a leading `/`) are refused.
 - `exec` replaces `{}` within each word of `--utility` after splitting it like a shell, so a key with spaces or quotes is always passed as a single argument. For object versions, `{}` is `s3://bucket/key?versionId=...`.
 - `copy` and `move` skip objects that are already where their copy would go, and `move` never deletes them. When the destination is inside the searched path, objects already under it are skipped too, so copies aren't copied again. With `--flat`, two different keys that would land on the same destination key are an error, caught before anything in their batch is copied.
@@ -194,7 +195,7 @@ s3find is built to be driven by scripts and AI agents as well as by people:
 - **Results on stdout, everything else on stderr.** Each result is one line; warnings, progress bars and errors go to stderr. Progress bars are hidden when stderr isn't a terminal.
 - **`--json`** writes [JSON Lines](https://jsonlines.org/): one JSON object per result.
 - **`--dry-run`** shows what a command would change without changing anything.
-- **Exit status:** `0` on success (including when nothing matched), `1` when listing or a command failed, `2` for invalid arguments.
+- **Exit status:** `0` on success (including when nothing matched), `1` when listing or a command failed, `2` for invalid arguments, `130` when interrupted with Ctrl-C (results are partial).
 - `--json` and `--dry-run` may be given before or after the command, and `--limit` caps how many objects are processed.
 
 ```sh
