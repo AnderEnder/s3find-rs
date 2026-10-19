@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::fmt;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::pin::pin;
 
@@ -12,6 +12,7 @@ use futures::TryStreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use serde::Serialize;
 use tempfile::NamedTempFile;
+use tokio::io::AsyncWriteExt;
 
 use crate::adapters::aws::{DeleteObjectRequest, S3Client};
 use crate::arg::{ChangeStorage, Download, S3Copy, S3Move, S3Path, StorageClassName};
@@ -112,7 +113,10 @@ impl Download {
         fs::create_dir_all(dir_path)?;
         // Renamed into place once complete, so a failed or cancelled download
         // never leaves a partial file that a later run would skip as existing.
-        let mut output = partial_file(dir_path)?;
+        let output = partial_file(dir_path)?;
+        // Written from tokio's blocking pool, so a slow disk doesn't hold up
+        // the runtime threads that drive listing and the other transfers.
+        let mut writer = tokio::fs::File::from_std(output.as_file().try_clone()?);
 
         let size = object.object.size.unwrap_or_default() as u64;
         let bar = bars.add(
@@ -121,9 +125,12 @@ impl Download {
                 .with_message(file_name.to_owned()),
         );
         while let Some(bytes) = stream.try_next().await? {
-            output.write_all(&bytes)?;
+            writer.write_all(&bytes).await?;
             bar.inc(bytes.len() as u64);
         }
+        // Waits for the last write; the handle is closed before the rename.
+        writer.flush().await?;
+        drop(writer);
         // Keep only the io::Error, so the temporary file is dropped and deleted.
         output.persist(&file_path).map_err(|err| err.error)?;
         bar.finish_and_clear();
