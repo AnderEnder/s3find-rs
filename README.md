@@ -199,6 +199,9 @@ s3find 's3://example-bucket/tmp' --name '*.tmp' --mtime +7d delete
 
 # Machine-readable listing
 s3find 's3://example-bucket/logs' --limit 100 --json ls | jq -r .url
+
+# NUL-separated URLs, safe for keys with spaces or newlines
+s3find 's3://example-bucket/logs' --name '*.gz' ls --print0 | xargs -0 -n 1 echo
 ```
 
 With `--json`, `ls` and `print` write one object per line:

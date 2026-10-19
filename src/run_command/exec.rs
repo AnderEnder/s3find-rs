@@ -9,7 +9,7 @@ use crate::arg::Exec;
 use crate::error::FunctionError;
 use crate::object::StreamObject;
 
-use super::report::ObjectRef;
+use super::report::{ObjectRef, ObjectUrl};
 use super::{CommandContext, RunCommand};
 
 /// A program run for an object; `stdout` is `None` in a dry run.
@@ -50,16 +50,6 @@ fn command_line(command: &[String]) -> String {
     shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
-/// What `{}` stands for: the object's `s3://` URL, with `?versionId=` when
-/// listed by version.
-fn target(bucket: &str, object: &StreamObject) -> String {
-    let key = object.key().unwrap_or_default();
-    match &object.version_id {
-        Some(version_id) => format!("s3://{bucket}/{key}?versionId={version_id}"),
-        None => format!("s3://{bucket}/{key}"),
-    }
-}
-
 /// Runs a program and returns what it wrote to stdout. A non-zero exit is an
 /// error that includes what it wrote to stderr.
 pub(crate) async fn run(command: &[String]) -> Result<String, Error> {
@@ -95,7 +85,11 @@ impl RunCommand for Exec {
         // One at a time, like `find -exec`: the utility may not be safe to run
         // concurrently.
         for object in objects {
-            let command = self.command(&target(&ctx.path.bucket, object))?;
+            let target = ObjectUrl {
+                bucket: &ctx.path.bucket,
+                object,
+            };
+            let command = self.command(&target.to_string())?;
             let stdout = if ctx.options.dry_run {
                 None
             } else {

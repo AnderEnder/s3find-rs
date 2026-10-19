@@ -106,6 +106,25 @@ impl Serialize for ObjectRef<'_> {
     }
 }
 
+/// An object's `s3://` URL for other programs: with `?versionId=` when listed
+/// by version, but none of the labels `ls` adds. What `exec` passes for `{}`
+/// and `ls --print0` prints.
+pub(crate) struct ObjectUrl<'a> {
+    pub(crate) bucket: &'a str,
+    pub(crate) object: &'a StreamObject,
+}
+
+impl fmt::Display for ObjectUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let key = self.object.key().unwrap_or_default();
+        write!(f, "s3://{}/{key}", self.bucket)?;
+        if let Some(version_id) = &self.object.version_id {
+            write!(f, "?versionId={version_id}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Serializes tags as one JSON object, `{"key": "value", ...}`.
 pub(crate) fn tag_map<S: Serializer>(tags: &[Tag], serializer: S) -> Result<S::Ok, S::Error> {
     serializer.collect_map(tags.iter().map(|tag| (tag.key(), tag.value())))
