@@ -114,6 +114,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 - `--summarize` prints normal summary statistics and, when tag filters are used, tag fetch statistics including `excluded` objects.
 - Commands that make one S3 request per object (`copy`, `move`, `download`, `tags`, `lstags`, `public`, `restore`, `change-storage`) keep up to `--concurrency` requests in flight (default: 32) and still print results in traversal order. On an error they stop, but requests already in flight may have completed; `--concurrency 1` processes one object at a time. `exec` always runs one command at a time.
 - Listing runs up to one batch (1000 objects) ahead of the command, and `--maxdepth` fetches the first page of up to 8 subdirectories per level at once.
+- A listing longer than two pages (2000 keys) is split at the subdirectories after the keys read so far (looking one level deeper when everything left is in one directory), and up to 8 of those ranges are listed at once, each a couple of pages ahead. Results keep key order, and small listings or `--limit` runs that stop within two pages make no extra requests. A listing with no subdirectories to split at continues page by page.
+- More concurrent requests can run into S3 throttling (`SlowDown`). s3find retries throttled requests like any AWS SDK client (3 attempts in the standard mode); set `AWS_MAX_ATTEMPTS` or `AWS_RETRY_MODE=adaptive` (or `max_attempts` / `retry_mode` in an AWS profile) to change that.
 - A path ending in `/` means that directory: `s3://bucket/logs/` matches only keys under `logs/`. Without the slash, the path is a plain S3 prefix, so `s3://bucket/logs` also matches `logs-old/` and `logs.txt`.
 
 ## Usage

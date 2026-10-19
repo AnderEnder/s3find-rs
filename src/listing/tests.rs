@@ -81,11 +81,13 @@ async fn test_flat_listing_follows_continuation_tokens() {
                 prefix: "data/".to_string(),
                 delimiter: None,
                 continuation_token: None,
+                start_after: None,
             },
             ListCall {
                 prefix: "data/".to_string(),
                 delimiter: None,
                 continuation_token: Some("data/b".to_string()),
+                start_after: None,
             },
         ]
     );
@@ -113,6 +115,148 @@ async fn test_listing_error_ends_stream() {
     let err = results.into_iter().next().unwrap().unwrap_err();
     assert!(matches!(err, S3FindError::ListObjects { .. }));
     assert_eq!(err.to_string(), "failed to list S3 objects: boom");
+}
+
+fn bucket_with(keys: &[String]) -> FakeS3Client {
+    let objects: Vec<_> = keys.iter().map(|key| (key.as_str(), 1)).collect();
+    FakeS3Client::default().with_objects(&objects)
+}
+
+fn sorted(keys: &[String]) -> Vec<&str> {
+    let mut sorted: Vec<_> = keys.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    sorted
+}
+
+fn split_calls(client: &FakeS3Client) -> Vec<ListCall> {
+    client
+        .list_calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|call| call.delimiter.is_some())
+        .cloned()
+        .collect()
+}
+
+/// Keys around directory boundaries: `a.txt` and `a0` sort on either side
+/// of `a/`, which is also a folder marker.
+fn wide_tree() -> Vec<String> {
+    let mut keys = vec!["a.txt".to_owned(), "a/".to_owned(), "a0".to_owned()];
+    for dir in ["a", "b", "c", "d", "e"] {
+        keys.push(format!("{dir}/top.txt"));
+        for sub in ["x", "y"] {
+            keys.extend((0..3).map(|i| format!("{dir}/{sub}/{i}.txt")));
+        }
+    }
+    keys.push("z.txt".to_owned());
+    keys
+}
+
+#[tokio::test]
+async fn test_split_flat_listing_keeps_key_order() {
+    let keys = wide_tree();
+
+    for page_size in 1..=6 {
+        let client = bucket_with(&keys);
+        let objects = collect(&client, &options(None, page_size, None))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            super::tests::keys(&objects),
+            sorted(&keys),
+            "page size {page_size}"
+        );
+        assert!(!split_calls(&client).is_empty(), "page size {page_size}");
+    }
+
+    let client = bucket_with(&keys);
+    let objects = collect(&client, &options(Some("c/"), 2, None))
+        .await
+        .unwrap();
+    let under_c: Vec<_> = keys
+        .iter()
+        .filter(|key| key.starts_with("c/"))
+        .cloned()
+        .collect();
+    assert_eq!(super::tests::keys(&objects), sorted(&under_c));
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_split_flat_listing_lists_ranges_concurrently() {
+    let keys: Vec<String> = (0..8)
+        .flat_map(|dir| (0..10).map(move |i| format!("d{dir}/{i}")))
+        .collect();
+    let client = bucket_with(&keys).with_list_delay(10);
+
+    let start = tokio::time::Instant::now();
+    let objects = collect(&client, &options(None, 5, None)).await.unwrap();
+
+    assert_eq!(super::tests::keys(&objects), sorted(&keys));
+    // Listed one page after another, 80 keys take 16 calls. Here: two pages,
+    // one call for the directories after d0/9, then one range per directory,
+    // all at once; the longest range takes three calls.
+    assert_eq!(start.elapsed(), Duration::from_millis(10 * (2 + 1 + 3)));
+    assert_eq!(
+        split_calls(&client),
+        [ListCall {
+            prefix: String::new(),
+            delimiter: Some("/".to_owned()),
+            continuation_token: None,
+            start_after: Some("d0/9".to_owned()),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn test_split_flat_listing_ends_with_the_error_of_any_range() {
+    let keys: Vec<String> = (0..8)
+        .flat_map(|dir| (0..10).map(move |i| format!("d{dir}/{i}")))
+        .collect();
+    let client = bucket_with(&keys).with_failing_start_after("d5/");
+
+    let err = collect(&client, &options(None, 5, None)).await.unwrap_err();
+
+    assert_eq!(err.to_string(), "failed to list S3 objects: SlowDown");
+}
+
+#[tokio::test]
+async fn test_flat_listing_without_directories_continues_page_by_page() {
+    let keys: Vec<String> = (0..10).map(|i| format!("k{i:02}")).collect();
+    let client = bucket_with(&keys);
+
+    let objects = collect(&client, &options(None, 2, None)).await.unwrap();
+
+    assert_eq!(super::tests::keys(&objects), sorted(&keys));
+    // Five pages, plus one look for directories to split at.
+    assert_eq!(client.list_calls.lock().unwrap().len(), 6);
+    assert_eq!(split_calls(&client).len(), 1);
+}
+
+#[tokio::test]
+async fn test_flat_listing_splits_inside_the_only_directory() {
+    let keys: Vec<String> = ["a", "b", "c"]
+        .iter()
+        .flat_map(|dir| (0..4).map(move |i| format!("data/{dir}/{i}")))
+        .collect();
+    let client = bucket_with(&keys);
+
+    let objects = collect(&client, &options(None, 2, None)).await.unwrap();
+
+    assert_eq!(super::tests::keys(&objects), sorted(&keys));
+    let prefixes: Vec<_> = split_calls(&client)
+        .into_iter()
+        .map(|call| call.prefix)
+        .collect();
+    assert_eq!(prefixes, ["", "data/"]);
+}
+
+#[test]
+fn test_spread_keeps_evenly_spaced_items_in_order() {
+    let items: Vec<usize> = (0..100).collect();
+    assert_eq!(spread(items.clone(), 3), [25, 50, 75]);
+    assert_eq!(spread(items[..3].to_vec(), 5), [0, 1, 2]);
 }
 
 fn hierarchy() -> FakeS3Client {
@@ -509,6 +653,27 @@ async fn test_sdk_maxdepth_uses_delimiter_per_level() {
 
     // logs/2024/01/ is three levels deep and is not listed.
     assert_eq!(keys(&objects), ["logs/root.txt", "logs/2024/jan.txt"]);
+    replay_client.assert_requests_match(&[]);
+}
+
+#[tokio::test]
+async fn test_sdk_listing_sends_start_after() {
+    let (client, replay_client) = replay(vec![(
+        "list-type=2&delimiter=%2F&max-keys=10&prefix=logs%2F&start-after=logs%2Fa%2F9",
+        StatusCode::OK,
+        &list_result("<IsTruncated>false</IsTruncated>"),
+    )]);
+
+    let request = ListObjectsRequest {
+        bucket: "test-bucket",
+        prefix: "logs/",
+        delimiter: Some("/"),
+        continuation_token: None,
+        start_after: Some("logs/a/9"),
+        max_keys: 10,
+    };
+    S3Client::list_objects(&client, request).await.unwrap();
+
     replay_client.assert_requests_match(&[]);
 }
 

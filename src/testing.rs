@@ -149,6 +149,7 @@ pub(crate) struct ListCall {
     pub(crate) prefix: String,
     pub(crate) delimiter: Option<String>,
     pub(crate) continuation_token: Option<String>,
+    pub(crate) start_after: Option<String>,
 }
 
 /// An in-memory S3 for one or more buckets.
@@ -161,6 +162,7 @@ pub(crate) struct FakeS3Client {
     pub(crate) objects: Mutex<BTreeMap<String, Object>>,
     pub(crate) version_pages: Mutex<Vec<(Vec<ObjectVersion>, Vec<DeleteMarkerEntry>)>>,
     pub(crate) list_error: Option<String>,
+    pub(crate) failing_start_after: Option<String>,
     pub(crate) list_delay: Option<Duration>,
     pub(crate) list_calls: Mutex<Vec<ListCall>>,
     pub(crate) list_version_calls: Mutex<Vec<Option<VersionMarker>>>,
@@ -188,6 +190,7 @@ impl Default for FakeS3Client {
             objects: Mutex::default(),
             version_pages: Mutex::default(),
             list_error: None,
+            failing_start_after: None,
             list_delay: None,
             list_calls: Mutex::default(),
             list_version_calls: Mutex::default(),
@@ -280,6 +283,12 @@ impl FakeS3Client {
         self
     }
 
+    /// Makes the ListObjectsV2 calls that start after `key` fail.
+    pub(crate) fn with_failing_start_after(mut self, key: &str) -> Self {
+        self.failing_start_after = Some(key.to_string());
+        self
+    }
+
     /// Makes every ListObjectsV2 call take `millis`.
     pub(crate) fn with_list_delay(mut self, millis: u64) -> Self {
         self.list_delay = Some(Duration::from_millis(millis));
@@ -366,12 +375,18 @@ impl S3Client for FakeS3Client {
             prefix: request.prefix.to_string(),
             delimiter: request.delimiter.map(str::to_string),
             continuation_token: request.continuation_token.map(str::to_string),
+            start_after: request.start_after.map(str::to_string),
         });
         if let Some(delay) = self.list_delay {
             tokio::time::sleep(delay).await;
         }
         if let Some(message) = &self.list_error {
             return Err(anyhow!(message.clone()));
+        }
+        if request.start_after.is_some()
+            && request.start_after == self.failing_start_after.as_deref()
+        {
+            return Err(anyhow!("SlowDown"));
         }
 
         let max_keys = usize::try_from(request.max_keys).unwrap_or_default();
@@ -389,9 +404,12 @@ impl S3Client for FakeS3Client {
             .is_some_and(|(token, delimiter)| token.ends_with(delimiter));
         let after_token = objects.iter().filter(|(key, _)| {
             key.starts_with(request.prefix)
-                && request.continuation_token.is_none_or(|token| {
-                    key.as_str() > token && !(token_is_prefix && key.starts_with(token))
-                })
+                && match request.continuation_token {
+                    Some(token) => {
+                        key.as_str() > token && !(token_is_prefix && key.starts_with(token))
+                    }
+                    None => request.start_after.is_none_or(|after| key.as_str() > after),
+                }
         });
 
         for (key, object) in after_token {
@@ -705,6 +723,7 @@ mod tests {
             prefix,
             delimiter,
             continuation_token: token,
+            start_after: None,
             max_keys,
         }
     }
