@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use aws_sdk_s3::types::{Object, Tag};
@@ -116,6 +117,12 @@ fn env_prod() -> FilterList {
     })
 }
 
+async fn process_listed(
+    pipeline: &Pipeline<FakeS3Client, impl RunCommand>,
+) -> S3FindResult<Option<FindStat>> {
+    pipeline.run(&mut Vec::new()).await
+}
+
 async fn process(
     pipeline: &Pipeline<FakeS3Client, impl RunCommand>,
     items: impl IntoIterator<Item = StreamObject>,
@@ -192,6 +199,64 @@ async fn test_limit_stops_listing_early() {
 
     assert_eq!(recorder.keys(), ["a", "b"]);
     assert_eq!(pipeline.client().list_calls.lock().unwrap().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_interrupt_stops_listing_and_batches() {
+    let keys: Vec<String> = (0..2500).map(|i| format!("k{i:04}")).collect();
+    let objects: Vec<_> = keys.iter().map(|key| (key.as_str(), 1)).collect();
+    let client = FakeS3Client::default()
+        .with_objects(&objects)
+        .with_list_delay(10);
+    let recorder = Recorder::default();
+    let pipeline = pipeline(client, &recorder);
+
+    // The first page arrives at 10ms and runs as a batch; the interrupt
+    // comes before the second page.
+    let interrupt = async {
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        pipeline.interrupt();
+    };
+    let (result, ()) = futures::join!(process_listed(&pipeline), interrupt);
+
+    result.unwrap();
+    assert!(pipeline.interrupted());
+    assert_eq!(recorder.batch_sizes(), [1000]);
+    assert_eq!(pipeline.client().list_calls.lock().unwrap().len(), 2);
+}
+
+/// Takes 50ms per batch and counts them.
+#[derive(Clone, Default)]
+struct SlowBatches(Arc<AtomicUsize>);
+
+impl RunCommand for SlowBatches {
+    async fn execute<C: S3Client>(
+        &self,
+        _: &mut CommandContext<'_, C>,
+        _: &[StreamObject],
+    ) -> Result<(), anyhow::Error> {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_interrupt_runs_no_batch_from_objects_already_listed() {
+    let command = SlowBatches::default();
+    let pipeline = Pipeline::new(FakeS3Client::default(), listing(), command.clone());
+    let items = stream::iter((0..3 * BATCH_SIZE).map(|i| Ok(keyed(&format!("object{i}")))));
+
+    // While the first batch runs, the next one's objects are already listed.
+    let interrupt = async {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        pipeline.interrupt();
+    };
+    let mut out = Vec::new();
+    let (result, ()) = futures::join!(pipeline.process(items, &mut out), interrupt);
+
+    result.unwrap();
+    assert_eq!(command.0.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]

@@ -57,6 +57,7 @@ impl RunCommand for Download {
             bucket,
             live_objects(objects),
             ctx.options.concurrency,
+            ctx.interrupted,
             |object| self.download(client, bucket, object, dry_run, &bars, &style),
         ));
         while let Some(record) = downloads.try_next().await? {

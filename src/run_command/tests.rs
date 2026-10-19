@@ -3580,3 +3580,58 @@ async fn test_ls_print0_ends_each_url_with_a_nul_byte() -> Result<(), Error> {
     assert_eq!(records[0]["key"], "line\nbreak.txt");
     Ok(())
 }
+
+#[tokio::test(start_paused = true)]
+async fn test_interrupted_commands_finish_requests_in_flight_and_start_no_more() {
+    let client = ["a", "b", "c", "d"]
+        .iter()
+        .fold(FakeS3Client::default(), |client, key| {
+            client.with_tag_delay("test-bucket", key, 10)
+        });
+    let objects: Vec<_> = ["a", "b", "c", "d"].iter().map(|key| object(key)).collect();
+    let options = CommandOptions {
+        concurrency: 1,
+        ..CommandOptions::default()
+    };
+    let interrupted = std::sync::atomic::AtomicBool::new(false);
+    let path = test_path();
+    let mut out = Vec::new();
+    let mut ctx =
+        CommandContext::new(&client, &path, &mut out, options).interruptible(&interrupted);
+
+    // b is in flight when the interrupt comes at 15ms.
+    let interrupt = async {
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        interrupted.store(true, std::sync::atomic::Ordering::Relaxed);
+    };
+    let (result, ()) = futures::join!(
+        Cmd::LsTags(ListTags {}).execute(&mut ctx, &objects),
+        interrupt
+    );
+
+    result.unwrap();
+    assert_eq!(client.get_tag_calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "s3://test-bucket/a \ns3://test-bucket/b \n"
+    );
+}
+
+#[tokio::test]
+async fn test_interrupted_exec_runs_nothing_more() {
+    let client = FakeS3Client::default();
+    let interrupted = std::sync::atomic::AtomicBool::new(true);
+    let path = test_path();
+    let mut out = Vec::new();
+    let mut ctx = CommandContext::new(&client, &path, &mut out, CommandOptions::default())
+        .interruptible(&interrupted);
+
+    Cmd::Exec(Exec {
+        utility: "false {}".to_owned(),
+    })
+    .execute(&mut ctx, &[object("a")])
+    .await
+    .unwrap();
+
+    assert!(out.is_empty());
+}

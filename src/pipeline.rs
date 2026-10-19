@@ -3,6 +3,7 @@
 
 use std::future::ready;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::channel::mpsc;
 use futures::future::try_join;
@@ -41,6 +42,7 @@ pub struct Pipeline<C, K = Cmd> {
     command: K,
     command_options: CommandOptions,
     summarize: bool,
+    interrupted: AtomicBool,
 }
 
 impl<C: S3Client> Pipeline<C> {
@@ -71,6 +73,7 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
             command,
             command_options: CommandOptions::default(),
             summarize: false,
+            interrupted: AtomicBool::new(false),
         }
     }
 
@@ -111,6 +114,19 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
     /// Whether the command's output may be block-buffered.
     pub fn buffered_output(&self) -> bool {
         self.command.buffered_output()
+    }
+
+    /// Asks a running pipeline to start no new work: no more objects are
+    /// listed or handed to the command, and commands start no new request,
+    /// while requests already in flight finish. Callable while `run` is
+    /// in progress.
+    pub fn interrupt(&self) {
+        self.interrupted.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether [`interrupt`](Self::interrupt) was called, so results may be partial.
+    pub fn interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::Relaxed)
     }
 
     pub fn client(&self) -> &C {
@@ -159,11 +175,15 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
         out: &mut (dyn Write + Send),
     ) -> S3FindResult<Option<FindStat>> {
         let mut ctx =
-            CommandContext::new(&self.client, &self.listing.path, out, self.command_options);
+            CommandContext::new(&self.client, &self.listing.path, out, self.command_options)
+                .interruptible(&self.interrupted);
         let mut stats = self.summarize.then(FindStat::default);
         let mut batch = Vec::with_capacity(BATCH_SIZE);
 
         while let Some(object) = matches.try_next().await? {
+            if self.interrupted() {
+                return Ok(stats);
+            }
             batch.push(object);
             if batch.len() == BATCH_SIZE {
                 self.execute(&mut ctx, &batch, stats.as_mut()).await?;
@@ -171,7 +191,7 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
             }
         }
 
-        if !batch.is_empty() {
+        if !batch.is_empty() && !self.interrupted() {
             self.execute(&mut ctx, &batch, stats.as_mut()).await?;
         }
 
@@ -197,7 +217,9 @@ impl<C: S3Client, K: RunCommand> Pipeline<C, K> {
                 .right_stream(),
         };
 
-        matches.take(self.limit.unwrap_or(usize::MAX))
+        matches
+            .take(self.limit.unwrap_or(usize::MAX))
+            .take_while(move |_| ready(!self.interrupted()))
     }
 
     async fn execute(

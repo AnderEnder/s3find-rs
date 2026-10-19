@@ -6,8 +6,10 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::future::ready;
 use std::io::Write;
 use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Error};
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt, stream};
@@ -80,7 +82,12 @@ pub struct CommandContext<'a, C> {
     /// Destination keys claimed by `--flat` copies so far in this run, each
     /// with the source key copied there.
     flat_destinations: HashMap<String, String>,
+    /// Once set, commands start no new request.
+    interrupted: &'a AtomicBool,
 }
+
+/// The interrupt flag of a context that is never interrupted.
+static NEVER_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 impl<'a, C> CommandContext<'a, C> {
     pub fn new(
@@ -95,7 +102,18 @@ impl<'a, C> CommandContext<'a, C> {
             out,
             options,
             flat_destinations: HashMap::new(),
+            interrupted: &NEVER_INTERRUPTED,
         }
+    }
+
+    /// Stops commands from starting new requests once `interrupted` is set.
+    pub fn interruptible(mut self, interrupted: &'a AtomicBool) -> Self {
+        self.interrupted = interrupted;
+        self
+    }
+
+    fn is_interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::Relaxed)
     }
 }
 
@@ -126,6 +144,7 @@ impl<C: S3Client> CommandContext<'_, C> {
             &self.path.bucket,
             objects,
             self.options.concurrency,
+            self.interrupted,
             request
         ));
         while let Some(record) = records.try_next().await? {
@@ -136,7 +155,8 @@ impl<C: S3Client> CommandContext<'_, C> {
 }
 
 /// Runs `request` on each object with up to `concurrency` in flight, yielding
-/// the results in input order. Errors name the object they came from.
+/// the results in input order. Errors name the object they came from. Once
+/// `interrupted` is set no new request starts; those in flight finish.
 ///
 /// This is a plain fn returning an opaque `Send` stream because rustc can't
 /// prove the same stream `Send` when it is built inline in an `async fn`
@@ -145,6 +165,7 @@ fn in_order<'o, T, Fut>(
     bucket: &'o str,
     objects: impl Iterator<Item = &'o StreamObject> + Send + 'o,
     concurrency: usize,
+    interrupted: &'o AtomicBool,
     mut request: impl FnMut(&'o StreamObject) -> Fut + Send + 'o,
 ) -> impl Stream<Item = Result<T, Error>> + Send + 'o
 where
@@ -152,6 +173,7 @@ where
     Fut: Future<Output = Result<T, Error>> + Send + 'o,
 {
     stream::iter(objects)
+        .take_while(move |_| ready(!interrupted.load(Ordering::Relaxed)))
         .map(move |object| {
             request(object).map(move |result| {
                 result.with_context(|| format!("s3://{bucket}/{}", object.display_key()))

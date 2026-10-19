@@ -85,6 +85,9 @@ impl RunCommand for Exec {
         // One at a time, like `find -exec`: the utility may not be safe to run
         // concurrently.
         for object in objects {
+            if ctx.is_interrupted() {
+                break;
+            }
             let target = ObjectUrl {
                 bucket: &ctx.path.bucket,
                 object,
