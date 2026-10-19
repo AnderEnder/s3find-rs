@@ -16,6 +16,7 @@ A powerful command line utility to walk an Amazon S3 hierarchy. Think of it as t
 - [Usage](#usage)
   - [Basic Syntax](#basic-syntax)
   - [Authentication Methods](#authentication-methods)
+  - [Regions](#regions)
   - [Using with Non-AWS S3-Compatible Services](#using-with-non-aws-s3-compatible-services)
   - [Scripting and AI Agents](#scripting-and-ai-agents)
 - [Examples](#examples)
@@ -138,6 +139,10 @@ s3find supports multiple AWS authentication methods in the following priority:
 3. AWS profile credentials file (configurable via `AWS_PROFILE` and `AWS_SHARED_CREDENTIALS_FILE`)
 4. AWS instance IAM profile
 5. AWS container IAM profile
+
+### Regions
+
+Without `--aws-region`, s3find asks S3 which region the searched bucket is in (one HeadBucket request) and uses it, so a bucket outside your default region works without extra options. `--aws-region` skips the lookup, and so does `--endpoint-url`, since other S3-compatible services don't use AWS regions. Requests all go to that one region, so a `copy` or `move` destination bucket has to be in the same region as the searched bucket.
 
 ### Using with Non-AWS S3-Compatible Services
 

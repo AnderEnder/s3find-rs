@@ -782,7 +782,36 @@ pub async fn setup_client(args: &arg::FindOpt) -> Client {
         s3_config_builder = s3_config_builder.force_path_style(true);
     }
 
-    Client::from_conf(s3_config_builder.build())
+    let client = Client::from_conf(s3_config_builder.build());
+    // The SDK doesn't follow S3's redirects to a bucket's own region, so look
+    // the region up unless it was given or the endpoint isn't AWS.
+    if aws_region.is_none() && endpoint_url.is_none() {
+        return in_bucket_region(client, &args.path.bucket).await;
+    }
+    client
+}
+
+/// `client`, pointed at the region `bucket` is in when that isn't its own.
+///
+/// The region comes from HeadBucket's `x-amz-bucket-region` header, which S3
+/// sends even when it redirects or refuses the request. Without it (no such
+/// bucket, no network, no credentials) `client` is returned as it is, and the
+/// listing reports the problem.
+pub async fn in_bucket_region(client: Client, bucket: &str) -> Client {
+    let region = match client.head_bucket().bucket(bucket).send().await {
+        Ok(output) => output.bucket_region,
+        Err(err) => err
+            .raw_response()
+            .and_then(|response| response.headers().get("x-amz-bucket-region"))
+            .map(str::to_owned),
+    };
+    match region {
+        Some(region) if client.config().region().map(Region::as_ref) != Some(&region) => {
+            let config = client.config().to_builder().region(Region::new(region));
+            Client::from_conf(config.build())
+        }
+        _ => client,
+    }
 }
 
 #[cfg(test)]
@@ -1060,6 +1089,38 @@ mod tests {
             .await
             .unwrap();
         replay.assert_requests_match(&[]);
+    }
+
+    #[tokio::test]
+    async fn test_in_bucket_region_follows_the_bucket_region_header() {
+        let head = |status: u16, region: Option<&str>| {
+            let request = http::Request::builder()
+                .method("HEAD")
+                .uri("https://test-bucket.s3.us-east-1.amazonaws.com/")
+                .body(SdkBody::empty())
+                .unwrap();
+            let mut response = http::Response::builder().status(status);
+            if let Some(region) = region {
+                response = response.header("x-amz-bucket-region", region);
+            }
+            ReplayEvent::new(request, response.body(SdkBody::empty()).unwrap())
+        };
+
+        for (status, header, expected) in [
+            // Redirected to the bucket's region, or refused: both name it.
+            (301, Some("eu-west-1"), "eu-west-1"),
+            (403, Some("ap-south-1"), "ap-south-1"),
+            // Already the right region, or nothing to go on.
+            (200, Some("us-east-1"), "us-east-1"),
+            (404, None, "us-east-1"),
+        ] {
+            let (client, replay) = replay_s3_client(vec![head(status, header)]);
+
+            let client = in_bucket_region(client, "test-bucket").await;
+
+            assert_eq!(region_of(&client).as_deref(), Some(expected), "{status}");
+            replay.assert_requests_match(&[]);
+        }
     }
 
     #[test]
